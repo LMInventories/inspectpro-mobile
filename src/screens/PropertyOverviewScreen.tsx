@@ -13,7 +13,7 @@ import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode } from '../services/database'
 import { api } from '../services/api'
-import { syncSingleInspection } from '../services/syncService'
+import { syncSingleInspection, SyncProgress } from '../services/syncService'
 import { useAuthStore } from '../stores/authStore'
 import Header from '../components/Header'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -30,7 +30,7 @@ export default function PropertyOverviewScreen() {
   const { user } = useAuthStore()
   const [starting, setStarting] = useState(false)
   const [finalising, setFinalising] = useState(false)
-  const [syncing, setSyncing] = useState(false)
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
 
@@ -199,9 +199,9 @@ export default function PropertyOverviewScreen() {
         {
           text: 'Sync Now',
           onPress: async () => {
-            setSyncing(true)
+            setSyncProgress({ phase: 'photos', done: 0, total: 0 })
             try {
-              const result = await syncSingleInspection(inspectionId, inspection, user)
+              const result = await syncSingleInspection(inspectionId, inspection, user, setSyncProgress)
               if (result.success) {
                 await loadInspection(inspectionId)
                 Alert.alert('Synced ✓', 'Report uploaded successfully.')
@@ -209,7 +209,7 @@ export default function PropertyOverviewScreen() {
                 Alert.alert('Sync Failed', result.error || 'Something went wrong. Please try again.')
               }
             } finally {
-              setSyncing(false)
+              setSyncProgress(null)
             }
           },
         },
@@ -292,16 +292,16 @@ export default function PropertyOverviewScreen() {
                     }
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.btnSecondary, styles.btnSync]}
-                    onPress={handleSyncReport}
-                    disabled={syncing}
-                  >
-                    {syncing
-                      ? <View style={styles.syncingRow}><ActivityIndicator color="#fff" size="small" /><Text style={styles.btnSyncText}> Syncing…</Text></View>
-                      : <Text style={styles.btnSyncText}>⇅ Sync Report</Text>
-                    }
-                  </TouchableOpacity>
+                  {syncProgress ? (
+                    <InlineSyncProgress progress={syncProgress} />
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.btnSecondary, styles.btnSync]}
+                      onPress={handleSyncReport}
+                    >
+                      <Text style={styles.btnSyncText}>⇅ Sync Report</Text>
+                    </TouchableOpacity>
+                  )}
                 </>
               ) : (
                 <TouchableOpacity
@@ -550,4 +550,65 @@ const modeStyles = StyleSheet.create({
     padding: spacing.sm,
   },
   infoText: { fontSize: font.xs, color: colors.textMid, lineHeight: 16 },
+})
+
+// ── Inline sync progress bar ──────────────────────────────────────────────────
+
+function phaseLabel(p: SyncProgress): string {
+  if (p.phase === 'audio')  return `Audio clip ${p.done}/${p.total}`
+  if (p.phase === 'photos') return p.total > 0 ? `${p.done}/${p.total} photos` : 'Preparing photos…'
+  return 'Uploading…'
+}
+
+function InlineSyncProgress({ progress }: { progress: SyncProgress }) {
+  const isUpload = progress.phase === 'uploading'
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
+  return (
+    <View style={ipStyles.wrap}>
+      <View style={ipStyles.header}>
+        <Text style={ipStyles.label}>{phaseLabel(progress)}</Text>
+        {!isUpload && progress.total > 0 && (
+          <Text style={ipStyles.pct}>{pct}%</Text>
+        )}
+      </View>
+      <View style={ipStyles.barBg}>
+        <View
+          style={[
+            ipStyles.barFill,
+            { width: isUpload ? '100%' : `${pct}%` },
+            isUpload && ipStyles.barUpload,
+          ]}
+        />
+      </View>
+    </View>
+  )
+}
+
+const ipStyles = StyleSheet.create({
+  wrap: {
+    marginTop: spacing.xs,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 5,
+  },
+  label: { fontSize: font.xs, fontWeight: '700', color: colors.primary },
+  pct:   { fontSize: font.xs, fontWeight: '700', color: colors.primary },
+  barBg: {
+    height: 6,
+    backgroundColor: colors.muted,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  barFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 3,
+  },
+  barUpload: { backgroundColor: colors.accent },
 })

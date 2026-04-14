@@ -9,22 +9,47 @@ import * as FileSystem from 'expo-file-system/legacy'
 
 export type SyncResult = { id: number; address: string; success: boolean; error?: string }
 
-async function encodePhotoArray(photos: string[]): Promise<string[]> {
-  return Promise.all(photos.map(async (uri) => {
-    if (uri.startsWith('data:')) return uri
-    try {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      })
-      return `data:image/jpeg;base64,${b64}`
-    } catch (e) {
-      console.warn('[Sync] could not encode photo:', uri, e)
-      return uri
-    }
-  }))
+export type SyncProgress = {
+  phase: 'audio' | 'photos' | 'uploading'
+  done: number
+  total: number
 }
 
-export async function convertPhotoUrisToBase64(rd: any): Promise<any> {
+// ── Photo encoding ────────────────────────────────────────────────────────────
+
+async function encodeOnePhoto(uri: string): Promise<string> {
+  if (uri.startsWith('data:')) return uri
+  try {
+    const b64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    })
+    return `data:image/jpeg;base64,${b64}`
+  } catch (e) {
+    console.warn('[Sync] could not encode photo:', uri, e)
+    return uri
+  }
+}
+
+export async function convertPhotoUrisToBase64(
+  rd: any,
+  onProgress?: (p: SyncProgress) => void
+): Promise<any> {
+  // First pass: count all non-data-URI photos so we can show X/Y
+  let totalPhotos = 0
+  for (const section of Object.values(rd)) {
+    if (!section || typeof section !== 'object') continue
+    for (const item of Object.values(section as object)) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      if (Array.isArray((item as any)._photos)) {
+        totalPhotos += (item as any)._photos.filter((u: string) => !u.startsWith('data:')).length
+      }
+    }
+  }
+
+  let donePhotos = 0
+  if (totalPhotos > 0) onProgress?.({ phase: 'photos', done: 0, total: totalPhotos })
+
+  // Second pass: encode one at a time so progress fires per photo
   for (const sectionKey of Object.keys(rd)) {
     const section = rd[sectionKey]
     if (!section || typeof section !== 'object') continue
@@ -32,28 +57,42 @@ export async function convertPhotoUrisToBase64(rd: any): Promise<any> {
       const item = section[itemKey]
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue
       if (Array.isArray(item._photos)) {
-        item._photos = await encodePhotoArray(item._photos)
+        const encoded: string[] = []
+        for (const uri of item._photos) {
+          encoded.push(await encodeOnePhoto(uri))
+          if (!uri.startsWith('data:')) {
+            donePhotos++
+            onProgress?.({ phase: 'photos', done: donePhotos, total: totalPhotos })
+          }
+        }
+        item._photos = encoded
       }
     }
   }
   return rd
 }
 
+// ── Main sync function ────────────────────────────────────────────────────────
+
 export async function syncSingleInspection(
   id: number,
   inspection: any,
   user: any,
-  onProgress?: (msg: string) => void
+  onProgress?: (p: SyncProgress) => void
 ): Promise<SyncResult> {
-  onProgress?.(`Syncing ${inspection.property_address}…`)
   try {
     const fresh = getLocalInspection(id)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
 
+    // ── Audio encoding ───────────────────────────────────────────────────────
     const sqliteRecs = getAudioRecordings(id)
-    console.log(`[Sync] found ${sqliteRecs.length} audio recordings in SQLite for inspection ${id}`)
+    const totalAudio = sqliteRecs.length
+    console.log(`[Sync] found ${totalAudio} audio recordings in SQLite for inspection ${id}`)
 
-    if (sqliteRecs.length > 0) {
+    if (totalAudio > 0) {
+      onProgress?.({ phase: 'audio', done: 0, total: totalAudio })
+      let doneAudio = 0
+
       const serialised = await Promise.all(
         sqliteRecs.map(async (rec: any) => {
           let audioB64 = ''
@@ -70,6 +109,8 @@ export async function syncSingleInspection(
           } catch (e) {
             console.warn(`[Sync] could not read audio ${rec.id}:`, e)
           }
+          doneAudio++
+          onProgress?.({ phase: 'audio', done: doneAudio, total: totalAudio })
           return {
             id:         String(rec.id),
             audioB64,
@@ -86,17 +127,25 @@ export async function syncSingleInspection(
       const withAudio = serialised.filter(r => r.audioB64.length > 0)
       if (withAudio.length > 0) {
         rd._recordings = withAudio
-        console.log(`[Sync] ${withAudio.length}/${sqliteRecs.length} clips serialised successfully`)
+        console.log(`[Sync] ${withAudio.length}/${totalAudio} clips serialised successfully`)
       } else {
         console.warn('[Sync] all clips failed to encode — check file paths')
       }
     }
 
-    const rdForSync = await convertPhotoUrisToBase64(JSON.parse(JSON.stringify(rd)))
+    // ── Photo encoding ───────────────────────────────────────────────────────
+    const rdForSync = await convertPhotoUrisToBase64(
+      JSON.parse(JSON.stringify(rd)),
+      onProgress
+    )
+
+    // ── Upload ───────────────────────────────────────────────────────────────
+    onProgress?.({ phase: 'uploading', done: 0, total: 1 })
+
     const payload: any = { report_data: JSON.stringify(rdForSync) }
 
-    const role = user?.role
-    const typistMode = (fresh as any)?.typist_mode ?? null
+    const role        = user?.role
+    const typistMode  = (fresh as any)?.typist_mode ?? null
     const freshStatus = fresh?.status || inspection.status
     const localStatus = fresh?.local_status || inspection.local_status
     const isActive    = freshStatus === 'active' || localStatus === 'active'
@@ -120,7 +169,9 @@ export async function syncSingleInspection(
 
     await api.syncInspection(id, payload)
     markSynced(id)
+    onProgress?.({ phase: 'uploading', done: 1, total: 1 })
     return { id, address: inspection.property_address, success: true }
+
   } catch (err: any) {
     let msg = 'Network error'
     if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {

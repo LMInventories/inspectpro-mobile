@@ -11,7 +11,7 @@ import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
 import { deleteLocalInspection } from '../services/database'
-import { syncSingleInspection, SyncResult } from '../services/syncService'
+import { syncSingleInspection, SyncResult, SyncProgress } from '../services/syncService'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -24,11 +24,13 @@ export default function SyncScreen() {
   const { inspections, loadInspections } = useInspectionStore()
   const { user } = useAuthStore()
 
-  const [selected, setSelected]       = useState<Set<number>>(new Set())
-  const [syncing, setSyncing]         = useState(false)
-  const [results, setResults]         = useState<SyncResult[] | null>(null)
+  const [selected, setSelected]         = useState<Set<number>>(new Set())
+  const [syncing, setSyncing]           = useState(false)
+  const [results, setResults]           = useState<SyncResult[] | null>(null)
   const [confirmModal, setConfirmModal] = useState(false)
-  const [progressMsg, setProgressMsg] = useState('')
+  const [progress, setProgress]         = useState<SyncProgress | null>(null)
+  const [syncIndex, setSyncIndex]       = useState(0)   // which inspection we're on
+  const [syncTotal, setSyncTotal]       = useState(0)   // total selected
 
   useFocusEffect(useCallback(() => {
     loadInspections()
@@ -49,18 +51,22 @@ export default function SyncScreen() {
     setConfirmModal(false)
     setSyncing(true)
     setResults(null)
+    const ids = Array.from(selected)
+    setSyncTotal(ids.length)
     const res: SyncResult[] = []
 
-    for (const id of Array.from(selected)) {
-      const inspection = inspections.find(i => i.id === id)
+    for (let i = 0; i < ids.length; i++) {
+      setSyncIndex(i + 1)
+      setProgress(null)
+      const inspection = inspections.find(insp => insp.id === ids[i])
       if (!inspection) continue
-      const result = await syncSingleInspection(id, inspection, user, setProgressMsg)
+      const result = await syncSingleInspection(ids[i], inspection, user, setProgress)
       res.push(result)
     }
 
     await loadInspections()
     setSyncing(false)
-    setProgressMsg('')
+    setProgress(null)
     setResults(res)
     setSelected(new Set())
   }
@@ -167,22 +173,30 @@ export default function SyncScreen() {
               )
             })}
 
-            <TouchableOpacity
-              style={[styles.syncBtn, (selected.size === 0 || syncing) && styles.syncBtnDisabled]}
-              onPress={() => { if (selected.size > 0) setConfirmModal(true) }}
-              disabled={syncing || selected.size === 0}
-            >
-              {syncing ? (
-                <View style={styles.syncingRow}>
-                  <ActivityIndicator color="#fff" size="small" />
-                  <Text style={styles.syncBtnText}>{progressMsg || 'Syncing…'}</Text>
-                </View>
-              ) : (
-                <Text style={styles.syncBtnText}>
-                  ⇅ Sync {selected.size > 0 ? `${selected.size} Inspection${selected.size !== 1 ? 's' : ''}` : ''}
-                </Text>
-              )}
-            </TouchableOpacity>
+            {syncing && progress ? (
+              <SyncProgressBar
+                progress={progress}
+                inspectionIndex={syncIndex}
+                inspectionTotal={syncTotal}
+              />
+            ) : (
+              <TouchableOpacity
+                style={[styles.syncBtn, (selected.size === 0 || syncing) && styles.syncBtnDisabled]}
+                onPress={() => { if (selected.size > 0) setConfirmModal(true) }}
+                disabled={syncing || selected.size === 0}
+              >
+                {syncing ? (
+                  <View style={styles.syncingRow}>
+                    <ActivityIndicator color="#fff" size="small" />
+                    <Text style={styles.syncBtnText}>Preparing…</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.syncBtnText}>
+                    ⇅ Sync {selected.size > 0 ? `${selected.size} Inspection${selected.size !== 1 ? 's' : ''}` : ''}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            )}
           </>
         )}
 
@@ -289,4 +303,77 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 48 },
   emptyTitle: { fontSize: font.lg, fontWeight: '700', color: colors.textMid },
   emptySub: { fontSize: font.sm, color: colors.textLight, textAlign: 'center' },
+})
+
+// ── Sync progress bar component ───────────────────────────────────────────────
+
+function phaseLabel(p: SyncProgress): string {
+  if (p.phase === 'audio')    return `Audio clip ${p.done}/${p.total}`
+  if (p.phase === 'photos')   return `${p.done}/${p.total} photos`
+  return 'Uploading…'
+}
+
+function SyncProgressBar({
+  progress, inspectionIndex, inspectionTotal,
+}: {
+  progress: SyncProgress
+  inspectionIndex: number
+  inspectionTotal: number
+}) {
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
+  const isUpload = progress.phase === 'uploading'
+  return (
+    <View style={pbStyles.wrap}>
+      <View style={pbStyles.header}>
+        <Text style={pbStyles.insp}>
+          Inspection {inspectionIndex}/{inspectionTotal}
+        </Text>
+        {!isUpload && (
+          <Text style={pbStyles.pct}>{pct}%</Text>
+        )}
+      </View>
+      <View style={pbStyles.barBg}>
+        <View
+          style={[
+            pbStyles.barFill,
+            { width: isUpload ? '100%' : `${pct}%` },
+            isUpload && pbStyles.barUpload,
+          ]}
+        />
+      </View>
+      <Text style={pbStyles.label}>{phaseLabel(progress)}</Text>
+    </View>
+  )
+}
+
+const pbStyles = StyleSheet.create({
+  wrap: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  insp: { fontSize: font.sm, fontWeight: '700', color: colors.text },
+  pct:  { fontSize: font.sm, fontWeight: '700', color: colors.primary },
+  barBg: {
+    height: 8,
+    backgroundColor: colors.muted,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  barFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 4,
+  },
+  barUpload: { backgroundColor: colors.accent },
+  label: { fontSize: font.xs, color: colors.textMid, fontWeight: '600' },
 })
