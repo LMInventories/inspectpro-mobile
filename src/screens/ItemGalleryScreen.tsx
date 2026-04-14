@@ -473,7 +473,7 @@ export default function ItemGalleryScreen() {
       )}
 
       {/* ── Reassign Modal ──────────────────────────────────────────────────── */}
-      <Modal visible={showReassign} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={showReassign} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReassign(false)}>
         <View style={[mStyles.screen, { paddingTop: insets.top }]}>
           <View style={mStyles.header}>
             <TouchableOpacity onPress={() => setShowReassign(false)}>
@@ -546,7 +546,7 @@ export default function ItemGalleryScreen() {
       </Modal>
 
       {/* ── AI Review Modal ─────────────────────────────────────────────────── */}
-      <Modal visible={showAiReview} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={showAiReview} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { setShowAiReview(false); exitSelect() }}>
         <View style={[mStyles.screen, { paddingTop: insets.top }]}>
           <View style={mStyles.header}>
             <TouchableOpacity onPress={() => { setShowAiReview(false); exitSelect() }}>
