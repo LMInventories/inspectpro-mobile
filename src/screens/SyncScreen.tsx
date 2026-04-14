@@ -10,15 +10,13 @@ import type { StackNavigationProp } from '@react-navigation/stack'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
-import { markSynced, deleteLocalInspection, getLocalInspection, getAudioRecordings } from '../services/database'
-import { api } from '../services/api'
-import * as FileSystem from 'expo-file-system/legacy'
+import { deleteLocalInspection } from '../services/database'
+import { syncSingleInspection, SyncResult } from '../services/syncService'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'Sync'>
-type SyncResult = { id: number; address: string; success: boolean; error?: string }
 
 export default function SyncScreen() {
   const navigation = useNavigation<Nav>()
@@ -47,46 +45,6 @@ export default function SyncScreen() {
     setSelected(selected.size === syncable.length ? new Set() : new Set(syncable.map(i => i.id)))
   }
 
-  // Walk all _photos and _overviewPhotos arrays in report_data.
-  // For each entry that is a file URI, read and encode to base64 data URI.
-  // Legacy data: URIs are passed through unchanged.
-  // Returns the mutated (deep-copied) object — does NOT touch the stored data.
-  async function convertPhotoUrisToBase64(rd: any): Promise<any> {
-    for (const sectionKey of Object.keys(rd)) {
-      const section = rd[sectionKey]
-      if (!section || typeof section !== 'object') continue
-
-      // Walk all item keys — this covers template items, fixed section items,
-      // AND '_overview' (the room overview key, stored as _overview._photos).
-      // The old flat '_overviewPhotos' key is no longer used.
-      for (const itemKey of Object.keys(section)) {
-        const item = section[itemKey]
-        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-        if (Array.isArray(item._photos)) {
-          item._photos = await encodePhotoArray(item._photos)
-        }
-      }
-    }
-    return rd
-  }
-
-  async function encodePhotoArray(photos: string[]): Promise<string[]> {
-    return Promise.all(photos.map(async (uri) => {
-      // Already a data URI — nothing to do
-      if (uri.startsWith('data:')) return uri
-      // File URI — read and encode
-      try {
-        const b64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        })
-        return `data:image/jpeg;base64,${b64}`
-      } catch (e) {
-        console.warn('[Sync] could not encode photo:', uri, e)
-        return uri  // keep original so the field isn't silently dropped
-      }
-    }))
-  }
-
   async function runSync() {
     setConfirmModal(false)
     setSyncing(true)
@@ -96,137 +54,8 @@ export default function SyncScreen() {
     for (const id of Array.from(selected)) {
       const inspection = inspections.find(i => i.id === id)
       if (!inspection) continue
-      setProgressMsg(`Syncing ${inspection.property_address}…`)
-
-      try {
-        // Read fresh from DB to guarantee latest report_data
-        const fresh = getLocalInspection(id)
-        const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-
-        // Read audio recordings from SQLite — persists across app restarts
-        // unlike the in-memory Zustand store
-        const sqliteRecs = getAudioRecordings(id)
-        console.log(`[Sync] found ${sqliteRecs.length} audio recordings in SQLite for inspection ${id}`)
-
-        if (sqliteRecs.length > 0) {
-          const serialised = await Promise.all(
-            sqliteRecs.map(async (rec: any) => {
-              let audioB64 = ''
-              try {
-                const info = await FileSystem.getInfoAsync(rec.file_uri)
-                if (info.exists) {
-                  audioB64 = await FileSystem.readAsStringAsync(rec.file_uri, {
-                    encoding: FileSystem.EncodingType.Base64,
-                  })
-                  console.log(`[Sync] encoded clip ${rec.id}: ${audioB64.length} chars`)
-                } else {
-                  console.warn(`[Sync] file missing for recording ${rec.id}:`, rec.file_uri)
-                }
-              } catch (e) {
-                console.warn(`[Sync] could not read audio ${rec.id}:`, e)
-              }
-              return {
-                id:         String(rec.id),
-                audioB64,
-                mimeType:   'audio/m4a',
-                duration:   (rec.duration_ms || 0) / 1000,  // web app expects seconds
-                createdAt:  rec.created_at,
-                label:      rec.label || rec.section_name || '',
-                itemKey:    rec.item_key
-                              ? `${rec.section_key}:${rec.item_key}`
-                              : null,
-                transcript: rec.transcription || null,
-                gptResult:  null,
-              }
-            })
-          )
-          const withAudio = serialised.filter(r => r.audioB64.length > 0)
-          if (withAudio.length > 0) {
-            rd._recordings = withAudio
-            console.log(`[Sync] ${withAudio.length}/${sqliteRecs.length} clips serialised successfully`)
-          } else {
-            console.warn('[Sync] all clips failed to encode — check file paths')
-          }
-        }
-
-        // Convert any file:// photo URIs → base64 data URIs for the server payload.
-        // We deep-copy rd first so on-device storage always keeps file URIs.
-        const rdForSync = await convertPhotoUrisToBase64(JSON.parse(JSON.stringify(rd)))
-        const payload: any = { report_data: JSON.stringify(rdForSync) }
-
-        // Status transitions:
-        //
-        // Clerk + AI typist (ai_instant / ai_room) or typist flagged as AI:
-        //   Fields already filled on-device → proofread on site → go straight to Complete
-        //
-        // Clerk + human typist (human) or no typist assigned:
-        //   Human needs to type from audio → move to Processing so typist can access it
-        //
-        // Role = typist:
-        //   Typist has finished typing → move to Review
-        //
-        // Admin/manager: no auto-transition
-        const role = user?.role
-        // Per-inspection typist_mode overrides the clerk-level user setting.
-        // Falls back through: inspection column → typist_is_ai flag → null
-        const typistMode = (fresh as any)?.typist_mode ?? null
-        // fresh.status is now reliable: updateInspectionServerStatus() patches the
-        // data blob when Start Inspection is tapped, so it no longer freezes at the
-        // value from download time.
-        // local_status === 'active' is kept as a secondary check to cover the
-        // offline-start edge case where the server couldn't be reached and the blob
-        // was therefore not updated.
-        const freshStatus = fresh?.status || inspection.status
-        const localStatus = fresh?.local_status || inspection.local_status
-        const isActive    = freshStatus === 'active' || localStatus === 'active'
-        const typistName = (fresh?.typist_name || fresh?.typist?.name || '').toLowerCase()
-        const typistIsAi = fresh?.typist_is_ai === true ||
-                           fresh?.typist?.is_ai === true ||
-                           typistName === 'ai typist' ||
-                           typistName.startsWith('ai ')
-        const isAiMode = typistIsAi ||
-                         typistMode === 'ai_instant' ||
-                         typistMode === 'ai_room'
-
-        const isFinalised = !!(fresh as any)?.is_finalised
-
-        // Send per-inspection typist_mode to server so the override is persisted.
-        if (typistMode !== null) payload.typist_mode = typistMode
-
-        if (role === 'clerk' && isActive) {
-          if (isFinalised) {
-            // Finalised on device: AI → Complete (proofread on site), Human → Processing for typist
-            payload.status = isAiMode ? 'complete' : 'processing'
-          }
-          // Not finalised: upload report data but leave inspection Active on server
-        } else if (role === 'typist' && freshStatus === 'processing') {
-          // Typist finished typing → Review
-          payload.status = 'review'
-        }
-        // Admins/managers: no auto-transition
-
-        await api.syncInspection(id, payload)
-        await markSynced(id)
-        res.push({ id, address: inspection.property_address, success: true })
-      } catch (err: any) {
-        let msg = 'Network error'
-        if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
-          msg = 'Upload timed out — the payload may be too large or the server is slow. Try again on Wi-Fi.'
-        } else if (err.response?.status === 413) {
-          msg = 'Payload too large — try syncing with fewer photos or shorter audio.'
-        } else if (err.response?.status === 401 || err.response?.status === 403) {
-          msg = 'Authentication error — please log out and back in.'
-        } else if (err.response?.status >= 500) {
-          msg = `Server error (${err.response.status}) — please try again shortly.`
-        } else if (err.response?.data?.error) {
-          msg = err.response.data.error
-        } else if (err.message && err.message !== 'Network Error') {
-          msg = err.message
-        } else if (!err.response) {
-          msg = 'No internet connection — check your network and try again.'
-        }
-        res.push({ id, address: inspection.property_address, success: false, error: msg })
-      }
+      const result = await syncSingleInspection(id, inspection, user, setProgressMsg)
+      res.push(result)
     }
 
     await loadInspections()

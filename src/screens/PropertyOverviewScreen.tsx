@@ -13,6 +13,8 @@ import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode } from '../services/database'
 import { api } from '../services/api'
+import { syncSingleInspection } from '../services/syncService'
+import { useAuthStore } from '../stores/authStore'
 import Header from '../components/Header'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
@@ -25,8 +27,10 @@ export default function PropertyOverviewScreen() {
   const insets = useSafeAreaInsets()
   const { inspectionId } = route.params
   const { activeInspection, loadInspection, updateItemInReport } = useInspectionStore()
+  const { user } = useAuthStore()
   const [starting, setStarting] = useState(false)
   const [finalising, setFinalising] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
 
@@ -184,6 +188,35 @@ export default function PropertyOverviewScreen() {
     }
   }
 
+  async function handleSyncReport() {
+    Alert.alert(
+      'Sync This Report',
+      isAiMode
+        ? 'This will upload the report and mark it Complete. Recipients will be notified automatically.'
+        : 'This will upload the report and move it to Processing for the typist.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sync Now',
+          onPress: async () => {
+            setSyncing(true)
+            try {
+              const result = await syncSingleInspection(inspectionId, inspection, user)
+              if (result.success) {
+                await loadInspection(inspectionId)
+                Alert.alert('Synced ✓', 'Report uploaded successfully.')
+              } else {
+                Alert.alert('Sync Failed', result.error || 'Something went wrong. Please try again.')
+              }
+            } finally {
+              setSyncing(false)
+            }
+          },
+        },
+      ]
+    )
+  }
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <Header
@@ -247,16 +280,29 @@ export default function PropertyOverviewScreen() {
               </TouchableOpacity>
 
               {isFinalised ? (
-                <TouchableOpacity
-                  style={[styles.btnSecondary, styles.btnFinalised]}
-                  onPress={handleFinalise}
-                  disabled={finalising}
-                >
-                  {finalising
-                    ? <ActivityIndicator color={colors.success} size="small" />
-                    : <Text style={styles.btnFinalisedText}>✓ Finalised — tap to undo</Text>
-                  }
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    style={[styles.btnSecondary, styles.btnFinalised]}
+                    onPress={handleFinalise}
+                    disabled={finalising}
+                  >
+                    {finalising
+                      ? <ActivityIndicator color={colors.success} size="small" />
+                      : <Text style={styles.btnFinalisedText}>✓ Finalised — tap to undo</Text>
+                    }
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.btnSecondary, styles.btnSync]}
+                    onPress={handleSyncReport}
+                    disabled={syncing}
+                  >
+                    {syncing
+                      ? <View style={styles.syncingRow}><ActivityIndicator color="#fff" size="small" /><Text style={styles.btnSyncText}> Syncing…</Text></View>
+                      : <Text style={styles.btnSyncText}>⇅ Sync Report</Text>
+                    }
+                  </TouchableOpacity>
+                </>
               ) : (
                 <TouchableOpacity
                   style={styles.btnSecondary}
@@ -458,6 +504,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.successLight,
   },
   btnFinalisedText: { color: colors.success, fontSize: font.md, fontWeight: '600' },
+  btnSync: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  btnSyncText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
+  syncingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   modeHint: { fontSize: font.xs, color: colors.textLight, marginBottom: spacing.sm, lineHeight: 16 },
 })
 

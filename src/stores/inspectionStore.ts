@@ -3,6 +3,7 @@ import {
   getLocalInspections,
   getLocalInspection,
   updateReportData,
+  deleteLocalInspection,
 } from '../services/database'
 import type { HumanRecording } from '../components/HumanTypistRecorder'
 
@@ -18,6 +19,7 @@ interface InspectionStore {
   updateItemInReport: (inspectionId: number, sectionKey: string, itemKey: string, itemData: any) => void
   addHumanRecording: (inspectionId: number, rec: HumanRecording) => void
   removeHumanRecording: (inspectionId: number, recId: string) => void
+  removeInspection: (id: number) => void
 }
 
 export const useInspectionStore = create<InspectionStore>((set, get) => ({
@@ -77,5 +79,11 @@ export const useInspectionStore = create<InspectionStore>((set, get) => ({
     const { humanRecordings } = get()
     const existing = humanRecordings[inspectionId] || []
     set({ humanRecordings: { ...humanRecordings, [inspectionId]: existing.filter(r => r.id !== recId) } })
+  },
+
+  removeInspection: (id) => {
+    deleteLocalInspection(id)
+    const inspections = getLocalInspections()
+    set({ inspections })
   },
 }))

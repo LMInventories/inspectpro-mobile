@@ -20,7 +20,7 @@ export default function InspectionListScreen() {
   const navigation = useNavigation<Nav>()
   const insets = useSafeAreaInsets()
   const { user, logout } = useAuthStore()
-  const { inspections, loadInspections } = useInspectionStore()
+  const { inspections, loadInspections, removeInspection } = useInspectionStore()
   const [refreshing, setRefreshing] = React.useState(false)
 
   useFocusEffect(useCallback(() => { loadInspections() }, []))
@@ -36,6 +36,29 @@ export default function InspectionListScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log Out', style: 'destructive', onPress: () => logout() },
     ])
+  }
+
+  function confirmRemove(item: any) {
+    const isSynced = item.synced
+    if (isSynced) {
+      Alert.alert(
+        'Remove Inspection',
+        `Remove "${item.property_address || 'this inspection'}" from your device?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove', style: 'destructive', onPress: () => removeInspection(item.id) },
+        ]
+      )
+    } else {
+      Alert.alert(
+        'Remove Unsynced Inspection',
+        `"${item.property_address || 'This inspection'}" has not been synced yet. Any work recorded on this device will be lost.\n\nAre you sure you want to remove it?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove Anyway', style: 'destructive', onPress: () => removeInspection(item.id) },
+        ]
+      )
+    }
   }
 
   function formatDate(dateStr: string | null) {
@@ -89,13 +112,22 @@ export default function InspectionListScreen() {
             </View>
           </View>
 
-          {isSynced ? (
-            <View style={styles.syncedBanner}>
-              <Text style={styles.syncedBannerText}>✓ Synced — tap Sync to remove</Text>
-            </View>
-          ) : (
-            <Text style={styles.tapHint}>Tap to open →</Text>
-          )}
+          <View style={styles.cardFooter}>
+            <TouchableOpacity
+              style={styles.removeBtn}
+              onPress={(e) => { e.stopPropagation(); confirmRemove(item) }}
+            >
+              <Text style={styles.removeBtnText}>✕ Remove</Text>
+            </TouchableOpacity>
+
+            {isSynced ? (
+              <View style={styles.syncedBanner}>
+                <Text style={styles.syncedBannerText}>✓ Synced</Text>
+              </View>
+            ) : (
+              <Text style={styles.tapHint}>Tap to open →</Text>
+            )}
+          </View>
         </View>
       </TouchableOpacity>
     )
@@ -170,9 +202,22 @@ const styles = StyleSheet.create({
   metaItem: {},
   metaLabel: { fontSize: 10, color: colors.textLight, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
   metaValue: { fontSize: font.sm, color: colors.text, fontWeight: '500', marginTop: 1 },
-  syncedBanner: { marginTop: spacing.sm, backgroundColor: colors.successLight, borderRadius: radius.sm, padding: spacing.xs, alignItems: 'center' },
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+  },
+  removeBtn: {
+    backgroundColor: colors.dangerLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+  },
+  removeBtnText: { fontSize: font.xs, color: colors.danger, fontWeight: '700' },
+  syncedBanner: { backgroundColor: colors.successLight, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 5 },
   syncedBannerText: { fontSize: font.xs, color: colors.success, fontWeight: '600' },
-  tapHint: { marginTop: spacing.sm, fontSize: font.xs, color: colors.textLight, textAlign: 'right' },
+  tapHint: { fontSize: font.xs, color: colors.textLight },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   emptyIcon: { fontSize: 48, marginBottom: spacing.md },
   emptyTitle: { fontSize: font.lg, fontWeight: '700', color: colors.text, marginBottom: spacing.xs },
