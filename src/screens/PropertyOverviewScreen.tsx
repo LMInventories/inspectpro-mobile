@@ -127,6 +127,9 @@ export default function PropertyOverviewScreen() {
   const overviewPhoto = inspection.property?.overview_photo || reportData._overview?.items?.photo?.uri || null
   const isActive = inspection.local_status === 'active' || inspection.status === 'active'
   const isFinalised: boolean = !!(inspection as any).is_finalised
+  const isAiMode = (inspection as any).typist_is_ai ||
+                   (inspection as any).typist_mode === 'ai_instant' ||
+                   (inspection as any).typist_mode === 'ai_room'
 
   async function handleFinalise() {
     if (isFinalised) {
@@ -153,7 +156,9 @@ export default function PropertyOverviewScreen() {
     } else {
       Alert.alert(
         'Finalise Inspection',
-        'Mark this inspection as complete on device. When synced, it will be sent for typist/review processing instead of staying Active.',
+        isAiMode
+          ? 'This report will be marked Complete and automatically sent to all recipients when synced.\n\nPlease ensure all rooms, conditions, and photos have been reviewed and are accurate before finalising — once synced, the report is delivered immediately.'
+          : 'Mark this inspection as complete on device. When synced, it will be queued for typist processing instead of staying Active.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -163,7 +168,12 @@ export default function PropertyOverviewScreen() {
               try {
                 markFinalised(inspectionId)
                 await loadInspection(inspectionId)
-                Alert.alert('Finalised ✓', 'Inspection marked as finalised. It will be sent for processing on your next sync.')
+                Alert.alert(
+                  'Finalised ✓',
+                  isAiMode
+                    ? 'Report finalised. When synced, it will be marked Complete and sent to all recipients automatically.'
+                    : 'Inspection marked as finalised. It will be queued for typist processing on your next sync.'
+                )
               } finally {
                 setFinalising(false)
               }
