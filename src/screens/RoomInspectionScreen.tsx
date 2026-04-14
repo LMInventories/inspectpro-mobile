@@ -513,23 +513,51 @@ export default function RoomInspectionScreen() {
       if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
       const row = rd[sectionKey][String(itemId)]
 
-      // Fill fields — only if empty (matches web app behaviour)
+      const editMode  = result.editMode  || 'normal'   // 'normal' | 'overwrite' | 'append'
+      const editField = result.editField || null        // 'description' | 'condition' | null
+
+      // Helper: should we write this field given the edit mode?
+      const shouldWrite = (fieldName: string, newVal: string, existing: string): boolean => {
+        if (!newVal) return false
+        if (editMode === 'overwrite') return editField === null || editField === fieldName
+        if (editMode === 'append')    return editField === null || editField === fieldName
+        return !existing  // 'normal' → only fill if empty
+      }
+
+      // Helper: compute the value to store
+      const computeValue = (fieldName: string, newVal: string, existing: string): string => {
+        if (editMode === 'append' && existing) return existing + '\n' + newVal
+        return newVal
+      }
+
       let changed = false
       if (sectionType_ === 'room') {
-        if (result.description && !row.description) { row.description = result.description; changed = true }
-        if (result.condition   && !row.condition)   { row.condition   = result.condition;   changed = true }
+        if (shouldWrite('description', result.description, row.description)) {
+          row.description = computeValue('description', result.description, row.description); changed = true
+        }
+        if (shouldWrite('condition', result.condition, row.condition)) {
+          row.condition = computeValue('condition', result.condition, row.condition); changed = true
+        }
       } else if (sectionType_ === 'meter_readings') {
         if (result.locationSerial && !row.locationSerial) { row.locationSerial = result.locationSerial; changed = true }
         if (result.reading        && !row.reading)        { row.reading        = result.reading;        changed = true }
       } else if (sectionType_ === 'keys') {
-        if (result.description && !row.description) { row.description = result.description; changed = true }
+        if (shouldWrite('description', result.description, row.description)) {
+          row.description = computeValue('description', result.description, row.description); changed = true
+        }
       } else if (sectionType_ === 'condition_summary') {
-        if (result.condition && !row.condition) { row.condition = result.condition; changed = true }
+        if (shouldWrite('condition', result.condition, row.condition)) {
+          row.condition = computeValue('condition', result.condition, row.condition); changed = true
+        }
       } else if (sectionType_ === 'cleaning_summary') {
         const cn = result.cleanlinessNotes || result.notes
-        if (cn && !row.cleanlinessNotes) { row.cleanlinessNotes = cn; changed = true }
+        if (shouldWrite('cleanlinessNotes', cn, row.cleanlinessNotes)) {
+          row.cleanlinessNotes = computeValue('cleanlinessNotes', cn, row.cleanlinessNotes); changed = true
+        }
       } else {
-        if (result.notes && !row.notes) { row.notes = result.notes; changed = true }
+        if (shouldWrite('notes', result.notes, row.notes)) {
+          row.notes = computeValue('notes', result.notes, row.notes); changed = true
+        }
       }
 
       if (changed) {
@@ -578,9 +606,28 @@ export default function RoomInspectionScreen() {
       if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
       const row = rd[sectionKey][itemId]
 
-      // Fill main item fields
-      if (fields.description && !row.description) { row.description = fields.description; changed = true }
-      if (fields.condition   && !row.condition)   { row.condition   = fields.condition;   changed = true }
+      // Fill main item fields — respect amendment action flags from the AI
+      const descAction = fields._descAction || 'fill'  // 'fill' | 'overwrite' | 'append'
+      const condAction = fields._condAction || 'fill'
+
+      if (fields.description) {
+        if (descAction === 'overwrite' || (descAction === 'fill' && !row.description)) {
+          row.description = fields.description; changed = true
+        } else if (descAction === 'append' && row.description) {
+          row.description = row.description + '\n' + fields.description; changed = true
+        } else if (descAction === 'append' && !row.description) {
+          row.description = fields.description; changed = true
+        }
+      }
+      if (fields.condition) {
+        if (condAction === 'overwrite' || (condAction === 'fill' && !row.condition)) {
+          row.condition = fields.condition; changed = true
+        } else if (condAction === 'append' && row.condition) {
+          row.condition = row.condition + '\n' + fields.condition; changed = true
+        } else if (condAction === 'append' && !row.condition) {
+          row.condition = fields.condition; changed = true
+        }
+      }
 
       // Create AI-suggested sub-items (only when the AI detected distinct elements)
       if (Array.isArray(fields._subs) && fields._subs.length > 0) {
