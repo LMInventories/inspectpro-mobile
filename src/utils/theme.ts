@@ -1,22 +1,26 @@
+// Brand palette — derived from the Inspect Pro logo
+//   Navy  #1e3a8a  — house outline, wordmark
+//   Cyan  #0ea5e9  — bar chart / arrow
+//   Teal  #10b981  — scroll / magnifier
 export const colors = {
-  primary:    '#1e3a8a',
-  primaryMid: '#2563eb',
-  primaryLight:'#dbeafe',
-  accent:     '#6366f1',
-  success:    '#16a34a',
-  successLight:'#dcfce7',
-  warning:    '#d97706',
+  primary:     '#1e3a8a',  // navy — buttons, headers, active states
+  primaryMid:  '#0ea5e9',  // cyan — highlights, links, AI badge
+  primaryLight:'#e0f2fe',  // pale cyan — pill backgrounds, selected rows
+  accent:      '#10b981',  // teal-green — success accents, sync badge
+  success:     '#10b981',  // unified with accent
+  successLight:'#d1fae5',
+  warning:     '#d97706',
   warningLight:'#fef3c7',
-  danger:     '#dc2626',
-  dangerLight:'#fee2e2',
-  surface:    '#ffffff',
-  background: '#f8fafc',
-  border:     '#e2e8f0',
-  borderDark: '#cbd5e1',
-  text:       '#1e293b',
-  textMid:    '#475569',
-  textLight:  '#94a3b8',
-  muted:      '#f1f5f9',
+  danger:      '#dc2626',
+  dangerLight: '#fee2e2',
+  surface:     '#ffffff',
+  background:  '#f8fafc',
+  border:      '#e2e8f0',
+  borderDark:  '#cbd5e1',
+  text:        '#1e293b',
+  textMid:     '#475569',
+  textLight:   '#94a3b8',
+  muted:       '#f1f5f9',
 }
 
 export const radius = {

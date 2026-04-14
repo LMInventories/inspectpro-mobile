@@ -13,7 +13,7 @@
  * save the clip to the list. Resume adds another clip.
  *
  * AI Transcribe (right) — sends all saved clips to the backend in one go.
- * The button pulses (indigo) while transcribing.
+ * The button pulses (cyan) while transcribing.
  *
  * Props:
  *   inspectionId  – for persisting clips to SQLite
@@ -629,7 +629,7 @@ const bar = StyleSheet.create({
     elevation: 6,
   },
   recBtnLive:         { backgroundColor: '#f87171' },
-  recBtnTranscribing: { backgroundColor: '#6366f1' },
+  recBtnTranscribing: { backgroundColor: '#0ea5e9' },
   recDot:    { width: 22, height: 22, borderRadius: 11, backgroundColor: FG },
   pauseIcon: { flexDirection: 'row', gap: 5 },
   pauseBar:  { width: 5, height: 20, borderRadius: 2, backgroundColor: FG },
@@ -886,7 +886,7 @@ const helpModal = StyleSheet.create({
   },
   backBtnText: {
     fontSize: 26,
-    color: '#6366f1',
+    color: '#0ea5e9',
     fontWeight: '300',
     lineHeight: 30,
   },

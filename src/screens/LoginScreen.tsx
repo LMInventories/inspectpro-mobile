@@ -62,9 +62,11 @@ export default function LoginScreen() {
       >
         {/* Logo */}
         <View style={styles.logoWrap}>
-          <View style={styles.logoBox}>
-            <Text style={styles.logoText}>InspectPro</Text>
-          </View>
+          <Image
+            source={require('../../assets/icon.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
         </View>
 
         <View style={styles.card}>
@@ -168,20 +170,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing.lg,
   },
-  logoWrap: { marginBottom: spacing.xl, alignItems: 'center' },
-  logoBox: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  logoText: {
-    fontSize: font.xxl,
-    fontWeight: '800',
-    color: '#ffffff',
-    letterSpacing: 1,
+  logoWrap: { marginBottom: spacing.lg, alignItems: 'center' },
+  logoImage: {
+    width: 220,
+    height: 220,
   },
   card: {
     width: '100%',
