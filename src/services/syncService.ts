@@ -80,6 +80,12 @@ export async function convertPhotoUrisToBase64(
   let donePhotos = 0
   if (totalPhotos > 0) onProgress?.({ phase: 'photos', done: 0, total: totalPhotos })
 
+  // Special case: encode the property overview photo (stored at _overview.items.photo.uri)
+  const overviewUri = (rd as any)['_overview']?.items?.photo?.uri
+  if (overviewUri && !overviewUri.startsWith('data:')) {
+    ;(rd as any)['_overview'].items.photo.uri = await encodeOnePhoto(overviewUri)
+  }
+
   // Second pass: encode one at a time so progress fires per photo
   for (const sectionKey of Object.keys(rd)) {
     const section = rd[sectionKey]

@@ -199,7 +199,13 @@ export default function RoomInspectionScreen() {
             return ai - bi
           })
         }
-        setItems(allFixedItems)
+        // Filter out rows the user deleted — these are stored in _hidden
+        // (matching the web frontend's isHidden() convention)
+        const hiddenIds: string[] = savedRd[sectionKey]?._hidden || []
+        const visibleFixedItems = hiddenIds.length > 0
+          ? allFixedItems.filter((item: any) => !hiddenIds.includes(String(item.id)))
+          : allFixedItems
+        setItems(visibleFixedItems)
       } else if (sectionType === 'room') {
         setSectionType_('room')
         let templateItems: any[] = []
@@ -776,9 +782,18 @@ export default function RoomInspectionScreen() {
     if (rd[sectionKey][String(itemId)]) delete rd[sectionKey][String(itemId)]
     // Remove from _extra if it was a custom item
     if (rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
-    // Track deleted template items so they don't reappear when the screen reloads
-    if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
-    if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
+
+    if (sectionType_ === 'room') {
+      // Room items: web frontend filters by _deleted in the rooms computed
+      if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
+      if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
+    } else {
+      // Fixed section rows (meters, keys, smoke alarms, etc.):
+      // Web frontend's isHidden() reads _hidden — must match here
+      if (!rd[sectionKey]['_hidden']) rd[sectionKey]['_hidden'] = []
+      const rid = String(itemId)
+      if (!rd[sectionKey]['_hidden'].includes(rid)) rd[sectionKey]['_hidden'].push(rid)
+    }
     await setReportData(inspectionId, rd)
   }
 
