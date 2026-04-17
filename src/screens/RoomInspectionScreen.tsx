@@ -519,8 +519,36 @@ export default function RoomInspectionScreen() {
       if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
       const row = rd[sectionKey][String(itemId)]
 
-      const editMode  = result.editMode  || 'normal'   // 'normal' | 'overwrite' | 'append'
+      const editMode  = result.editMode  || 'normal'   // 'normal' | 'overwrite' | 'append' | 'delete' | 'add_sub'
       const editField = result.editField || null        // 'description' | 'condition' | null
+
+      // ── "Not Applicable" — delete item ────────────────────────────────────
+      if (editMode === 'delete') {
+        await deleteItemImmediate(itemId)
+        return
+      }
+
+      // ── "Add sub item" — append sub-item from _subs in result ─────────────
+      if (editMode === 'add_sub') {
+        const incomingSubs: any[] = result._subs || []
+        if (incomingSubs.length > 0) {
+          const fresh2 = await getLocalInspection(inspectionId)
+          const rd2 = fresh2?.report_data ? JSON.parse(fresh2.report_data) : {}
+          if (!rd2[sectionKey]) rd2[sectionKey] = {}
+          if (!rd2[sectionKey][String(itemId)]) rd2[sectionKey][String(itemId)] = {}
+          if (!rd2[sectionKey][String(itemId)]._subs) rd2[sectionKey][String(itemId)]._subs = []
+          for (const sub of incomingSubs) {
+            const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+            rd2[sectionKey][String(itemId)]._subs.push({
+              _sid: sid,
+              description: sub.description || '',
+              condition:   sub.condition   || '',
+            })
+          }
+          await setReportData(inspectionId, rd2)
+        }
+        return
+      }
 
       // Helper: should we write this field given the edit mode?
       const shouldWrite = (fieldName: string, newVal: string, existing: string): boolean => {
@@ -602,8 +630,9 @@ export default function RoomInspectionScreen() {
     const deletedItems: string[] = []
 
     for (const [itemId, fields] of Object.entries(filled)) {
-      // Auto-delete items the clerk marked as not present
-      if (isNoneSeen(fields)) {
+      // Explicit delete — clerk said "[item] Not Applicable" (AI sets _delete: true)
+      // Also catches auto-detection via isNoneSeen for legacy compatibility
+      if ((fields as any)._delete === true || isNoneSeen(fields)) {
         await deleteItemImmediate(itemId)
         deletedItems.push(itemId)
         continue

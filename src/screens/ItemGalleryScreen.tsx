@@ -221,12 +221,26 @@ export default function ItemGalleryScreen() {
         tmplData = tmplRes.data
       }
       const sections: any[] = tmplData.sections || []
-      // Find only this room's section and its items
+      // Template items for this room
       const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
-      const items: ItemOption[] = (thisSection?.items || []).map((it: any) => ({
+      const tmplItems: ItemOption[] = (thisSection?.items || []).map((it: any) => ({
         key:  String(it.id),
-        name: it.name,
+        name: it.name || it.label || '',
       }))
+      // Extra items added during inspection (custom rooms and mid-inspection additions)
+      // Reuse the same localInsp fetched above — no second DB call needed
+      const rd = localInsp?.report_data ? JSON.parse(localInsp.report_data) : {}
+      const extraItems: ItemOption[] = (rd[sectionKey]?._extra || []).map((e: any) => ({
+        key:  String(e._eid),
+        name: e.name || e.label || '(unnamed)',
+      }))
+      // Merge — template items first, then extras; deduplicate by key
+      const seen = new Set<string>()
+      const items: ItemOption[] = [...tmplItems, ...extraItems].filter(it => {
+        if (seen.has(it.key)) return false
+        seen.add(it.key)
+        return true
+      })
       setCurrentRoomItems(items)
       setTargetItem(items[0] || null)
     } catch { Alert.alert('Error', 'Could not load room items.'); setShowReassign(false) }
@@ -278,11 +292,23 @@ export default function ItemGalleryScreen() {
       const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
       // rd must be declared before roomContextStr so description/condition hints can be included
       const rd = JSON.parse(activeInspection?.report_data || '{}')
+
+      // Build the full item list for this room: template items + _extra items
+      // (custom rooms and mid-inspection additions live entirely in _extra)
+      const tmplItemsForAi: { id: string; name: string }[] = (thisSection?.items || []).map((it: any) => ({
+        id: String(it.id), name: it.name || it.label || '',
+      }))
+      const extraItemsForAi: { id: string; name: string }[] = (rd[sectionKey]?._extra || []).map((e: any) => ({
+        id: String(e._eid), name: e.name || e.label || '(unnamed)',
+      }))
+      const allItemsForAi = [...tmplItemsForAi, ...extraItemsForAi]
+
+      const roomLabel = thisSection?.name || sectionName || sectionKey
       // Include any filled-in description text so AI has both item names and textual context
-      const roomContextStr = thisSection
-        ? `Room: "${thisSection.name}" (key: ${sectionKey})\n` +
-          (thisSection.items || []).map((it: any) => {
-            const itemRd = rd[sectionKey]?.[String(it.id)]
+      const roomContextStr = allItemsForAi.length > 0
+        ? `Room: "${roomLabel}" (key: ${sectionKey})\n` +
+          allItemsForAi.map((it) => {
+            const itemRd = rd[sectionKey]?.[it.id]
             const desc = itemRd?.description ? ` — described as: "${itemRd.description}"` : ''
             const cond = itemRd?.condition ? ` — condition: "${itemRd.condition}"` : ''
             return `  - "${it.name}" (key: ${it.id})${desc}${cond}`

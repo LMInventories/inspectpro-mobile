@@ -57,6 +57,7 @@ import {
 import type { StackNavigationProp } from '@react-navigation/stack'
 import { triggerCapture } from '../services/cameraStore'
 import type { RootStackParamList } from '../../App'
+import * as ScreenOrientation from 'expo-screen-orientation'
 
 type CameraRouteProp = RouteProp<RootStackParamList, 'Camera'>
 type CameraNavProp   = StackNavigationProp<RootStackParamList, 'Camera'>
@@ -125,6 +126,15 @@ export default function CameraScreen() {
       }),
     }],
   }
+
+  // ── Lock camera screen to portrait ────────────────────────────────────────
+  // The rest of the app allows free rotation, but the camera manages its own
+  // UI rotation via the accelerometer (button icons spin in-place).  We lock
+  // back to portrait here and release the lock when leaving the screen.
+  useFocusEffect(useCallback(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+    return () => { ScreenOrientation.unlockAsync() }
+  }, []))
 
   // ── Hardware back button ───────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
