@@ -6,6 +6,7 @@
 import { getLocalInspection, getAudioRecordings, markSynced } from './database'
 import { api } from './api'
 import * as FileSystem from 'expo-file-system/legacy'
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
 
 export type SyncResult = { id: number; address: string; success: boolean; error?: string }
 
@@ -15,18 +16,48 @@ export type SyncProgress = {
   total: number
 }
 
-// ── Photo encoding ────────────────────────────────────────────────────────────
+// ── Photo compression + encoding ──────────────────────────────────────────────
+//
+// Raw iPhone/Android photos are typically 3–8 MB each.
+// 108 photos × 5 MB × 1.33 (base64 overhead) ≈ 720 MB — this crashes the
+// Hermes JS engine which has a ~530 MB string limit.
+//
+// We compress each photo to max 1400 px wide at 72 % JPEG quality before
+// encoding.  That yields ~120–200 KB per photo, so 108 photos ≈ 18–22 MB
+// total — well under any JS, network, or server limit.
+// Quality is still more than sufficient to see defects and details clearly.
+
+const MAX_PHOTO_PX  = 1400   // longest edge in pixels
+const SYNC_QUALITY  = 0.72   // JPEG quality (0 = worst, 1 = lossless)
 
 async function encodeOnePhoto(uri: string): Promise<string> {
   if (uri.startsWith('data:')) return uri
   try {
-    const b64 = await FileSystem.readAsStringAsync(uri, {
+    // Step 1 — compress/resize
+    const compressed = await manipulateAsync(
+      uri,
+      [{ resize: { width: MAX_PHOTO_PX } }],
+      { compress: SYNC_QUALITY, format: SaveFormat.JPEG }
+    )
+    // Step 2 — read as base64
+    const b64 = await FileSystem.readAsStringAsync(compressed.uri, {
       encoding: FileSystem.EncodingType.Base64,
     })
+    // Step 3 — delete the temp compressed file (keep device storage clean)
+    FileSystem.deleteAsync(compressed.uri, { idempotent: true }).catch(() => {})
     return `data:image/jpeg;base64,${b64}`
-  } catch (e) {
-    console.warn('[Sync] could not encode photo:', uri, e)
-    return uri
+  } catch (compressErr) {
+    console.warn('[Sync] compression failed, trying raw encode:', uri, compressErr)
+    // Fall back to encoding the original file uncompressed
+    try {
+      const b64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      })
+      return `data:image/jpeg;base64,${b64}`
+    } catch (e) {
+      console.warn('[Sync] could not encode photo at all:', uri, e)
+      return uri
+    }
   }
 }
 
