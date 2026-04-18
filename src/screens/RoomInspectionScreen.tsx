@@ -536,6 +536,7 @@ export default function RoomInspectionScreen() {
         sectionId:   sectionKey,
         rowId:       itemId,
         sectionType: sectionType_,
+        isCheckOut:  isCheckOut_,
       })
 
       const result = response.data
@@ -717,18 +718,32 @@ export default function RoomInspectionScreen() {
         }
       }
 
-      // Create AI-suggested sub-items (only when the AI detected distinct elements)
+      // Create AI-suggested sub-items (check-in) or write CO conditions to existing subs (check-out)
       if (Array.isArray(fields._subs) && fields._subs.length > 0) {
         if (!row._subs) row._subs = []
         for (const sub of fields._subs) {
-          const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-          row._subs.push({
-            _sid:        sid,
-            description: sub.description || '',
-            condition:   sub.condition   || '',
-          })
-          changed = true
-          subItemsCreated++
+          if (isCheckOut_ && sub._sid) {
+            // Check-out: match by _sid, write checkOutCondition with "As Inventory+" prefix
+            const existing = row._subs.find((s: any) => s._sid === sub._sid)
+            if (existing && sub.checkOutCondition) {
+              const existingCO = existing.checkOutCondition || ''
+              const isBlankOrPlaceholder = !existingCO.trim() || existingCO.trim() === 'As Inventory+'
+              existing.checkOutCondition = isBlankOrPlaceholder
+                ? `As Inventory+\n${sub.checkOutCondition}`
+                : `${existingCO}\n${sub.checkOutCondition}`
+              changed = true
+            }
+          } else if (!isCheckOut_) {
+            // Check-in: create new sub-items from AI-detected elements
+            const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+            row._subs.push({
+              _sid:        sid,
+              description: sub.description || '',
+              condition:   sub.condition   || '',
+            })
+            changed = true
+            subItemsCreated++
+          }
         }
       }
     }
@@ -813,6 +828,7 @@ export default function RoomInspectionScreen() {
         sectionId:   sectionKey,
         rowId:       sid,
         sectionType: 'room',
+        isCheckOut:  isCheckOut_,
       })
       const result = response.data
       const fresh = await getLocalInspection(inspectionId)
@@ -821,8 +837,21 @@ export default function RoomInspectionScreen() {
       const sub = subs.find((s: any) => s._sid === sid)
       if (sub) {
         let changed = false
-        if (result.description && !sub.description) { sub.description = result.description; changed = true }
-        if (result.condition   && !sub.condition)   { sub.condition   = result.condition;   changed = true }
+        if (isCheckOut_) {
+          // Check-out: put verbatim AI condition into checkOutCondition with "As Inventory+" prefix
+          const aiCondition = result.condition || result.description
+          if (aiCondition) {
+            const existingCO = sub.checkOutCondition || ''
+            const isBlankOrPlaceholder = !existingCO.trim() || existingCO.trim() === 'As Inventory+'
+            sub.checkOutCondition = isBlankOrPlaceholder
+              ? `As Inventory+\n${aiCondition}`
+              : `${existingCO}\n${aiCondition}`
+            changed = true
+          }
+        } else {
+          if (result.description && !sub.description) { sub.description = result.description; changed = true }
+          if (result.condition   && !sub.condition)   { sub.condition   = result.condition;   changed = true }
+        }
         if (changed) {
           await setReportData(inspectionId, rd)
         }
@@ -1119,39 +1148,53 @@ export default function RoomInspectionScreen() {
     })
   }
 
+  // Use functional setState to avoid stale-closure bugs when adding multiple actions
   function modalToggleAction(actionId: any) {
-    if (!actionsModal) return
-    const has = actionsModal.workingActions.some((a: any) => a.actionId === actionId)
-    if (has) {
-      setActionsModal({ ...actionsModal, workingActions: actionsModal.workingActions.filter((a: any) => a.actionId !== actionId) })
-    } else {
-      setActionsModal({
-        ...actionsModal,
-        workingActions: [
-          ...actionsModal.workingActions,
-          { actionId, responsibility: actionResponsibilities[0] || '', condition: '' },
-        ],
-      })
-    }
+    setActionsModal(prev => {
+      if (!prev) return prev
+      const has = prev.workingActions.some((a: any) => a.actionId === actionId)
+      if (has) {
+        return { ...prev, workingActions: prev.workingActions.filter((a: any) => a.actionId !== actionId) }
+      } else {
+        return {
+          ...prev,
+          workingActions: [
+            ...prev.workingActions,
+            { actionId, responsibility: actionResponsibilities[0] || '', condition: '' },
+          ],
+        }
+      }
+    })
+  }
+
+  function modalRemoveAction(actionId: any) {
+    setActionsModal(prev => {
+      if (!prev) return prev
+      return { ...prev, workingActions: prev.workingActions.filter((a: any) => a.actionId !== actionId) }
+    })
   }
 
   function modalSetResponsibility(actionId: any, value: string) {
-    if (!actionsModal) return
-    setActionsModal({
-      ...actionsModal,
-      workingActions: actionsModal.workingActions.map((a: any) =>
-        a.actionId === actionId ? { ...a, responsibility: value } : a
-      ),
+    setActionsModal(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        workingActions: prev.workingActions.map((a: any) =>
+          a.actionId === actionId ? { ...a, responsibility: value } : a
+        ),
+      }
     })
   }
 
   function modalSetCondition(actionId: any, value: string) {
-    if (!actionsModal) return
-    setActionsModal({
-      ...actionsModal,
-      workingActions: actionsModal.workingActions.map((a: any) =>
-        a.actionId === actionId ? { ...a, condition: value } : a
-      ),
+    setActionsModal(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        workingActions: prev.workingActions.map((a: any) =>
+          a.actionId === actionId ? { ...a, condition: value } : a
+        ),
+      }
     })
   }
 
@@ -1548,8 +1591,13 @@ export default function RoomInspectionScreen() {
                     <TextInput
                       style={styles.notesInput}
                       value={sub.checkOutCondition || ''}
+                      onFocus={() => {
+                        if (!sub.checkOutCondition) {
+                          setSubField(item.id, sub._sid, 'checkOutCondition', 'As Inventory+')
+                        }
+                      }}
                       onChangeText={v => setSubField(item.id, sub._sid, 'checkOutCondition', v)}
-                      placeholder="As Check In…"
+                      placeholder="As Inventory+"
                       placeholderTextColor={colors.textLight}
                       multiline textAlignVertical="top"
                     />
@@ -1754,6 +1802,10 @@ export default function RoomInspectionScreen() {
               name:           it.label || it.name || '',
               hasCondition:   it.hasCondition !== false,
               hasDescription: it.hasDescription !== false,
+              // Check-out: include existing sub-items so the AI can route dictation to the right _sid
+              subs: isCheckOut_
+                ? getSubs(it.id).map((s: any) => ({ _sid: s._sid, description: s.description || '' }))
+                : undefined,
             }))}
             onTranscribed={handleRoomTranscribed}
             showAiButton={typistMode_ === 'ai_room'}
@@ -1901,10 +1953,13 @@ export default function RoomInspectionScreen() {
                       const condIsCustom = action.condition && !condLines.includes(action.condition)
                       return (
                         <View key={action.actionId} style={actStyles.detailRow}>
-                          {/* Action name label */}
+                          {/* Action name label + delete button */}
                           <View style={actStyles.detailLabel}>
                             <View style={[actStyles.catDot, { backgroundColor: col }]} />
                             <Text style={[actStyles.detailName, { color: col }]}>{cat?.name || String(action.actionId)}</Text>
+                            <TouchableOpacity onPress={() => modalRemoveAction(action.actionId)} style={actStyles.detailRemoveBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                              <Text style={actStyles.detailRemoveText}>✕</Text>
+                            </TouchableOpacity>
                           </View>
 
                           {/* Responsibility */}
@@ -1978,7 +2033,7 @@ export default function RoomInspectionScreen() {
               </ScrollView>
 
               {/* Footer — Save and Cancel */}
-              <View style={actStyles.footer}>
+              <View style={[actStyles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
                 <TouchableOpacity style={[mStyles.cancel, { flex: 1 }]} onPress={() => setActionsModal(null)}>
                   <Text style={mStyles.cancelText}>Cancel</Text>
                 </TouchableOpacity>
@@ -2173,7 +2228,7 @@ const styles = StyleSheet.create({
 
 const actStyles = StyleSheet.create({
   overlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  sheet:        { backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '88%' },
+  sheet:        { backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '92%' },
   header:       { padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
   headerTitle:  { fontSize: font.lg, fontWeight: '800', color: colors.text },
   headerSub:    { fontSize: font.sm, color: colors.textMid, marginTop: 2 },
@@ -2200,4 +2255,6 @@ const actStyles = StyleSheet.create({
   condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1, marginRight: 6 },
   condLineTextActive: { color: colors.primary, fontWeight: '600' },
   footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
+  detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
 })

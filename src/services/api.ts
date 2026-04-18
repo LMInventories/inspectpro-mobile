@@ -105,7 +105,14 @@ export const api = {
     sectionName: string
     sectionKey: string
     sectionType?: string   // 'room' (default) or fixed section type
-    items: Array<{ id: string; name: string; hasCondition?: boolean; hasDescription?: boolean }>
+    isCheckOut?: boolean   // check-out mode — verbatim CO conditions + sub-item routing
+    items: Array<{
+      id: string
+      name: string
+      hasCondition?: boolean
+      hasDescription?: boolean
+      subs?: Array<{ _sid: string; description: string }>  // for check-out sub-item routing
+    }>
   }) =>
     httpAi.post('/api/transcribe/room', data),
 

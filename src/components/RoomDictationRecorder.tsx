@@ -49,6 +49,7 @@ export interface RoomDictationItem {
   name: string
   hasCondition?: boolean
   hasDescription?: boolean
+  subs?: Array<{ _sid: string; description: string }>  // check-out: existing sub-items for routing
 }
 
 interface SavedClip {
@@ -290,16 +291,21 @@ export default function RoomDictationRecorder({
         })
       )
 
+      // Detect check-out mode: at least one item has subs populated
+      const isCheckOut = items.some(it => it.subs !== undefined)
+
       const response = await api.transcribeRoom({
         clips:       clipPayloads,
         sectionName,
         sectionKey,
         sectionType,
+        isCheckOut,
         items: items.map(it => ({
           id:             it.id,
           name:           it.name,
           hasCondition:   it.hasCondition !== false,
           hasDescription: it.hasDescription !== false,
+          subs:           it.subs,
         })),
       })
 
