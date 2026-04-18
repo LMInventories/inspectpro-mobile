@@ -144,24 +144,27 @@ export default function RoomInspectionScreen() {
       // Determine typist mode
       if (fresh) {
         // Priority order for resolving which recording/transcription UI to show:
-        //   1. Clerk's own typist_mode (set in their user profile) — most direct signal
-        //   2. The inspection's assigned typist's typist_mode (e.g. AI typist account)
-        //   3. Legacy: inspection's typist_is_ai boolean → treat as ai_instant
+        //   1. local_typist_override — clerk explicitly changed it on the Property Overview
+        //      screen for THIS inspection. Always wins (most specific).
+        //   2. Clerk's own typist_mode from their user profile — their global preference.
+        //   3. The inspection's assigned typist's typist_mode (server-assigned default).
+        //   4. Legacy: inspection's typist_is_ai boolean → treat as ai_instant.
 
-        const clerkMode   = user?.typist_mode   // clerk's own preference (now returned by /me)
-        const typistMode  = (fresh as any).typist_mode        // inspection typist's mode (new field)
-        const typistName  = (fresh.typist_name || (fresh as any).typist?.name || '').toLowerCase()
-        const typistIsAi  = (fresh as any).typist_is_ai === true ||
-                            (fresh as any).typist?.is_ai === true ||
-                            typistName === 'ai typist' ||
-                            typistName.startsWith('ai ')
+        const localOverride = (fresh as any).local_typist_override  // set on overview screen
+        const clerkMode     = user?.typist_mode                     // clerk's profile preference
+        const typistMode    = (fresh as any).typist_mode            // server-assigned / merged
+        const typistName    = (fresh.typist_name || (fresh as any).typist?.name || '').toLowerCase()
+        const typistIsAi    = (fresh as any).typist_is_ai === true ||
+                              (fresh as any).typist?.is_ai === true ||
+                              typistName === 'ai typist' ||
+                              typistName.startsWith('ai ')
 
-        console.log('[TypistMode] clerkMode:', clerkMode, 'typistMode:', typistMode,
-                    'typistIsAi:', typistIsAi, 'typistName:', typistName)
+        console.log('[TypistMode] localOverride:', localOverride, 'clerkMode:', clerkMode,
+                    'typistMode:', typistMode, 'typistIsAi:', typistIsAi)
 
-        // Resolution: clerk preference wins; inspection typist mode is fallback
+        // Per-inspection override wins; then clerk profile; then server-assigned mode
         let resolved: 'ai_instant' | 'ai_room' | 'human' | null = null
-        const effectiveMode = clerkMode || typistMode  // clerk wins, typist is fallback
+        const effectiveMode = localOverride || clerkMode || typistMode
 
         if      (effectiveMode === 'ai_instant' || typistIsAi) resolved = 'ai_instant'
         else if (effectiveMode === 'ai_room')                  resolved = 'ai_room'

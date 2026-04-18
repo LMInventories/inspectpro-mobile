@@ -73,9 +73,11 @@ export function getLocalInspections(): any[] {
       local_status: r.local_status,
       synced:       r.synced === 1,
       is_finalised: r.is_finalised === 1,
-      // Local typist_mode column wins over the value baked into the data blob,
-      // letting clerks change the mode per-report without re-downloading.
+      // Merged value used for sync and display
       typist_mode: r.typist_mode ?? base.typist_mode ?? null,
+      // Separate field: only set when the clerk explicitly changed it on the device.
+      // Used by RoomInspectionScreen to give per-inspection overrides highest priority.
+      local_typist_override: r.typist_mode ?? null,
     }
   })
 }
@@ -94,6 +96,7 @@ export function getLocalInspection(id: number): any | null {
     synced:       r.synced === 1,
     is_finalised: r.is_finalised === 1,
     typist_mode: r.typist_mode ?? base.typist_mode ?? null,
+    local_typist_override: r.typist_mode ?? null,
   }
 }
 
