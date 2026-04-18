@@ -1141,12 +1141,23 @@ export default function RoomInspectionScreen() {
       .split('\n')
       .map((l: string) => l.trim())
       .filter(Boolean)
+    // Normalise: migrate legacy `condition: string` → `conditions: string[]`
+    const migratedActions = existing.map((a: any) => ({
+      ...a,
+      conditions: a.conditions ?? (a.condition ? [a.condition] : []),
+    }))
     setActionsModal({
       itemId,
       itemLabel:      label,
-      workingActions: JSON.parse(JSON.stringify(existing)),
+      workingActions: JSON.parse(JSON.stringify(migratedActions)),
       conditionLines: lines,
     })
+  }
+
+  // Normalise action: migrate legacy condition string → conditions array
+  function normaliseAction(a: any): any {
+    if (a.conditions) return a
+    return { ...a, conditions: a.condition ? [a.condition] : [] }
   }
 
   // Use functional setState to avoid stale-closure bugs when adding multiple actions
@@ -1161,7 +1172,7 @@ export default function RoomInspectionScreen() {
           ...prev,
           workingActions: [
             ...prev.workingActions,
-            { actionId, responsibility: actionResponsibilities[0] || '', condition: '' },
+            { actionId, responsibility: actionResponsibilities[0] || '', conditions: [] },
           ],
         }
       }
@@ -1187,14 +1198,18 @@ export default function RoomInspectionScreen() {
     })
   }
 
-  function modalSetCondition(actionId: any, value: string) {
+  // Toggle a condition line in/out of the conditions array for an action
+  function modalToggleCondition(actionId: any, line: string) {
     setActionsModal(prev => {
       if (!prev) return prev
       return {
         ...prev,
-        workingActions: prev.workingActions.map((a: any) =>
-          a.actionId === actionId ? { ...a, condition: value } : a
-        ),
+        workingActions: prev.workingActions.map((a: any) => {
+          if (a.actionId !== actionId) return a
+          const norm = normaliseAction(a)
+          const has = norm.conditions.includes(line)
+          return { ...norm, conditions: has ? norm.conditions.filter((c: string) => c !== line) : [...norm.conditions, line] }
+        }),
       }
     })
   }
@@ -2012,7 +2027,7 @@ export default function RoomInspectionScreen() {
                       const cat = actionCatalogue.find((c: any) => c.id === action.actionId)
                       const col = cat?.color || '#64748b'
                       const condLines = actionsModal?.conditionLines || []
-                      const condIsCustom = action.condition && !condLines.includes(action.condition)
+                      const actionConditions: string[] = normaliseAction(action).conditions
                       return (
                         <View key={action.actionId} style={actStyles.detailRow}>
                           {/* Action name label + delete button */}
@@ -2042,44 +2057,44 @@ export default function RoomInspectionScreen() {
                             </View>
                           )}
 
-                          {/* Condition selector */}
+                          {/* Condition selector — multi-select */}
                           <View style={actStyles.detailField}>
-                            <Text style={actStyles.fieldLbl}>Condition</Text>
+                            <Text style={actStyles.fieldLbl}>Condition <Text style={actStyles.fieldLblOpt}>(select all that apply)</Text></Text>
                             {condLines.length > 0 ? (
                               <>
-                                {condLines.map((line: string) => (
-                                  <TouchableOpacity
-                                    key={line}
-                                    style={[actStyles.condLine, action.condition === line && actStyles.condLineActive]}
-                                    onPress={() => modalSetCondition(action.actionId, action.condition === line ? '' : line)}
-                                  >
-                                    <Text style={[actStyles.condLineText, action.condition === line && actStyles.condLineTextActive]} numberOfLines={3}>{line}</Text>
-                                    {action.condition === line && <Text style={[actStyles.catCheck, { color: colors.primary }]}>✓</Text>}
-                                  </TouchableOpacity>
-                                ))}
-                                <TouchableOpacity
-                                  style={[actStyles.condLine, condIsCustom && actStyles.condLineActive]}
-                                  onPress={() => !condIsCustom && modalSetCondition(action.actionId, ' ')}
-                                >
-                                  <Text style={[actStyles.condLineText, condIsCustom && actStyles.condLineTextActive]}>— Enter manually —</Text>
-                                  {condIsCustom && <Text style={[actStyles.catCheck, { color: colors.primary }]}>✓</Text>}
-                                </TouchableOpacity>
-                                {condIsCustom && (
-                                  <TextInput
-                                    style={[styles.notesInput, { marginTop: 6, minHeight: 40 }]}
-                                    value={action.condition.trim()}
-                                    onChangeText={v => modalSetCondition(action.actionId, v)}
-                                    placeholder="Describe the condition…"
-                                    placeholderTextColor={colors.textLight}
-                                    multiline
-                                  />
-                                )}
+                                {condLines.map((line: string) => {
+                                  const checked = actionConditions.includes(line)
+                                  return (
+                                    <TouchableOpacity
+                                      key={line}
+                                      style={[actStyles.condLine, checked && actStyles.condLineActive]}
+                                      onPress={() => modalToggleCondition(action.actionId, line)}
+                                    >
+                                      <View style={[actStyles.condCheckbox, checked && actStyles.condCheckboxActive]}>
+                                        {checked && <Text style={actStyles.condCheckmark}>✓</Text>}
+                                      </View>
+                                      <Text style={[actStyles.condLineText, checked && actStyles.condLineTextActive]} numberOfLines={3}>{line}</Text>
+                                    </TouchableOpacity>
+                                  )
+                                })}
                               </>
                             ) : (
                               <TextInput
                                 style={[styles.notesInput, { minHeight: 40 }]}
-                                value={action.condition}
-                                onChangeText={v => modalSetCondition(action.actionId, v)}
+                                value={actionConditions.join('\n')}
+                                onChangeText={v => {
+                                  // Replace the whole conditions list from free-text lines
+                                  const lines = v.split('\n').map((l: string) => l.trim()).filter(Boolean)
+                                  setActionsModal(prev => {
+                                    if (!prev) return prev
+                                    return {
+                                      ...prev,
+                                      workingActions: prev.workingActions.map((a: any) =>
+                                        a.actionId === action.actionId ? { ...normaliseAction(a), conditions: lines } : a
+                                      ),
+                                    }
+                                  })
+                                }}
                                 placeholder="e.g. Heavy marks to low level door…"
                                 placeholderTextColor={colors.textLight}
                                 multiline
@@ -2307,15 +2322,19 @@ const actStyles = StyleSheet.create({
   detailName:   { fontSize: font.sm, fontWeight: '700', flex: 1 },
   detailField:  { marginBottom: 10 },
   fieldLbl:     { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, color: colors.textLight, marginBottom: 6 },
+  fieldLblOpt:  { fontSize: 10, fontWeight: '400', textTransform: 'none', letterSpacing: 0, color: colors.textLight, fontStyle: 'italic' },
   respBtns:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   respBtn:      { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.sm, backgroundColor: colors.muted, borderWidth: 1.5, borderColor: colors.border },
   respBtnActive:{ backgroundColor: colors.primaryLight, borderColor: colors.primary },
   respBtnText:      { fontSize: font.sm, color: colors.textMid, fontWeight: '500' },
   respBtnTextActive:{ color: colors.primary, fontWeight: '700' },
-  condLine:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, marginBottom: 4 },
+  condLine:         { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, marginBottom: 4 },
   condLineActive:   { backgroundColor: colors.primaryLight, borderColor: colors.primary },
-  condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1, marginRight: 6 },
+  condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1 },
   condLineTextActive: { color: colors.primary, fontWeight: '600' },
+  condCheckbox:     { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  condCheckboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  condCheckmark:    { fontSize: 11, color: 'white', fontWeight: '800', lineHeight: 14 },
   footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
   detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
