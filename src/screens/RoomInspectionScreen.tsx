@@ -687,8 +687,9 @@ export default function RoomInspectionScreen() {
       const condAction = fields._condAction || 'fill'
 
       if (isCheckOut_) {
-        // Check-out: write AI condition to checkOutCondition with "As Inventory+" as first line
-        const aiCondition = fields.condition || fields.description
+        // Check-out: _claude_fill_room_checkout returns checkOutCondition; fall back to
+        // condition/description for any legacy or fixed-section paths.
+        const aiCondition = fields.checkOutCondition || fields.condition || fields.description
         if (aiCondition) {
           const existing = row.checkOutCondition || ''
           const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
@@ -1133,16 +1134,16 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
-  function openActionsModal(item: any) {
-    const existing = getItemActions(item.id)
-    const coCondition = getField(item.id, 'checkOutCondition')
+  // itemId can be a template item id OR a sub-item _sid — both stored as _actions_${itemId}
+  function openActionsModal(itemId: string, label: string, coCondition: string) {
+    const existing = getItemActions(itemId)
     const lines = coCondition
       .split('\n')
       .map((l: string) => l.trim())
       .filter(Boolean)
     setActionsModal({
-      itemId:         item.id,
-      itemLabel:      item.label || item.name || '',
+      itemId,
+      itemLabel:      label,
       workingActions: JSON.parse(JSON.stringify(existing)),
       conditionLines: lines,
     })
@@ -1387,7 +1388,7 @@ export default function RoomInspectionScreen() {
                 <Text style={styles.fieldLabel}>Actions</Text>
                 <TouchableOpacity
                   style={[styles.actionsBtn, getItemActions(item.id).length > 0 && styles.actionsBtnActive]}
-                  onPress={() => openActionsModal(item)}
+                  onPress={() => openActionsModal(item.id, item.label || item.name || '', getField(item.id, 'checkOutCondition'))}
                 >
                   <Text style={[styles.actionsBtnText, getItemActions(item.id).length === 0 && styles.actionsBtnEmpty]}>
                     {getItemActions(item.id).length > 0
@@ -1569,7 +1570,9 @@ export default function RoomInspectionScreen() {
                 /* ── CHECK OUT sub-item: read-only CI fields + editable CO condition ── */
                 <View key={sub._sid} style={styles.subItem}>
                   <View style={styles.subItemHeader}>
-                    <Text style={styles.subItemTitle}>—</Text>
+                    <Text style={styles.subItemTitle} numberOfLines={1}>
+                      {sub.description ? sub.description.split('\n')[0] : `Sub-item ${idx + 1}`}
+                    </Text>
                   </View>
                   <View style={styles.fieldGroup}>
                     <Text style={styles.fieldLabel}>Description</Text>
@@ -1602,6 +1605,65 @@ export default function RoomInspectionScreen() {
                       multiline textAlignVertical="top"
                     />
                   </View>
+                  {/* Sub-item Actions — same modal as main items, keyed by _sid */}
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.fieldLabel}>Actions</Text>
+                    <TouchableOpacity
+                      style={[styles.actionsBtn, getItemActions(sub._sid).length > 0 && styles.actionsBtnActive]}
+                      onPress={() => openActionsModal(
+                        sub._sid,
+                        `${item.label || item.name || 'Item'} — ${sub.description || 'Sub-item'}`,
+                        sub.checkOutCondition || ''
+                      )}
+                    >
+                      <Text style={[styles.actionsBtnText, getItemActions(sub._sid).length === 0 && styles.actionsBtnEmpty]}>
+                        {getItemActions(sub._sid).length > 0
+                          ? `${getItemActions(sub._sid).length} action${getItemActions(sub._sid).length !== 1 ? 's' : ''} — tap to edit`
+                          : '+ Add action'}
+                      </Text>
+                    </TouchableOpacity>
+                    {getItemActions(sub._sid).length > 0 && (
+                      <View style={styles.actionPillsRow}>
+                        {getItemActions(sub._sid).map((a: any) => {
+                          const cat = actionCatalogue.find((c: any) => c.id === a.actionId)
+                          const col = cat?.color || '#64748b'
+                          return (
+                            <View key={a.actionId} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
+                              <View style={[styles.actionPillDot, { backgroundColor: col }]} />
+                              <Text style={[styles.actionPillText, { color: col }]}>{cat?.name || String(a.actionId)}</Text>
+                              {a.responsibility ? <Text style={[styles.actionPillResp, { color: col }]}>· {a.responsibility}</Text> : null}
+                            </View>
+                          )
+                        })}
+                      </View>
+                    )}
+                  </View>
+                  {/* Per-sub-item recorder — AI instant mode */}
+                  {hasAiTypist && (
+                    <View style={[styles.voiceBlock, { marginTop: 8 }]}>
+                      {aiProcessingItem === sub._sid && (
+                        <View style={styles.aiProcessingBadge}>
+                          <ActivityIndicator size="small" color={colors.accent} />
+                          <Text style={styles.aiProcessingText}>AI transcribing…</Text>
+                        </View>
+                      )}
+                      <AudioRecorderWidget
+                        recordings={recordings[sub._sid] || []}
+                        onRecordingComplete={async (uri, dur) =>
+                          handleSubItemRecordingComplete(
+                            item.id, sub._sid,
+                            sub.description || 'Sub-item',
+                            uri, dur
+                          )
+                        }
+                        onDeleteRecording={async (uri) => {
+                          setRecordings(prev => ({ ...prev, [sub._sid]: (prev[sub._sid] || []).filter((r: any) => r.file_uri !== uri) }))
+                        }}
+                        transcribingUri={transcribingUris[sub._sid] ?? null}
+                        compact
+                      />
+                    </View>
+                  )}
                 </View>
               ) : (
                 /* ── CHECK IN sub-item: editable description + condition ── */
