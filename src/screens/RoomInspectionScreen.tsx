@@ -73,6 +73,17 @@ export default function RoomInspectionScreen() {
   // Sub-item quantity modal — opened when clerk taps the ⊕ swipe action
   const [subQtyModal, setSubQtyModal] = useState<{ itemId: string; label: string; count: number } | null>(null)
 
+  // ── Check-out mode ────────────────────────────────────────────────────────
+  const [isCheckOut_, setIsCheckOut_] = useState(false)
+  const [actionCatalogue, setActionCatalogue] = useState<any[]>([])
+  const [actionResponsibilities, setActionResponsibilities] = useState<string[]>([])
+  const [actionsModal, setActionsModal] = useState<{
+    itemId: string
+    itemLabel: string
+    workingActions: any[]
+    conditionLines: string[]
+  } | null>(null)
+
   // ── Item drag-to-reorder ───────────────────────────────────────────────────
   // Approximate row height used to compute target drop index during drag.
   // Items vary in height but this gives a reasonable gap-preview.
@@ -174,6 +185,17 @@ export default function RoomInspectionScreen() {
 
         setTypistMode_(resolved)
         setHasAiTypist(resolved === 'ai_instant')  // per-item mic only in ai_instant
+
+        // Detect check-out mode and load action catalogue (once per screen)
+        const checkOut = fresh?.inspection_type === 'check_out'
+        setIsCheckOut_(checkOut)
+        if (checkOut && actionCatalogue.length === 0) {
+          try {
+            const actRes = await api.getActions()
+            setActionCatalogue(actRes.data.actions || [])
+            setActionResponsibilities(actRes.data.responsibilities || [])
+          } catch { /* fail silently — actions just won't show options */ }
+        }
       }
 
       if (sectionType === 'fixed' && fixedSectionData) {
@@ -569,11 +591,26 @@ export default function RoomInspectionScreen() {
 
       let changed = false
       if (sectionType_ === 'room') {
-        if (shouldWrite('description', result.description, row.description)) {
-          row.description = computeValue('description', result.description, row.description); changed = true
-        }
-        if (shouldWrite('condition', result.condition, row.condition)) {
-          row.condition = computeValue('condition', result.condition, row.condition); changed = true
+        if (isCheckOut_) {
+          // Check-out: AI result goes into checkOutCondition.
+          // "As Inventory+" is always the first line (placeholder = no damage / matches inventory).
+          // Any AI-dictated condition is appended below it.
+          const aiCondition = result.condition || result.description
+          if (aiCondition) {
+            const existing = row.checkOutCondition || ''
+            const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
+            row.checkOutCondition = isBlankOrPlaceholder
+              ? `As Inventory+\n${aiCondition}`
+              : `${existing}\n${aiCondition}`
+            changed = true
+          }
+        } else {
+          if (shouldWrite('description', result.description, row.description)) {
+            row.description = computeValue('description', result.description, row.description); changed = true
+          }
+          if (shouldWrite('condition', result.condition, row.condition)) {
+            row.condition = computeValue('condition', result.condition, row.condition); changed = true
+          }
         }
       } else if (sectionType_ === 'meter_readings') {
         if (result.locationSerial && !row.locationSerial) { row.locationSerial = result.locationSerial; changed = true }
@@ -648,22 +685,35 @@ export default function RoomInspectionScreen() {
       const descAction = fields._descAction || 'fill'  // 'fill' | 'overwrite' | 'append'
       const condAction = fields._condAction || 'fill'
 
-      if (fields.description) {
-        if (descAction === 'overwrite' || (descAction === 'fill' && !row.description)) {
-          row.description = fields.description; changed = true
-        } else if (descAction === 'append' && row.description) {
-          row.description = row.description + '\n' + fields.description; changed = true
-        } else if (descAction === 'append' && !row.description) {
-          row.description = fields.description; changed = true
+      if (isCheckOut_) {
+        // Check-out: write AI condition to checkOutCondition with "As Inventory+" as first line
+        const aiCondition = fields.condition || fields.description
+        if (aiCondition) {
+          const existing = row.checkOutCondition || ''
+          const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
+          row.checkOutCondition = isBlankOrPlaceholder
+            ? `As Inventory+\n${aiCondition}`
+            : `${existing}\n${aiCondition}`
+          changed = true
         }
-      }
-      if (fields.condition) {
-        if (condAction === 'overwrite' || (condAction === 'fill' && !row.condition)) {
-          row.condition = fields.condition; changed = true
-        } else if (condAction === 'append' && row.condition) {
-          row.condition = row.condition + '\n' + fields.condition; changed = true
-        } else if (condAction === 'append' && !row.condition) {
-          row.condition = fields.condition; changed = true
+      } else {
+        if (fields.description) {
+          if (descAction === 'overwrite' || (descAction === 'fill' && !row.description)) {
+            row.description = fields.description; changed = true
+          } else if (descAction === 'append' && row.description) {
+            row.description = row.description + '\n' + fields.description; changed = true
+          } else if (descAction === 'append' && !row.description) {
+            row.description = fields.description; changed = true
+          }
+        }
+        if (fields.condition) {
+          if (condAction === 'overwrite' || (condAction === 'fill' && !row.condition)) {
+            row.condition = fields.condition; changed = true
+          } else if (condAction === 'append' && row.condition) {
+            row.condition = row.condition + '\n' + fields.condition; changed = true
+          } else if (condAction === 'append' && !row.condition) {
+            row.condition = fields.condition; changed = true
+          }
         }
       }
 
@@ -1041,6 +1091,70 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
+  // ── Check-out: Actions ────────────────────────────────────────────────────
+  function getItemActions(itemId: string): any[] {
+    return getReportData()[sectionKey]?.[`_actions_${itemId}`] || []
+  }
+
+  async function saveItemActions(itemId: string, actions: any[]) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    rd[sectionKey][`_actions_${itemId}`] = actions
+    await setReportData(inspectionId, rd)
+  }
+
+  function openActionsModal(item: any) {
+    const existing = getItemActions(item.id)
+    const coCondition = getField(item.id, 'checkOutCondition')
+    const lines = coCondition
+      .split('\n')
+      .map((l: string) => l.trim())
+      .filter(Boolean)
+    setActionsModal({
+      itemId:         item.id,
+      itemLabel:      item.label || item.name || '',
+      workingActions: JSON.parse(JSON.stringify(existing)),
+      conditionLines: lines,
+    })
+  }
+
+  function modalToggleAction(actionId: any) {
+    if (!actionsModal) return
+    const has = actionsModal.workingActions.some((a: any) => a.actionId === actionId)
+    if (has) {
+      setActionsModal({ ...actionsModal, workingActions: actionsModal.workingActions.filter((a: any) => a.actionId !== actionId) })
+    } else {
+      setActionsModal({
+        ...actionsModal,
+        workingActions: [
+          ...actionsModal.workingActions,
+          { actionId, responsibility: actionResponsibilities[0] || '', condition: '' },
+        ],
+      })
+    }
+  }
+
+  function modalSetResponsibility(actionId: any, value: string) {
+    if (!actionsModal) return
+    setActionsModal({
+      ...actionsModal,
+      workingActions: actionsModal.workingActions.map((a: any) =>
+        a.actionId === actionId ? { ...a, responsibility: value } : a
+      ),
+    })
+  }
+
+  function modalSetCondition(actionId: any, value: string) {
+    if (!actionsModal) return
+    setActionsModal({
+      ...actionsModal,
+      workingActions: actionsModal.workingActions.map((a: any) =>
+        a.actionId === actionId ? { ...a, condition: value } : a
+      ),
+    })
+  }
+
   function isItemDone(item: any) {
     const id = item.id
     return !!(
@@ -1184,34 +1298,106 @@ export default function RoomInspectionScreen() {
         {/* Question label for smoke/health/fire */}
         {item.question ? <Text style={styles.questionText}>{item.question}</Text> : null}
 
-        {/* ── ROOM ITEMS: Description textarea then Condition textarea ── */}
+        {/* ── ROOM ITEMS ── */}
         {sectionType_ === 'room' && (
-          <>
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Description</Text>
-              <TextInput
-                style={styles.notesInput}
-                value={getField(item.id, 'description')}
-                onChangeText={v => setField(item.id, 'description', v)}
-                placeholder="Describe item appearance, state, notes…"
-                placeholderTextColor={colors.textLight}
-                multiline textAlignVertical="top"
-              />
-            </View>
-            {item.hasCondition !== false && (
+          isCheckOut_ ? (
+            /* ── CHECK OUT layout ── */
+            <>
+              {/* Description — read-only from check-in */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Condition</Text>
+                <Text style={styles.fieldLabel}>Description</Text>
+                <View style={styles.coReadOnly}>
+                  <Text style={styles.coReadOnlyText}>{getField(item.id, 'description') || '—'}</Text>
+                </View>
+              </View>
+              {/* Condition at Check In — read-only */}
+              <View style={styles.fieldGroup}>
+                <View style={styles.coLabelRow}>
+                  <Text style={styles.fieldLabel}>Condition at Check In</Text>
+                  <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>Inventory</Text></View>
+                </View>
+                <View style={styles.coReadOnly}>
+                  <Text style={styles.coReadOnlyText}>{getField(item.id, 'inventoryCondition') || '—'}</Text>
+                </View>
+              </View>
+              {/* Condition at Check Out — editable, one line per condition.
+                   "As Inventory+" is auto-set on first focus (means item matches check-in,
+                   any extra conditions are appended below it on new lines). */}
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Condition at Check Out</Text>
                 <TextInput
                   style={styles.notesInput}
-                  value={getField(item.id, 'condition')}
-                  onChangeText={v => setField(item.id, 'condition', v)}
-                  placeholder="e.g. Good, Fair, Worn, Damaged…"
+                  value={getField(item.id, 'checkOutCondition')}
+                  onFocus={() => {
+                    if (!getField(item.id, 'checkOutCondition')) {
+                      setField(item.id, 'checkOutCondition', 'As Inventory+')
+                    }
+                  }}
+                  onChangeText={v => setField(item.id, 'checkOutCondition', v)}
+                  placeholder="As Inventory+"
                   placeholderTextColor={colors.textLight}
                   multiline textAlignVertical="top"
                 />
               </View>
-            )}
-          </>
+              {/* Actions */}
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Actions</Text>
+                <TouchableOpacity
+                  style={[styles.actionsBtn, getItemActions(item.id).length > 0 && styles.actionsBtnActive]}
+                  onPress={() => openActionsModal(item)}
+                >
+                  <Text style={[styles.actionsBtnText, getItemActions(item.id).length === 0 && styles.actionsBtnEmpty]}>
+                    {getItemActions(item.id).length > 0
+                      ? `${getItemActions(item.id).length} action${getItemActions(item.id).length !== 1 ? 's' : ''} — tap to edit`
+                      : '+ Add action'}
+                  </Text>
+                </TouchableOpacity>
+                {getItemActions(item.id).length > 0 && (
+                  <View style={styles.actionPillsRow}>
+                    {getItemActions(item.id).map((a: any) => {
+                      const cat = actionCatalogue.find((c: any) => c.id === a.actionId)
+                      const col = cat?.color || '#64748b'
+                      return (
+                        <View key={a.actionId} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
+                          <View style={[styles.actionPillDot, { backgroundColor: col }]} />
+                          <Text style={[styles.actionPillText, { color: col }]}>{cat?.name || String(a.actionId)}</Text>
+                          {a.responsibility ? <Text style={[styles.actionPillResp, { color: col }]}>· {a.responsibility}</Text> : null}
+                        </View>
+                      )
+                    })}
+                  </View>
+                )}
+              </View>
+            </>
+          ) : (
+            /* ── CHECK IN layout ── */
+            <>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Description</Text>
+                <TextInput
+                  style={styles.notesInput}
+                  value={getField(item.id, 'description')}
+                  onChangeText={v => setField(item.id, 'description', v)}
+                  placeholder="Describe item appearance, state, notes…"
+                  placeholderTextColor={colors.textLight}
+                  multiline textAlignVertical="top"
+                />
+              </View>
+              {item.hasCondition !== false && (
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Condition</Text>
+                  <TextInput
+                    style={styles.notesInput}
+                    value={getField(item.id, 'condition')}
+                    onChangeText={v => setField(item.id, 'condition', v)}
+                    placeholder="e.g. Good, Fair, Worn, Damaged…"
+                    placeholderTextColor={colors.textLight}
+                    multiline textAlignVertical="top"
+                  />
+                </View>
+              )}
+            </>
+          )
         )}
 
         {/* ── FIXED: condition_summary — condition text box ── */}
@@ -1336,61 +1522,97 @@ export default function RoomInspectionScreen() {
           <View style={styles.subsContainer}>
             <View style={styles.subsDivider} />
             {getSubs(item.id).map((sub: any, idx: number) => (
-              <View key={sub._sid} style={styles.subItem}>
-                <View style={styles.subItemHeader}>
-                  <Text style={styles.subItemTitle}>—</Text>
-                  <TouchableOpacity onPress={() => removeSubItem(item.id, sub._sid)}>
-                    <Text style={styles.subItemDelete}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>Description</Text>
-                  <TextInput
-                    style={styles.notesInput}
-                    value={sub.description}
-                    onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
-                    placeholder="Describe sub-item…"
-                    placeholderTextColor={colors.textLight}
-                    multiline textAlignVertical="top"
-                  />
-                </View>
-                <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>Condition</Text>
-                  <TextInput
-                    style={styles.notesInput}
-                    value={sub.condition}
-                    onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
-                    placeholder="e.g. Good, Fair, Worn…"
-                    placeholderTextColor={colors.textLight}
-                    multiline textAlignVertical="top"
-                  />
-                </View>
-                {/* Per-sub-item recorder — AI typist only */}
-                {hasAiTypist && (
-                  <View style={[styles.voiceBlock, { marginTop: 8 }]}>
-                    {aiProcessingItem === sub._sid && (
-                      <View style={styles.aiProcessingBadge}>
-                        <ActivityIndicator size="small" color={colors.accent} />
-                        <Text style={styles.aiProcessingText}>AI transcribing…</Text>
-                      </View>
-                    )}
-                    <AudioRecorderWidget
-                      recordings={recordings[sub._sid] || []}
-                      onRecordingComplete={async (uri, dur) =>
-                        handleSubItemRecordingComplete(
-                          item.id, sub._sid,
-                          `${item.label || item.name} — Sub-item ${idx + 1}`,
-                          uri, dur
-                        )
-                      }
-                      onDeleteRecording={async (uri) => {
-                        setRecordings(prev => ({ ...prev, [sub._sid]: (prev[sub._sid] || []).filter((r: any) => r.file_uri !== uri) }))
-                      }}
-                      compact
+              isCheckOut_ ? (
+                /* ── CHECK OUT sub-item: read-only CI fields + editable CO condition ── */
+                <View key={sub._sid} style={styles.subItem}>
+                  <View style={styles.subItemHeader}>
+                    <Text style={styles.subItemTitle}>—</Text>
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.fieldLabel}>Description</Text>
+                    <View style={styles.coReadOnly}>
+                      <Text style={styles.coReadOnlyText}>{sub.description || '—'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <View style={styles.coLabelRow}>
+                      <Text style={styles.fieldLabel}>Condition at Check In</Text>
+                      <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>Inventory</Text></View>
+                    </View>
+                    <View style={styles.coReadOnly}>
+                      <Text style={styles.coReadOnlyText}>{sub.inventoryCondition || sub.condition || '—'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.fieldLabel}>Condition at Check Out</Text>
+                    <TextInput
+                      style={styles.notesInput}
+                      value={sub.checkOutCondition || ''}
+                      onChangeText={v => setSubField(item.id, sub._sid, 'checkOutCondition', v)}
+                      placeholder="As Check In…"
+                      placeholderTextColor={colors.textLight}
+                      multiline textAlignVertical="top"
                     />
                   </View>
-                )}
-              </View>
+                </View>
+              ) : (
+                /* ── CHECK IN sub-item: editable description + condition ── */
+                <View key={sub._sid} style={styles.subItem}>
+                  <View style={styles.subItemHeader}>
+                    <Text style={styles.subItemTitle}>—</Text>
+                    <TouchableOpacity onPress={() => removeSubItem(item.id, sub._sid)}>
+                      <Text style={styles.subItemDelete}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.fieldLabel}>Description</Text>
+                    <TextInput
+                      style={styles.notesInput}
+                      value={sub.description}
+                      onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
+                      placeholder="Describe sub-item…"
+                      placeholderTextColor={colors.textLight}
+                      multiline textAlignVertical="top"
+                    />
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.fieldLabel}>Condition</Text>
+                    <TextInput
+                      style={styles.notesInput}
+                      value={sub.condition}
+                      onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
+                      placeholder="e.g. Good, Fair, Worn…"
+                      placeholderTextColor={colors.textLight}
+                      multiline textAlignVertical="top"
+                    />
+                  </View>
+                  {/* Per-sub-item recorder — AI typist only */}
+                  {hasAiTypist && (
+                    <View style={[styles.voiceBlock, { marginTop: 8 }]}>
+                      {aiProcessingItem === sub._sid && (
+                        <View style={styles.aiProcessingBadge}>
+                          <ActivityIndicator size="small" color={colors.accent} />
+                          <Text style={styles.aiProcessingText}>AI transcribing…</Text>
+                        </View>
+                      )}
+                      <AudioRecorderWidget
+                        recordings={recordings[sub._sid] || []}
+                        onRecordingComplete={async (uri, dur) =>
+                          handleSubItemRecordingComplete(
+                            item.id, sub._sid,
+                            `${item.label || item.name} — Sub-item ${idx + 1}`,
+                            uri, dur
+                          )
+                        }
+                        onDeleteRecording={async (uri) => {
+                          setRecordings(prev => ({ ...prev, [sub._sid]: (prev[sub._sid] || []).filter((r: any) => r.file_uri !== uri) }))
+                        }}
+                        compact
+                      />
+                    </View>
+                  )}
+                </View>
+              )
             ))}
           </View>
         )}
@@ -1635,6 +1857,147 @@ export default function RoomInspectionScreen() {
           </View>
         </Modal>
 
+        {/* ── Actions picker modal — check-out only ─────────────────────── */}
+        <Modal visible={!!actionsModal} transparent animationType="slide">
+          <View style={actStyles.overlay}>
+            <View style={actStyles.sheet}>
+              {/* Header */}
+              <View style={actStyles.header}>
+                <Text style={actStyles.headerTitle}>Actions</Text>
+                {actionsModal && <Text style={actStyles.headerSub}>{actionsModal.itemLabel}</Text>}
+              </View>
+
+              <ScrollView style={actStyles.scrollArea} keyboardShouldPersistTaps="handled">
+                {/* Catalogue toggle list */}
+                <Text style={actStyles.sectionLbl}>Select actions</Text>
+                {actionCatalogue.length === 0 ? (
+                  <Text style={actStyles.emptyText}>No actions configured — add them in Settings → Actions.</Text>
+                ) : (
+                  actionCatalogue.map((cat: any) => {
+                    const isActive = (actionsModal?.workingActions || []).some((a: any) => a.actionId === cat.id)
+                    return (
+                      <TouchableOpacity
+                        key={cat.id}
+                        style={[actStyles.catBtn, isActive && { borderColor: cat.color + '80', backgroundColor: cat.color + '18' }]}
+                        onPress={() => modalToggleAction(cat.id)}
+                      >
+                        <View style={[actStyles.catDot, { backgroundColor: cat.color }]} />
+                        <Text style={[actStyles.catName, isActive && { color: cat.color, fontWeight: '700' }]}>{cat.name}</Text>
+                        {isActive && <Text style={[actStyles.catCheck, { color: cat.color }]}>✓</Text>}
+                      </TouchableOpacity>
+                    )
+                  })
+                )}
+
+                {/* Detail rows for assigned actions */}
+                {(actionsModal?.workingActions || []).length > 0 && (
+                  <>
+                    <View style={actStyles.divider} />
+                    <Text style={actStyles.sectionLbl}>Details</Text>
+                    {(actionsModal?.workingActions || []).map((action: any) => {
+                      const cat = actionCatalogue.find((c: any) => c.id === action.actionId)
+                      const col = cat?.color || '#64748b'
+                      const condLines = actionsModal?.conditionLines || []
+                      const condIsCustom = action.condition && !condLines.includes(action.condition)
+                      return (
+                        <View key={action.actionId} style={actStyles.detailRow}>
+                          {/* Action name label */}
+                          <View style={actStyles.detailLabel}>
+                            <View style={[actStyles.catDot, { backgroundColor: col }]} />
+                            <Text style={[actStyles.detailName, { color: col }]}>{cat?.name || String(action.actionId)}</Text>
+                          </View>
+
+                          {/* Responsibility */}
+                          {actionResponsibilities.length > 0 && (
+                            <View style={actStyles.detailField}>
+                              <Text style={actStyles.fieldLbl}>Responsibility</Text>
+                              <View style={actStyles.respBtns}>
+                                {actionResponsibilities.map((r: string) => (
+                                  <TouchableOpacity
+                                    key={r}
+                                    style={[actStyles.respBtn, action.responsibility === r && actStyles.respBtnActive]}
+                                    onPress={() => modalSetResponsibility(action.actionId, r)}
+                                  >
+                                    <Text style={[actStyles.respBtnText, action.responsibility === r && actStyles.respBtnTextActive]}>{r}</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            </View>
+                          )}
+
+                          {/* Condition selector */}
+                          <View style={actStyles.detailField}>
+                            <Text style={actStyles.fieldLbl}>Condition</Text>
+                            {condLines.length > 0 ? (
+                              <>
+                                {condLines.map((line: string) => (
+                                  <TouchableOpacity
+                                    key={line}
+                                    style={[actStyles.condLine, action.condition === line && actStyles.condLineActive]}
+                                    onPress={() => modalSetCondition(action.actionId, action.condition === line ? '' : line)}
+                                  >
+                                    <Text style={[actStyles.condLineText, action.condition === line && actStyles.condLineTextActive]} numberOfLines={3}>{line}</Text>
+                                    {action.condition === line && <Text style={[actStyles.catCheck, { color: colors.primary }]}>✓</Text>}
+                                  </TouchableOpacity>
+                                ))}
+                                <TouchableOpacity
+                                  style={[actStyles.condLine, condIsCustom && actStyles.condLineActive]}
+                                  onPress={() => !condIsCustom && modalSetCondition(action.actionId, ' ')}
+                                >
+                                  <Text style={[actStyles.condLineText, condIsCustom && actStyles.condLineTextActive]}>— Enter manually —</Text>
+                                  {condIsCustom && <Text style={[actStyles.catCheck, { color: colors.primary }]}>✓</Text>}
+                                </TouchableOpacity>
+                                {condIsCustom && (
+                                  <TextInput
+                                    style={[styles.notesInput, { marginTop: 6, minHeight: 40 }]}
+                                    value={action.condition.trim()}
+                                    onChangeText={v => modalSetCondition(action.actionId, v)}
+                                    placeholder="Describe the condition…"
+                                    placeholderTextColor={colors.textLight}
+                                    multiline
+                                  />
+                                )}
+                              </>
+                            ) : (
+                              <TextInput
+                                style={[styles.notesInput, { minHeight: 40 }]}
+                                value={action.condition}
+                                onChangeText={v => modalSetCondition(action.actionId, v)}
+                                placeholder="e.g. Heavy marks to low level door…"
+                                placeholderTextColor={colors.textLight}
+                                multiline
+                              />
+                            )}
+                          </View>
+                        </View>
+                      )
+                    })}
+                  </>
+                )}
+                <View style={{ height: 24 }} />
+              </ScrollView>
+
+              {/* Footer — Save and Cancel */}
+              <View style={actStyles.footer}>
+                <TouchableOpacity style={[mStyles.cancel, { flex: 1 }]} onPress={() => setActionsModal(null)}>
+                  <Text style={mStyles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[mStyles.confirm, { flex: 2 }]}
+                  onPress={async () => {
+                    if (actionsModal) {
+                      await saveItemActions(actionsModal.itemId, actionsModal.workingActions)
+                      setActionsModal(null)
+                    }
+                  }}
+                >
+                  <Text style={mStyles.confirmText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Rename item modal */}
         <Modal visible={renameItemModal} transparent animationType="fade">
           <View style={mStyles.overlay}><View style={mStyles.box}>
@@ -1790,4 +2153,51 @@ const styles = StyleSheet.create({
   dropdownChevron: { fontSize: font.sm, color: colors.textLight, marginLeft: spacing.xs },
   swipeHint: { fontSize: 10, color: colors.textLight, textAlign: 'center', marginBottom: spacing.xs, fontStyle: 'italic' },
   emptyNoteText: { fontSize: font.sm, color: colors.textLight, textAlign: 'center' },
+  // Check-out read-only fields
+  coReadOnly: { backgroundColor: '#f8fafc', borderRadius: radius.sm, padding: 8, borderWidth: 1, borderColor: colors.border, minHeight: 40, justifyContent: 'center' },
+  coReadOnlyText: { fontSize: font.sm, color: colors.textMid },
+  coLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  coInvBadge: { backgroundColor: '#ede9fe', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
+  coInvBadgeText: { fontSize: 9, fontWeight: '700', color: '#7c3aed' },
+  // Actions button and pills
+  actionsBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 10, backgroundColor: colors.muted },
+  actionsBtnActive: { borderColor: '#bfdbfe', backgroundColor: '#eff6ff' },
+  actionsBtnText: { fontSize: font.sm, color: colors.primary, fontWeight: '600' },
+  actionsBtnEmpty: { color: colors.textMid, fontWeight: '500' },
+  actionPillsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  actionPill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
+  actionPillDot: { width: 7, height: 7, borderRadius: 4 },
+  actionPillText: { fontSize: 12, fontWeight: '600' },
+  actionPillResp: { fontSize: 11, fontWeight: '500', opacity: 0.75 },
+})
+
+const actStyles = StyleSheet.create({
+  overlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet:        { backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '88%' },
+  header:       { padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  headerTitle:  { fontSize: font.lg, fontWeight: '800', color: colors.text },
+  headerSub:    { fontSize: font.sm, color: colors.textMid, marginTop: 2 },
+  scrollArea:   { padding: spacing.md },
+  sectionLbl:   { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, color: colors.textLight, marginBottom: 8, marginTop: 4 },
+  emptyText:    { fontSize: font.sm, color: colors.textLight, fontStyle: 'italic', textAlign: 'center', paddingVertical: 12 },
+  catBtn:       { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, marginBottom: 6 },
+  catDot:       { width: 10, height: 10, borderRadius: 3, flexShrink: 0 },
+  catName:      { flex: 1, fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
+  catCheck:     { fontSize: font.sm, fontWeight: '700' },
+  divider:      { height: 1, backgroundColor: colors.border, marginVertical: 12 },
+  detailRow:    { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  detailLabel:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  detailName:   { fontSize: font.sm, fontWeight: '700', flex: 1 },
+  detailField:  { marginBottom: 10 },
+  fieldLbl:     { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, color: colors.textLight, marginBottom: 6 },
+  respBtns:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  respBtn:      { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.sm, backgroundColor: colors.muted, borderWidth: 1.5, borderColor: colors.border },
+  respBtnActive:{ backgroundColor: colors.primaryLight, borderColor: colors.primary },
+  respBtnText:      { fontSize: font.sm, color: colors.textMid, fontWeight: '500' },
+  respBtnTextActive:{ color: colors.primary, fontWeight: '700' },
+  condLine:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, marginBottom: 4 },
+  condLineActive:   { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+  condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1, marginRight: 6 },
+  condLineTextActive: { color: colors.primary, fontWeight: '600' },
+  footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
 })

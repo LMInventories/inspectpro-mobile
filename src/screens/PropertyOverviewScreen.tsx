@@ -20,54 +20,19 @@ import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 
-// ── Map app picker ────────────────────────────────────────────────────────────
-async function tryOpen(nativeUrl: string, webUrl: string) {
-  try {
-    const can = await Linking.canOpenURL(nativeUrl)
-    await Linking.openURL(can ? nativeUrl : webUrl)
-  } catch {
-    Linking.openURL(webUrl)
-  }
-}
-
-function openMapPicker(address: string) {
+// ── Map launcher — fires device default, OS chooser if none set ───────────────
+async function openMap(address: string) {
   const q = encodeURIComponent(address)
-  const options: { text: string; onPress: () => void }[] = []
-
-  if (Platform.OS === 'ios') {
-    options.push({
-      text: 'Apple Maps',
-      onPress: () => Linking.openURL(`maps:0,0?q=${q}`),
-    })
-  } else {
-    // Android — system intent picks the user's default maps app
-    options.push({
-      text: 'Default Maps',
-      onPress: () => Linking.openURL(`geo:0,0?q=${q}`),
-    })
+  // iOS: maps: scheme always opens Apple Maps (iOS has no user-configurable default maps app)
+  // Android: geo: fires a system intent — opens the user's default maps app directly,
+  //          or shows the Android app chooser if no default has been set
+  const url = Platform.OS === 'ios' ? `maps:0,0?q=${q}` : `geo:0,0?q=${q}`
+  try {
+    await Linking.openURL(url)
+  } catch {
+    // Fallback: web Google Maps (handles edge cases where native scheme is unavailable)
+    Linking.openURL(`https://maps.google.com/maps?q=${q}`)
   }
-
-  options.push(
-    {
-      text: 'Google Maps',
-      onPress: () => tryOpen(`comgooglemaps://?q=${q}`, `https://maps.google.com/maps?q=${q}`),
-    },
-    {
-      text: 'Citymapper',
-      onPress: () => tryOpen(`citymapper://directions?endaddress=${q}`, `https://citymapper.com/directions?endaddress=${q}`),
-    },
-    {
-      text: 'Waze',
-      onPress: () => tryOpen(`waze://?q=${q}`, `https://waze.com/ul?q=${q}&navigate=yes`),
-    },
-  )
-
-  Alert.alert(
-    'Open in Maps',
-    address,
-    [...options, { text: 'Cancel', style: 'cancel' as const, onPress: () => {} }],
-    { cancelable: true }
-  )
 }
 
 export default function PropertyOverviewScreen() {
@@ -306,7 +271,7 @@ export default function PropertyOverviewScreen() {
             </View>
             <TouchableOpacity
               style={styles.mapsBtn}
-              onPress={() => openMapPicker(inspection.property_address || '')}
+              onPress={() => openMap(inspection.property_address || '')}
             >
               <Text style={styles.mapsBtnIcon}>📍</Text>
               <Text style={styles.mapsBtnText}>Map</Text>

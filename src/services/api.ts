@@ -115,6 +115,10 @@ export const api = {
 
   checkAiStatus: () =>
     http.get('/api/ai/status'),
+
+  // Action catalogue (for check-out inspections)
+  getActions: () =>
+    http.get('/api/actions'),
 }
 
 export default api
