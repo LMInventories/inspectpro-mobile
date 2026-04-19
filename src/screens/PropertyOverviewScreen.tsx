@@ -141,8 +141,9 @@ export default function PropertyOverviewScreen() {
   }
 
   const reportData = inspection.report_data ? JSON.parse(inspection.report_data) : {}
-  // overview_photo comes from property data downloaded at fetch time
-  const overviewPhoto = inspection.property?.overview_photo || reportData._overview?.items?.photo?.uri || null
+  // Prefer the locally-captured photo (updated by take/pick handlers) over
+  // the server-side overview_photo so a new photo is immediately visible.
+  const overviewPhoto = reportData._overview?.items?.photo?.uri || inspection.property?.overview_photo || null
   const isActive = inspection.local_status === 'active' || inspection.status === 'active'
   const isFinalised: boolean = !!(inspection as any).is_finalised
   const isAiMode = (inspection as any).typist_is_ai ||
