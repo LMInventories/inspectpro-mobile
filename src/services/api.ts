@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { AxiosInstance } from 'axios'
 import * as SecureStore from 'expo-secure-store'
 
 // Set EXPO_PUBLIC_API_URL in your .env or EAS secrets to override.
@@ -23,6 +23,76 @@ const httpAi = axios.create({
   timeout: 120000,   // 2 min — Whisper + Claude can take a while for multi-clip rooms
 })
 
+// ── TOKEN REFRESH STATE ───────────────────────────────────────────────────────
+// Shared across all three instances so only one refresh call fires at a time.
+let _isRefreshing = false
+let _failedQueue: Array<{ resolve: (token: string) => void; reject: (err: any) => void }> = []
+
+function _processQueue(error: any, token: string | null = null) {
+  _failedQueue.forEach(({ resolve, reject }) => error ? reject(error) : resolve(token!))
+  _failedQueue = []
+}
+
+async function _attemptRefresh(): Promise<string> {
+  const currentToken = await SecureStore.getItemAsync('token')
+  if (!currentToken) throw new Error('No token stored')
+  const response = await axios.post(
+    `${BASE_URL}/api/auth/refresh`,
+    {},
+    { headers: { Authorization: `Bearer ${currentToken}` } }
+  )
+  const newToken: string = response.data.token
+  await SecureStore.setItemAsync('token', newToken)
+  return newToken
+}
+
+function _attachRefreshInterceptor(instance: AxiosInstance) {
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      const status = error.response?.status
+      const originalRequest = error.config
+
+      if (status !== 401 || originalRequest._retry) {
+        return Promise.reject(error)
+      }
+
+      // Never retry the refresh call itself.
+      if (originalRequest.url?.includes('/api/auth/refresh')) {
+        await SecureStore.deleteItemAsync('token')
+        return Promise.reject(error)
+      }
+
+      // Queue while a refresh is already in flight.
+      if (_isRefreshing) {
+        return new Promise<string>((resolve, reject) => {
+          _failedQueue.push({ resolve, reject })
+        }).then((token) => {
+          originalRequest._retry = true
+          originalRequest.headers.Authorization = `Bearer ${token}`
+          return instance(originalRequest)
+        }).catch((err) => Promise.reject(err))
+      }
+
+      originalRequest._retry = true
+      _isRefreshing = true
+
+      try {
+        const newToken = await _attemptRefresh()
+        _processQueue(null, newToken)
+        originalRequest.headers.Authorization = `Bearer ${newToken}`
+        return instance(originalRequest)
+      } catch (refreshError) {
+        _processQueue(refreshError, null)
+        await SecureStore.deleteItemAsync('token')
+        return Promise.reject(refreshError)
+      } finally {
+        _isRefreshing = false
+      }
+    }
+  )
+}
+
 httpAi.interceptors.request.use(async (config) => {
   const token = await SecureStore.getItemAsync('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -35,28 +105,16 @@ httpSync.interceptors.request.use(async (config) => {
   return config
 })
 
-httpSync.interceptors.response.use(
-  (response) => response,
-  (error) => Promise.reject(error)
-)
-
-httpAi.interceptors.response.use(
-  (response) => response,
-  (error) => Promise.reject(error)
-)
-
 http.interceptors.request.use(async (config) => {
   const token = await SecureStore.getItemAsync('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
-http.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    return Promise.reject(error)
-  }
-)
+// Attach refresh-then-retry to all three instances.
+_attachRefreshInterceptor(http)
+_attachRefreshInterceptor(httpSync)
+_attachRefreshInterceptor(httpAi)
 
 export const api = {
   // Auth
