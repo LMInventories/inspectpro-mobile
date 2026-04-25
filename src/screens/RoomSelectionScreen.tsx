@@ -79,12 +79,32 @@ export default function RoomSelectionScreen() {
       const cachedHasSections = Array.isArray(inspection?.template?.sections) &&
                                 inspection.template.sections.length > 0
       let tmplData: any = cachedHasSections ? inspection.template : null
+
+      // Primary: fetch by template_id
       if (!tmplData && inspection?.template_id) {
         try {
           const tmplRes = await api.getTemplate(inspection.template_id)
           tmplData = tmplRes.data
         } catch {
           Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
+        }
+      }
+
+      // Fallback for check-out inspections: if no template found, inherit from
+      // the source check-in inspection. This handles the case where no dedicated
+      // check-out template exists and the backend inheritance didn't run.
+      if (!tmplData && inspection?.source_inspection_id) {
+        try {
+          const srcRes    = await api.getInspection(inspection.source_inspection_id)
+          const srcTmplId = srcRes.data?.template_id
+          if (srcTmplId) {
+            const srcTmplRes = await api.getTemplate(srcTmplId)
+            tmplData = srcTmplRes.data
+            console.log(`[RoomSelection] template inherited from source inspection ${inspection.source_inspection_id}`)
+          }
+        } catch {
+          // Still no template — rooms list will be empty, user can add manually
+          console.warn('[RoomSelection] Could not inherit template from source inspection')
         }
       }
 

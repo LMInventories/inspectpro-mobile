@@ -164,13 +164,33 @@ export default function FetchInspectionsScreen() {
         // detail API returned. The detail endpoint may include a partial template
         // object (e.g. {id, name} without sections), which is truthy but useless.
         // We need the full object with sections[].items[] for rooms to work offline.
-        if (d.template_id) {
+        const templateId = d.template_id
+        if (templateId) {
           try {
-            const tmplRes = await api.getTemplate(d.template_id)
+            const tmplRes = await api.getTemplate(templateId)
             normalised.template = tmplRes.data
           } catch (tmplErr) {
             console.warn('[FetchInspections] Could not pre-fetch template:', tmplErr)
             // Non-fatal: app will attempt a live fetch when rooms are opened
+          }
+        }
+
+        // Fallback for check-out inspections with no template assigned:
+        // inherit the template from the source check-in inspection.
+        const hasSections = Array.isArray(normalised.template?.sections) &&
+                            normalised.template.sections.length > 0
+        if (!hasSections && d.source_inspection_id) {
+          try {
+            const srcRes    = await api.getInspection(d.source_inspection_id)
+            const srcTmplId = srcRes.data?.template_id
+            if (srcTmplId && srcTmplId !== templateId) {
+              const srcTmplRes = await api.getTemplate(srcTmplId)
+              normalised.template    = srcTmplRes.data
+              normalised.template_id = srcTmplId   // store so offline re-fetch works
+              console.log(`[FetchInspections] check-out template inherited from source inspection ${d.source_inspection_id}`)
+            }
+          } catch (srcErr) {
+            console.warn('[FetchInspections] Could not inherit template from source inspection:', srcErr)
           }
         }
 

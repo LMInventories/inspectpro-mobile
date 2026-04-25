@@ -2,6 +2,19 @@
  * syncService.ts
  * Shared logic for syncing a single inspection to the server.
  * Used by both SyncScreen (bulk) and PropertyOverviewScreen (single).
+ *
+ * Photo upload strategy:
+ *   1. Collect all file:// URIs in report_data (item._photos + overview photo)
+ *   2. Request pre-signed S3 PUT URLs from server (single batch call)
+ *   3. Compress each photo → upload binary JPEG directly to S3 (no base64, no Flask)
+ *   4. Replace file:// URIs with the final S3 HTTPS URLs
+ *
+ * Fallbacks:
+ *   • Server returns 503 (S3 not configured)   → encode all photos as base64
+ *   • Individual upload fails                   → encode that photo as base64
+ *
+ * This drops sync payload from ~18 MB (base64) to ~50 KB (text only) when S3
+ * is configured.
  */
 import { getLocalInspection, getAudioRecordings, markSynced } from './database'
 import { api } from './api'
@@ -16,39 +29,45 @@ export type SyncProgress = {
   total: number
 }
 
-// ── Photo compression + encoding ──────────────────────────────────────────────
-//
-// Raw iPhone/Android photos are typically 3–8 MB each.
-// 108 photos × 5 MB × 1.33 (base64 overhead) ≈ 720 MB — this crashes the
-// Hermes JS engine which has a ~530 MB string limit.
-//
-// We compress each photo to max 1400 px wide at 72 % JPEG quality before
-// encoding.  That yields ~120–200 KB per photo, so 108 photos ≈ 18–22 MB
-// total — well under any JS, network, or server limit.
-// Quality is still more than sufficient to see defects and details clearly.
+const MAX_PHOTO_PX = 1400   // longest edge in pixels
+const SYNC_QUALITY = 0.72   // JPEG quality (0 = worst, 1 = lossless)
 
-const MAX_PHOTO_PX  = 1400   // longest edge in pixels
-const SYNC_QUALITY  = 0.72   // JPEG quality (0 = worst, 1 = lossless)
-
-async function encodeOnePhoto(uri: string): Promise<string> {
-  if (uri.startsWith('data:')) return uri
+// ── Compress a photo to a local temp JPEG, returns its URI ───────────────────
+async function compressPhoto(uri: string): Promise<string> {
   try {
-    // Step 1 — compress/resize
     const compressed = await manipulateAsync(
       uri,
       [{ resize: { width: MAX_PHOTO_PX } }],
       { compress: SYNC_QUALITY, format: SaveFormat.JPEG }
     )
-    // Step 2 — read as base64
-    const b64 = await FileSystem.readAsStringAsync(compressed.uri, {
+    return compressed.uri
+  } catch (e) {
+    console.warn('[Sync] compression failed, using original:', uri, e)
+    return uri
+  }
+}
+
+// ── Encode one photo to a base64 data URI (fallback path) ────────────────────
+//
+// Raw iPhone/Android photos are typically 3–8 MB each.
+// 108 photos × 5 MB × 1.33 (base64 overhead) ≈ 720 MB — this crashes the
+// Hermes JS engine which has a ~530 MB string limit.
+// We compress to max 1400 px / 72 % JPEG before encoding (~120–200 KB each).
+//
+async function encodeOnePhoto(uri: string): Promise<string> {
+  if (uri.startsWith('data:'))  return uri
+  if (uri.startsWith('https:')) return uri   // already an S3 URL — leave as-is
+  try {
+    const compressedUri = await compressPhoto(uri)
+    const b64 = await FileSystem.readAsStringAsync(compressedUri, {
       encoding: FileSystem.EncodingType.Base64,
     })
-    // Step 3 — delete the temp compressed file (keep device storage clean)
-    FileSystem.deleteAsync(compressed.uri, { idempotent: true }).catch(() => {})
+    if (compressedUri !== uri) {
+      FileSystem.deleteAsync(compressedUri, { idempotent: true }).catch(() => {})
+    }
     return `data:image/jpeg;base64,${b64}`
   } catch (compressErr) {
     console.warn('[Sync] compression failed, trying raw encode:', uri, compressErr)
-    // Fall back to encoding the original file uncompressed
     try {
       const b64 = await FileSystem.readAsStringAsync(uri, {
         encoding: FileSystem.EncodingType.Base64,
@@ -61,32 +80,23 @@ async function encodeOnePhoto(uri: string): Promise<string> {
   }
 }
 
-export async function convertPhotoUrisToBase64(
-  rd: any,
-  onProgress?: (p: SyncProgress) => void
-): Promise<any> {
-  // First pass: count all non-data-URI photos so we can show X/Y
-  let totalPhotos = 0
-  for (const section of Object.values(rd)) {
-    if (!section || typeof section !== 'object') continue
-    for (const item of Object.values(section as object)) {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-      if (Array.isArray((item as any)._photos)) {
-        totalPhotos += (item as any)._photos.filter((u: string) => !u.startsWith('data:')).length
-      }
-    }
+// ── Collect all local file:// URIs with their paths inside report_data ────────
+//
+// Returns [{path: ['sectionKey','itemKey','_photos','0'], uri: 'file://...'}, ...]
+// Path is an array of keys / numeric-string indices so we can write back later.
+//
+type UriRef = { path: string[]; uri: string }
+
+function collectLocalUris(rd: any): UriRef[] {
+  const refs: UriRef[] = []
+
+  // Property overview photo
+  const overviewUri = (rd['_overview'] as any)?.items?.photo?.uri
+  if (overviewUri && overviewUri.startsWith('file://')) {
+    refs.push({ path: ['_overview', 'items', 'photo', 'uri'], uri: overviewUri })
   }
 
-  let donePhotos = 0
-  if (totalPhotos > 0) onProgress?.({ phase: 'photos', done: 0, total: totalPhotos })
-
-  // Special case: encode the property overview photo (stored at _overview.items.photo.uri)
-  const overviewUri = (rd as any)['_overview']?.items?.photo?.uri
-  if (overviewUri && !overviewUri.startsWith('data:')) {
-    ;(rd as any)['_overview'].items.photo.uri = await encodeOnePhoto(overviewUri)
-  }
-
-  // Second pass: encode one at a time so progress fires per photo
+  // Section / item photos
   for (const sectionKey of Object.keys(rd)) {
     const section = rd[sectionKey]
     if (!section || typeof section !== 'object') continue
@@ -94,18 +104,116 @@ export async function convertPhotoUrisToBase64(
       const item = section[itemKey]
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue
       if (Array.isArray(item._photos)) {
-        const encoded: string[] = []
-        for (const uri of item._photos) {
-          encoded.push(await encodeOnePhoto(uri))
-          if (!uri.startsWith('data:')) {
-            donePhotos++
-            onProgress?.({ phase: 'photos', done: donePhotos, total: totalPhotos })
+        ;(item._photos as string[]).forEach((uri, idx) => {
+          if (uri.startsWith('file://')) {
+            refs.push({ path: [sectionKey, itemKey, '_photos', String(idx)], uri })
           }
-        }
-        item._photos = encoded
+        })
       }
     }
   }
+
+  return refs
+}
+
+// ── Write a value back into report_data at an arbitrary path ─────────────────
+function setAtPath(rd: any, path: string[], value: string) {
+  let cursor: any = rd
+  for (let i = 0; i < path.length - 1; i++) {
+    cursor = cursor[path[i]]
+  }
+  const last = path[path.length - 1]
+  const idx  = Number.isFinite(Number(last)) ? Number(last) : NaN
+  if (!Number.isNaN(idx) && Array.isArray(cursor)) {
+    cursor[idx] = value
+  } else {
+    cursor[last] = value
+  }
+}
+
+// ── Main photo handler: S3 upload with base64 fallback ───────────────────────
+export async function uploadPhotosToS3(
+  rd: any,
+  inspectionId: number,
+  onProgress?: (p: SyncProgress) => void
+): Promise<any> {
+  const refs = collectLocalUris(rd)
+  const totalPhotos = refs.length
+
+  if (totalPhotos === 0) return rd
+
+  onProgress?.({ phase: 'photos', done: 0, total: totalPhotos })
+
+  // ── Request pre-signed PUT URLs from server (one batch call) ─────────────
+  let presigned: Array<{ key: string; upload_url: string; final_url: string }> | null = null
+
+  try {
+    const prefix   = `inspections/${inspectionId}/photos`
+    const response = await api.getPhotoPresignedUrls(totalPhotos, prefix)
+    presigned      = response.data.uploads
+    console.log(`[Sync] received ${presigned?.length} pre-signed S3 URLs`)
+  } catch (err: any) {
+    const status = err?.response?.status
+    if (status === 503) {
+      console.log('[Sync] S3 not configured on server — falling back to base64 for all photos')
+    } else {
+      console.warn('[Sync] presign request failed, falling back to base64:', err?.message)
+    }
+    presigned = null
+  }
+
+  // ── No S3: encode everything as base64 ────────────────────────────────────
+  if (!presigned) {
+    let done = 0
+    for (const { path, uri } of refs) {
+      const encoded = await encodeOnePhoto(uri)
+      setAtPath(rd, path, encoded)
+      done++
+      onProgress?.({ phase: 'photos', done, total: totalPhotos })
+    }
+    return rd
+  }
+
+  // ── S3 available: upload each photo directly ───────────────────────────────
+  let done = 0
+  for (let i = 0; i < refs.length; i++) {
+    const { path, uri } = refs[i]
+    const slot = presigned[i]
+
+    try {
+      const compressedUri = await compressPhoto(uri)
+
+      const result = await FileSystem.uploadAsync(slot.upload_url, compressedUri, {
+        httpMethod:   'PUT',
+        uploadType:   FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers:      { 'Content-Type': 'image/jpeg' },
+      })
+
+      // Clean up temp compressed file
+      if (compressedUri !== uri) {
+        FileSystem.deleteAsync(compressedUri, { idempotent: true }).catch(() => {})
+      }
+
+      if (result.status >= 200 && result.status < 300) {
+        setAtPath(rd, path, slot.final_url)
+        console.log(`[Sync] photo ${i + 1}/${totalPhotos} → S3`)
+      } else {
+        console.warn(`[Sync] S3 upload returned ${result.status} for photo ${i + 1} — falling back to base64`)
+        setAtPath(rd, path, await encodeOnePhoto(uri))
+      }
+    } catch (uploadErr) {
+      console.warn(`[Sync] S3 upload failed for photo ${i + 1} — falling back to base64:`, uploadErr)
+      try {
+        setAtPath(rd, path, await encodeOnePhoto(uri))
+      } catch (encodeErr) {
+        console.warn('[Sync] base64 fallback also failed, leaving URI as-is:', encodeErr)
+      }
+    }
+
+    done++
+    onProgress?.({ phase: 'photos', done, total: totalPhotos })
+  }
+
   return rd
 }
 
@@ -119,7 +227,7 @@ export async function syncSingleInspection(
 ): Promise<SyncResult> {
   try {
     const fresh = getLocalInspection(id)
-    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
 
     // ── Audio encoding ───────────────────────────────────────────────────────
     const sqliteRecs = getAudioRecordings(id)
@@ -170,13 +278,14 @@ export async function syncSingleInspection(
       }
     }
 
-    // ── Photo encoding ───────────────────────────────────────────────────────
-    const rdForSync = await convertPhotoUrisToBase64(
+    // ── Photo upload (S3 preferred, base64 fallback) ─────────────────────────
+    const rdForSync = await uploadPhotosToS3(
       JSON.parse(JSON.stringify(rd)),
+      id,
       onProgress
     )
 
-    // ── Upload ───────────────────────────────────────────────────────────────
+    // ── Upload to server ─────────────────────────────────────────────────────
     onProgress?.({ phase: 'uploading', done: 0, total: 1 })
 
     const payload: any = { report_data: JSON.stringify(rdForSync) }

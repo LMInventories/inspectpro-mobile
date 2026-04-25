@@ -181,6 +181,15 @@ export const api = {
   checkAiStatus: () =>
     http.get('/api/ai/status'),
 
+  // ── Photo storage (S3 pre-signed upload URLs) ──────────────────────────────
+  // Returns presigned PUT URLs so the mobile app can upload photos directly
+  // to S3 without routing binary data through the Flask server.
+  getPhotoPresignedUrls: (count: number, prefix: string) =>
+    http.post('/api/photos/presign', { count, prefix }),
+
+  deletePhoto: (key: string) =>
+    http.post('/api/photos/delete', { key }),
+
   // Action catalogue (for check-out inspections)
   getActions: () =>
     http.get('/api/actions'),
