@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useState } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   RefreshControl, Alert, Image,
@@ -12,6 +12,8 @@ import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
 import StatusBadge from '../components/StatusBadge'
 import LocalBadge from '../components/LocalBadge'
+import CreateInspectionModal from '../components/CreateInspectionModal'
+import CreatePropertyModal from '../components/CreatePropertyModal'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'InspectionList'>
@@ -21,7 +23,13 @@ export default function InspectionListScreen() {
   const insets = useSafeAreaInsets()
   const { user, logout } = useAuthStore()
   const { inspections, loadInspections, removeInspection } = useInspectionStore()
-  const [refreshing, setRefreshing] = React.useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const isAdmin   = user?.role === 'admin'
+  const isAM      = user?.role === 'admin' || user?.role === 'manager'
+  const [fabOpen,         setFabOpen]         = useState(false)
+  const [showCreateInsp,  setShowCreateInsp]  = useState(false)
+  const [showCreateProp,  setShowCreateProp]  = useState(false)
 
   useFocusEffect(useCallback(() => { loadInspections() }, []))
 
@@ -133,6 +141,17 @@ export default function InspectionListScreen() {
     )
   }
 
+  function handleInspectionCreated(inspectionId: number) {
+    setShowCreateInsp(false)
+    loadInspections()
+    navigation.navigate('PropertyOverview', { inspectionId })
+  }
+
+  function handlePropertyCreated() {
+    setShowCreateProp(false)
+    Alert.alert('Property Created', 'The property has been added successfully.')
+  }
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       {/* Header */}
@@ -168,8 +187,77 @@ export default function InspectionListScreen() {
           data={inspections}
           keyExtractor={i => String(i.id)}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isAM && { paddingBottom: 100 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        />
+      )}
+
+      {/* Speed-dial FAB — admin and manager only */}
+      {isAM && (
+        <View style={[styles.fabWrap, { bottom: insets.bottom + 24 }]}>
+          {/* Backdrop */}
+          {fabOpen && (
+            <TouchableOpacity
+              style={styles.fabBackdrop}
+              activeOpacity={1}
+              onPress={() => setFabOpen(false)}
+            />
+          )}
+
+          {/* Action items */}
+          {fabOpen && (
+            <View style={styles.fabActions}>
+              {isAdmin && (
+                <TouchableOpacity
+                  style={styles.fabActionRow}
+                  onPress={() => { setFabOpen(false); setShowCreateProp(true) }}
+                >
+                  <View style={[styles.fabActionBtn, styles.fabBtnProperty]}>
+                    <Text style={styles.fabActionIcon}>🏠</Text>
+                  </View>
+                  <View style={styles.fabActionLabel}>
+                    <Text style={styles.fabActionLabelText}>New Property</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={styles.fabActionRow}
+                onPress={() => { setFabOpen(false); setShowCreateInsp(true) }}
+              >
+                <View style={[styles.fabActionBtn, styles.fabBtnInspection]}>
+                  <Text style={styles.fabActionIcon}>📋</Text>
+                </View>
+                <View style={styles.fabActionLabel}>
+                  <Text style={styles.fabActionLabelText}>New Inspection</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Main FAB */}
+          <TouchableOpacity
+            style={[styles.fab, fabOpen && styles.fabOpen]}
+            onPress={() => setFabOpen(o => !o)}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.fabIcon, fabOpen && styles.fabIconOpen]}>+</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Create Inspection modal */}
+      <CreateInspectionModal
+        visible={showCreateInsp}
+        onClose={() => setShowCreateInsp(false)}
+        onCreated={handleInspectionCreated}
+      />
+
+      {/* Create Property modal (admin only) */}
+      {isAdmin && (
+        <CreatePropertyModal
+          visible={showCreateProp}
+          onClose={() => setShowCreateProp(false)}
+          onCreated={handlePropertyCreated}
         />
       )}
     </View>
@@ -224,4 +312,20 @@ const styles = StyleSheet.create({
   emptySub: { fontSize: font.sm, color: colors.textMid, textAlign: 'center', marginBottom: spacing.lg },
   btnPrimary: { backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: 12, alignItems: 'center', minWidth: 180 },
   btnPrimaryText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
+
+  // Speed-dial FAB
+  fabWrap:      { position: 'absolute', right: 20, alignItems: 'flex-end' },
+  fabBackdrop:  { position: 'absolute', top: -9999, left: -9999, right: -9999, bottom: -9999 },
+  fabActions:   { alignItems: 'flex-end', gap: spacing.sm, marginBottom: spacing.sm },
+  fabActionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  fabActionBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
+  fabBtnProperty:   { backgroundColor: '#10b981' },
+  fabBtnInspection: { backgroundColor: colors.primary },
+  fabActionIcon: { fontSize: 20 },
+  fabActionLabel: { backgroundColor: 'rgba(15,23,42,0.88)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.sm },
+  fabActionLabelText: { color: '#f1f5f9', fontSize: font.sm, fontWeight: '600' },
+  fab:       { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 6, elevation: 6 },
+  fabOpen:   { backgroundColor: '#475569' },
+  fabIcon:   { fontSize: 30, color: '#fff', fontWeight: '300', lineHeight: 34, marginTop: -2 },
+  fabIconOpen: { transform: [{ rotate: '45deg' }] },
 })

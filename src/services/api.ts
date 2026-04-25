@@ -193,6 +193,28 @@ export const api = {
   // Action catalogue (for check-out inspections)
   getActions: () =>
     http.get('/api/actions'),
+
+  // ── Admin / Manager create flows ─────────────────────────────────────────
+  createInspection: (data: any) =>
+    http.post('/api/inspections', data),
+
+  getProperties: () =>
+    http.get('/api/properties'),
+
+  getTemplates: () =>
+    http.get('/api/templates'),
+
+  getUsers: () =>
+    http.get('/api/users'),
+
+  getClients: () =>
+    http.get('/api/clients'),
+
+  getPropertyHistory: (propertyId: number) =>
+    http.get(`/api/inspections/property/${propertyId}/history`),
+
+  createProperty: (data: any) =>
+    http.post('/api/properties', data),
 }
 
 export default api
