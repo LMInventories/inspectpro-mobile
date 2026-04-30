@@ -273,13 +273,21 @@ export default function RoomInspectionScreen() {
           if (templateData) {
             const tmplSection = (templateData.sections ?? []).find((s: any) => s.id === templateSectionId)
             if (tmplSection) {
-              templateItems = tmplSection.items.map((item: any) => ({
-                id: String(item.id),
-                label: item.name || item.label || '',
-                hasDescription: true,
-                hasCondition: item.requires_condition !== false,
-                hasPhotos: item.requires_photo !== false,
-              }))
+              templateItems = tmplSection.items.map((item: any) => {
+                let answerOptions: string[] = []
+                try {
+                  const ao = item.answer_options || ''
+                  if (ao) answerOptions = JSON.parse(ao)
+                } catch {}
+                return {
+                  id: String(item.id),
+                  label: item.name || item.label || '',
+                  hasDescription: true,
+                  hasCondition: item.requires_condition !== false,
+                  hasPhotos: item.requires_photo !== false,
+                  answerOptions,
+                }
+              })
             }
           }
         }
@@ -1487,15 +1495,38 @@ export default function RoomInspectionScreen() {
               </View>
               {item.hasCondition !== false && (
                 <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>Condition</Text>
-                  <TextInput
-                    style={styles.notesInput}
-                    value={getField(item.id, 'condition')}
-                    onChangeText={v => setField(item.id, 'condition', v)}
-                    placeholder="e.g. Good, Fair, Worn, Damaged…"
-                    placeholderTextColor={colors.textLight}
-                    multiline textAlignVertical="top"
-                  />
+                  <Text style={styles.fieldLabel}>
+                    {item.answerOptions?.length ? item.label : 'Condition'}
+                  </Text>
+                  {item.answerOptions?.length ? (
+                    /* Question-type item: tap-to-select pill buttons */
+                    <View style={styles.answerOptionRow}>
+                      {item.answerOptions.map((opt: string) => {
+                        const selected = getField(item.id, 'condition') === opt
+                        return (
+                          <TouchableOpacity
+                            key={opt}
+                            style={[styles.answerOptBtn, selected && styles.answerOptBtnSelected]}
+                            onPress={() => setField(item.id, 'condition', selected ? '' : opt)}
+                            activeOpacity={0.75}
+                          >
+                            <Text style={[styles.answerOptText, selected && styles.answerOptTextSelected]}>
+                              {opt}
+                            </Text>
+                          </TouchableOpacity>
+                        )
+                      })}
+                    </View>
+                  ) : (
+                    <TextInput
+                      style={styles.notesInput}
+                      value={getField(item.id, 'condition')}
+                      onChangeText={v => setField(item.id, 'condition', v)}
+                      placeholder="e.g. Good, Fair, Worn, Damaged…"
+                      placeholderTextColor={colors.textLight}
+                      multiline textAlignVertical="top"
+                    />
+                  )}
                 </View>
               )}
             </>
@@ -2256,6 +2287,11 @@ const styles = StyleSheet.create({
   fieldGroup: { marginTop: 8 },
   fieldLabel: { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
   notesInput: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 8, fontSize: font.sm, color: colors.text, backgroundColor: colors.surface, minHeight: 60 },
+  answerOptionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
+  answerOptBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
+  answerOptBtnSelected: { borderColor: colors.primary, backgroundColor: colors.primary },
+  answerOptText: { fontSize: font.sm, fontWeight: '600', color: colors.textSecondary },
+  answerOptTextSelected: { color: '#ffffff' },
   inlineInput: { minHeight: 0, height: 42 },
   overviewBlock: {
     backgroundColor: colors.surface,
