@@ -128,6 +128,9 @@ export default function RoomInspectionScreen() {
   // Room dictation state — always visible for all modes
   const [roomTranscribing, setRoomTranscribing] = useState(false)
 
+  // Source inspection photos (read-only reference for check-out)
+  const [sourceReportData, setSourceReportData] = useState<Record<string, any> | null>(null)
+
   // Track which photo target is pending (for camera handoff)
   const cameraTargetRef = useRef<{ type: 'item'; itemId: string } | { type: 'overview' } | null>(null)
 
@@ -145,6 +148,22 @@ export default function RoomInspectionScreen() {
   }, []))
 
   useEffect(() => { buildItems() }, [sectionKey])
+
+  // Fetch source (check-in) inspection photos whenever the active inspection changes
+  useEffect(() => { loadSourcePhotos() }, [activeInspection?.source_inspection_id])
+
+  async function loadSourcePhotos() {
+    const sourceId = activeInspection?.source_inspection_id
+    if (!sourceId) { setSourceReportData(null); return }
+    try {
+      const res = await api.getInspection(sourceId)
+      const rd = res.data?.report_data
+      if (!rd) return
+      setSourceReportData(typeof rd === 'string' ? JSON.parse(rd) : rd)
+    } catch {
+      // No source inspection available — silently ignore
+    }
+  }
 
   async function buildItems() {
     setLoading(true)
@@ -1222,6 +1241,17 @@ export default function RoomInspectionScreen() {
     )
   }
 
+  function getSourcePhotos(itemId: string): string[] {
+    if (!sourceReportData) return []
+    const sec = sourceReportData[sectionKey] || {}
+    // Photos keyed by item id in the source report_data
+    const direct = sec[itemId]?._photos || []
+    if (direct.length) return direct
+    // Also check _importedSource (PDF-imported check-in)
+    const imported = sourceReportData._importedSource?.[sectionKey]?.[itemId]?._photos || []
+    return imported
+  }
+
   function renderPhotos(item: any) {
     const photos: string[] = getReportData()[sectionKey]?.[String(item.id)]?._photos || []
     const count = photos.length
@@ -1231,8 +1261,21 @@ export default function RoomInspectionScreen() {
     const itemIndex = itemIndexInList >= 0 ? itemIndexInList + 1 : undefined
     const itemPosition = sectionIndex && itemIndex ? `${sectionIndex}.${itemIndex}` : undefined
 
+    const srcPhotos = getSourcePhotos(String(item.id))
+
     return (
       <View style={styles.photoBlock}>
+        {/* Check In reference photos — read-only */}
+        {srcPhotos.length > 0 && (
+          <View style={styles.sourcePhotoBlock}>
+            <Text style={styles.sourcePhotoLabel}>📋 Check In</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
+              {srcPhotos.map((uri: string, idx: number) => (
+                <Image key={idx} source={{ uri }} style={[styles.photoThumb, styles.sourcePhotoThumb]} />
+              ))}
+            </ScrollView>
+          </View>
+        )}
         {/* Top row: label + icon buttons */}
         <View style={styles.photosHeader}>
           <Text style={styles.fieldLabel}>
@@ -2260,6 +2303,23 @@ const styles = StyleSheet.create({
   photoIconEmoji: { fontSize: 22 },
   photoStrip: { marginTop: 4 },
   photoThumb: { width: 80, height: 80, borderRadius: radius.md, marginRight: 6 },
+  sourcePhotoBlock: {
+    backgroundColor: '#f0f4ff',
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#e0e7ff',
+    padding: 8,
+    marginBottom: 8,
+  },
+  sourcePhotoLabel: {
+    fontSize: font.xs,
+    fontWeight: '700' as const,
+    color: '#6366f1',
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  sourcePhotoThumb: { opacity: 0.85 },
   voiceBlock: { marginTop: 8, gap: 4 },
   aiProcessingBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#eef2ff', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm, alignSelf: 'flex-start' },
   aiProcessingText: { fontSize: font.xs, color: '#3730a3', fontWeight: '600' },
