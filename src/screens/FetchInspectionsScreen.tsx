@@ -129,15 +129,21 @@ export default function FetchInspectionsScreen() {
     setFetching(true)
     const res: { id: number; address: string; success: boolean; error?: string }[] = []
 
-    // Fetch fixed sections once before the loop — they're global, not per-inspection.
-    // We embed a copy in every downloaded inspection so the app works fully offline.
+    // Fetch both fixed and midterm sections once before the loop.
+    // We embed the appropriate copy in each downloaded inspection for offline use.
     let fixedSectionsData: any[] = []
+    let midtermSectionsData: any[] = []
     try {
       const fsRes = await api.getFixedSections()
       fixedSectionsData = Array.isArray(fsRes.data) ? fsRes.data : []
     } catch (fsErr) {
       console.warn('[FetchInspections] Could not pre-fetch fixed sections:', fsErr)
-      // Non-fatal: app will attempt a live fetch when rooms are opened
+    }
+    try {
+      const msRes = await api.getMidtermSections()
+      midtermSectionsData = Array.isArray(msRes.data) ? msRes.data : []
+    } catch (msErr) {
+      console.warn('[FetchInspections] Could not pre-fetch midterm sections:', msErr)
     }
 
     for (const id of Array.from(selected)) {
@@ -195,10 +201,11 @@ export default function FetchInspectionsScreen() {
         }
 
         // Embed fixed sections so the app works fully offline.
-        // Fixed sections are global (not inspection-specific) but we embed a copy
-        // in each inspection record so they're available without a connection.
-        if (fixedSectionsData.length > 0) {
-          normalised.fixedSections = fixedSectionsData
+        // Midterm inspections use a separate section set.
+        const isMidterm = d.inspection_type === 'midterm'
+        const sectionsToEmbed = isMidterm ? midtermSectionsData : fixedSectionsData
+        if (sectionsToEmbed.length > 0) {
+          normalised.fixedSections = sectionsToEmbed
         }
 
         // Normalise report_data from the server response:

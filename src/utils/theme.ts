@@ -58,7 +58,10 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; label: st
 }
 
 export const TYPE_LABELS: Record<string, string> = {
-  check_in:  'Check In',
-  check_out: 'Check Out',
-  mid_term:  'Mid Term',
+  check_in:      'Check In',
+  check_out:     'Check Out',
+  mid_term:      'Mid Term',
+  midterm:       'Midterm',
+  inventory:     'Inventory',
+  damage_report: 'Damage Report',
 }

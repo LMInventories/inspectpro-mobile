@@ -13,6 +13,7 @@ const INSPECTION_TYPES = [
   { value: 'check_in',      label: 'Check In' },
   { value: 'check_out',     label: 'Check Out' },
   { value: 'inventory',     label: 'Inventory' },
+  { value: 'midterm',       label: 'Midterm' },
   { value: 'damage_report', label: 'Damage Report' },
 ]
 
@@ -186,7 +187,10 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
       }
 
       try {
-        const fsRes = await api.getFixedSections()
+        // Midterm inspections use a separate fixed section set
+        const fsRes = inspType === 'midterm'
+          ? await api.getMidtermSections()
+          : await api.getFixedSections()
         if (Array.isArray(fsRes.data) && fsRes.data.length > 0) {
           normalised.fixedSections = fsRes.data
         }

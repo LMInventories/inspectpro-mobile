@@ -148,6 +148,8 @@ export const api = {
   // Fixed sections
   getFixedSections: () =>
     http.get('/api/fixed-sections'),
+  getMidtermSections: () =>
+    http.get('/api/midterm-sections'),
 
   // Section presets
   getSectionPresets: () =>

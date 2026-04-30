@@ -110,6 +110,7 @@ export default function RoomSelectionScreen() {
 
       // Use fixed sections embedded at download time (works fully offline).
       // Fall back to a live API call only if not cached (e.g. older downloaded inspection).
+      const isMidterm = inspection?.inspection_type === 'midterm'
       const cachedFixedOk = Array.isArray(inspection?.fixedSections) &&
                             inspection.fixedSections.length > 0
       let rawFixed: any[] = []
@@ -117,7 +118,9 @@ export default function RoomSelectionScreen() {
         rawFixed = inspection.fixedSections
       } else {
         try {
-          const fsRes = await api.getFixedSections()
+          const fsRes = isMidterm
+            ? await api.getMidtermSections()
+            : await api.getFixedSections()
           rawFixed = Array.isArray(fsRes.data) ? fsRes.data : []
         } catch {
           // No connection and no cache — fixed sections will be empty
