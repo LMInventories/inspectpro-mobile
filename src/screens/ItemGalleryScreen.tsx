@@ -234,10 +234,13 @@ export default function ItemGalleryScreen() {
         key:  String(e._eid),
         name: e.name || e.label || '(unnamed)',
       }))
-      // Merge — template items first, then extras; deduplicate by key
+      // Filter out deleted items
+      const deletedIds = new Set<string>((rd[sectionKey]?._deleted || []).map(String))
+      // Merge — template items first, then extras; deduplicate by key; exclude deleted
       const seen = new Set<string>()
       const items: ItemOption[] = [...tmplItems, ...extraItems].filter(it => {
         if (seen.has(it.key)) return false
+        if (deletedIds.has(it.key)) return false
         seen.add(it.key)
         return true
       })
@@ -267,7 +270,7 @@ export default function ItemGalleryScreen() {
     await setReportData(inspectionId, rd)
     setShowReassign(false)
     exitSelect()
-    Alert.alert('Done', `${photosToMove.length} photo${photosToMove.length !== 1 ? 's' : ''} moved to ${targetItem.name}`)
+    showAutoToast(`${photosToMove.length} photo${photosToMove.length !== 1 ? 's' : ''} moved to ${targetItem.name}`)
   }
 
   // ── AI Reassign ────────────────────────────────────────────────────────────
