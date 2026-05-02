@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Image, Alert, ActivityIndicator, Platform, Linking,
+  Image, Alert, ActivityIndicator, Platform, Linking, Modal,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
@@ -19,6 +19,9 @@ import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
+
+type ReviewItem = { label: string; cond: string; isEmpty: boolean }
+type ReviewRoom  = { name: string; items: ReviewItem[] }
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
 async function openMap(address: string) {
@@ -45,6 +48,8 @@ export default function PropertyOverviewScreen() {
   const [starting, setStarting] = useState(false)
   const [finalising, setFinalising] = useState(false)
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
+  const [showReview, setShowReview] = useState(false)
+  const [reviewRooms, setReviewRooms] = useState<ReviewRoom[]>([])
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
 
@@ -149,6 +154,62 @@ export default function PropertyOverviewScreen() {
   const isAiMode = (inspection as any).typist_is_ai ||
                    (inspection as any).typist_mode === 'ai_instant' ||
                    (inspection as any).typist_mode === 'ai_room'
+
+  function openReview() {
+    const rd = inspection.report_data ? JSON.parse(inspection.report_data) : {}
+    const isCheckOut = inspection.inspection_type === 'check_out'
+    const template = (inspection as any).template
+
+    const hiddenRooms: string[] = rd['_hiddenRooms'] || []
+    const roomNames: Record<string, string> = rd['_roomNames'] || {}
+    const rooms: ReviewRoom[] = []
+
+    // Template rooms
+    const templateSections: any[] = (template?.sections || []).filter(
+      (s: any) => s.section_type === 'room'
+    )
+    for (const section of templateSections) {
+      const key = String(section.id)
+      if (hiddenRooms.includes(key)) continue
+      const displayName = roomNames[key] || section.name || ''
+      const deleted = new Set<string>((rd[key]?._deleted || []).map(String))
+      const items: ReviewItem[] = []
+
+      for (const item of (section.items || [])) {
+        if (deleted.has(String(item.id))) continue
+        const cond = isCheckOut
+          ? (rd[key]?.[String(item.id)]?.checkOutCondition || '')
+          : (rd[key]?.[String(item.id)]?.condition || '')
+        items.push({ label: item.name || item.label || '', cond, isEmpty: !cond })
+      }
+      for (const extra of (rd[key]?._extra || [])) {
+        const eid = extra._eid
+        const cond = isCheckOut
+          ? (rd[key]?.[eid]?.checkOutCondition || '')
+          : (rd[key]?.[eid]?.condition || '')
+        items.push({ label: extra.name || 'Added item', cond, isEmpty: !cond })
+      }
+      if (items.length > 0) rooms.push({ name: displayName, items })
+    }
+
+    // Custom rooms
+    const customRooms: { key: string; name: string }[] = rd['_customRooms'] || []
+    for (const cr of customRooms) {
+      if (hiddenRooms.includes(cr.key)) continue
+      const items: ReviewItem[] = []
+      for (const extra of (rd[cr.key]?._extra || [])) {
+        const eid = extra._eid
+        const cond = isCheckOut
+          ? (rd[cr.key]?.[eid]?.checkOutCondition || '')
+          : (rd[cr.key]?.[eid]?.condition || '')
+        items.push({ label: extra.name || 'Added item', cond, isEmpty: !cond })
+      }
+      if (items.length > 0) rooms.push({ name: cr.name || 'Room', items })
+    }
+
+    setReviewRooms(rooms)
+    setShowReview(true)
+  }
 
   async function handleFinalise() {
     if (isFinalised) {
@@ -318,7 +379,7 @@ export default function PropertyOverviewScreen() {
               ) : (
                 <TouchableOpacity
                   style={styles.btnSecondary}
-                  onPress={handleFinalise}
+                  onPress={openReview}
                   disabled={finalising}
                 >
                   {finalising
@@ -423,6 +484,58 @@ export default function PropertyOverviewScreen() {
 
 
       </ScrollView>
+
+      {/* ── Pre-finalise review overlay ─────────────────────────────────────── */}
+      <Modal visible={showReview} animationType="slide" presentationStyle="fullScreen">
+        <View style={[rvStyles.screen, { paddingTop: insets.top }]}>
+          <View style={rvStyles.header}>
+            <Text style={rvStyles.title}>Review Report</Text>
+            <Text style={rvStyles.subtitle}>Check all items before finalising. Red items are unfilled.</Text>
+          </View>
+          <ScrollView style={rvStyles.scroll} contentContainerStyle={rvStyles.scrollContent}>
+            {reviewRooms.length === 0 ? (
+              <Text style={rvStyles.noData}>No room data recorded yet. Complete the inspection first.</Text>
+            ) : (
+              reviewRooms.map((room, ri) => (
+                <View key={ri} style={rvStyles.roomBlock}>
+                  <Text style={rvStyles.roomName}>{room.name}</Text>
+                  {room.items.map((item, ii) => (
+                    <View
+                      key={ii}
+                      style={[rvStyles.itemRow, item.isEmpty && rvStyles.itemEmpty,
+                               ii === room.items.length - 1 && rvStyles.itemLast]}
+                    >
+                      <Text style={rvStyles.itemLabel}>{item.label}</Text>
+                      {item.isEmpty
+                        ? <Text style={rvStyles.itemMissing}>⚠ Not filled</Text>
+                        : <Text style={rvStyles.itemCond} numberOfLines={3}>{item.cond}</Text>
+                      }
+                    </View>
+                  ))}
+                </View>
+              ))
+            )}
+            <View style={{ height: 40 }} />
+          </ScrollView>
+          <View style={[rvStyles.footer, { paddingBottom: insets.bottom + 8 }]}>
+            <TouchableOpacity
+              style={rvStyles.btnEdit}
+              onPress={() => {
+                setShowReview(false)
+                navigation.navigate('RoomSelection', { inspectionId })
+              }}
+            >
+              <Text style={rvStyles.btnEditText}>✏️  Edit Report</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={rvStyles.btnGo}
+              onPress={() => { setShowReview(false); handleFinalise() }}
+            >
+              <Text style={rvStyles.btnGoText}>Looks Good — Finalise ✓</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -623,4 +736,77 @@ const ipStyles = StyleSheet.create({
     borderRadius: 3,
   },
   barUpload: { backgroundColor: colors.accent },
+})
+
+// ── Pre-finalise review overlay styles ───────────────────────────────────────
+const rvStyles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+  header: {
+    padding: spacing.md,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  title:    { fontSize: font.xl, fontWeight: '700', color: colors.text },
+  subtitle: { fontSize: font.sm, color: colors.textLight, marginTop: 3, lineHeight: 18 },
+  scroll:   { flex: 1 },
+  scrollContent: { padding: spacing.md, paddingTop: spacing.sm },
+  noData: {
+    fontSize: font.sm, color: colors.textLight,
+    textAlign: 'center', marginTop: 60, lineHeight: 20,
+  },
+  roomBlock: {
+    marginBottom: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  roomName: {
+    fontSize: font.xs,
+    fontWeight: '700',
+    color: colors.textLight,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    paddingVertical: 7,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.muted,
+  },
+  itemRow: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  itemLast:    { borderBottomWidth: 0 },
+  itemEmpty:   { backgroundColor: '#fff5f5' },
+  itemLabel:   { fontSize: font.sm, fontWeight: '600', color: colors.text },
+  itemCond:    { fontSize: font.sm, color: colors.textMid, marginTop: 2, lineHeight: 18 },
+  itemMissing: { fontSize: font.xs, color: colors.danger, fontWeight: '700', marginTop: 2 },
+  footer: {
+    padding: spacing.md,
+    paddingTop: spacing.sm,
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  btnEdit: {
+    padding: 13,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.borderDark,
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  btnEditText: { fontSize: font.md, fontWeight: '600', color: colors.textMid },
+  btnGo: {
+    padding: 15,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+  },
+  btnGoText: { fontSize: font.lg, fontWeight: '700', color: '#fff' },
 })
