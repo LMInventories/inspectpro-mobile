@@ -383,14 +383,37 @@ export default function RoomInspectionScreen() {
     return rd[sectionKey]?.[String(itemId)]?.[field] ?? ''
   }
 
-  async function setField(itemId: string, field: string, value: any) {
-    // Read fresh from DB to prevent concurrent write races
-    const fresh = await getLocalInspection(inspectionId)
-    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+  function setField(itemId: string, field: string, value: any) {
+    // Read from Zustand store state directly — always the latest committed value,
+    // fully synchronous, no async DB round-trip.  Using getState() instead of the
+    // closure `activeInspection` avoids the classic race where rapid keystrokes
+    // (each triggering an async read) all read the same base state and the last
+    // writer wins, silently dropping intermediate characters.
+    const current = useInspectionStore.getState().activeInspection
+    const rd = (current?.id === inspectionId && current?.report_data)
+      ? JSON.parse(current.report_data)
+      : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
     rd[sectionKey][String(itemId)][field] = value
-    await setReportData(inspectionId, rd)
+
+    // When checkOutCondition is edited: drop saved action condition-links that no
+    // longer appear as lines in the new text, so the actions modal stays consistent
+    // and never shows ghost conditions from a previous AI fill.
+    if (field === 'checkOutCondition') {
+      const newLines = new Set(
+        String(value).split('\n').map((l: string) => l.trim()).filter(Boolean)
+      )
+      const actKey = `_actions_${itemId}`
+      if (rd[sectionKey][actKey]?.length) {
+        rd[sectionKey][actKey] = rd[sectionKey][actKey].map((a: any) => ({
+          ...a,
+          conditions: (a.conditions || []).filter((c: string) => newLines.has(c)),
+        }))
+      }
+    }
+
+    setReportData(inspectionId, rd)
   }
 
   async function addPhotoUri(itemId: string, fileUri: string) {
@@ -567,7 +590,12 @@ export default function RoomInspectionScreen() {
       })
 
       const result = response.data
-      const rd = getReportData()
+
+      // Read fresh from DB *after* the API call so any edits the user made while
+      // waiting for the AI response are preserved — not overwritten by a stale read
+      // taken before the network request started.
+      const freshAfterApi = await getLocalInspection(inspectionId)
+      const rd = freshAfterApi?.report_data ? JSON.parse(freshAfterApi.report_data) : {}
       if (!rd[sectionKey]) rd[sectionKey] = {}
       if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
       const row = rd[sectionKey][String(itemId)]
@@ -691,7 +719,11 @@ export default function RoomInspectionScreen() {
   }
 
   async function handleRoomTranscribed(filled: Record<string, Record<string, any>>) {
-    const rd = getReportData()
+    // Read fresh from DB — room dictation is async (recording + upload + AI round-trip
+    // can take 10+ seconds), so the store closure captured at component render time
+    // may be stale.  A fresh read ensures no user keystrokes are silently dropped.
+    const freshData = await getLocalInspection(inspectionId)
+    const rd = freshData?.report_data ? JSON.parse(freshData.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false
     let subItemsCreated = 0
@@ -791,8 +823,10 @@ export default function RoomInspectionScreen() {
   }
 
   // Fixed section dictation callback — field names vary by section type
-  function handleFixedRoomTranscribed(filled: Record<string, Record<string, any>>) {
-    const rd = getReportData()
+  async function handleFixedRoomTranscribed(filled: Record<string, Record<string, any>>) {
+    // Same fresh-read pattern as handleRoomTranscribed — dictation is async.
+    const freshFixed = await getLocalInspection(inspectionId)
+    const rd = freshFixed?.report_data ? JSON.parse(freshFixed.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false
 
@@ -2414,24 +2448,4 @@ const actStyles = StyleSheet.create({
   catCheck:     { fontSize: font.sm, fontWeight: '700' },
   divider:      { height: 1, backgroundColor: colors.border, marginVertical: 12 },
   detailRow:    { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
-  detailLabel:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
-  detailName:   { fontSize: font.sm, fontWeight: '700', flex: 1 },
-  detailField:  { marginBottom: 10 },
-  fieldLbl:     { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, color: colors.textLight, marginBottom: 6 },
-  fieldLblOpt:  { fontSize: 10, fontWeight: '400', textTransform: 'none', letterSpacing: 0, color: colors.textLight, fontStyle: 'italic' },
-  respBtns:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  respBtn:      { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.sm, backgroundColor: colors.muted, borderWidth: 1.5, borderColor: colors.border },
-  respBtnActive:{ backgroundColor: colors.primaryLight, borderColor: colors.primary },
-  respBtnText:      { fontSize: font.sm, color: colors.textMid, fontWeight: '500' },
-  respBtnTextActive:{ color: colors.primary, fontWeight: '700' },
-  condLine:         { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, marginBottom: 4 },
-  condLineActive:   { backgroundColor: colors.primaryLight, borderColor: colors.primary },
-  condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1 },
-  condLineTextActive: { color: colors.primary, fontWeight: '600' },
-  condCheckbox:     { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  condCheckboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  condCheckmark:    { fontSize: 11, color: 'white', fontWeight: '800', lineHeight: 14 },
-  footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
-  detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
-  detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
-})
+  detailLabel:  { flexDirection: 'row', alignItems: 'center', gap: 6,
