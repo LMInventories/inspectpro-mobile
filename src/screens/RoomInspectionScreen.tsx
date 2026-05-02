@@ -2324,7 +2324,7 @@ const styles = StyleSheet.create({
   answerOptionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
   answerOptBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
   answerOptBtnSelected: { borderColor: colors.primary, backgroundColor: colors.primary },
-  answerOptText: { fontSize: font.sm, fontWeight: '600', color: colors.textSecondary },
+  answerOptText: { fontSize: font.sm, fontWeight: '600', color: colors.textMid },
   answerOptTextSelected: { color: '#ffffff' },
   inlineInput: { minHeight: 0, height: 42 },
   overviewBlock: {
