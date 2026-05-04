@@ -1196,80 +1196,82 @@ export default function RoomInspectionScreen() {
   }
 
   // itemId can be a template item id OR a sub-item _sid — both stored as _actions_${itemId}
+  // Ensure every action entry has a stable _id so the same actionId can appear
+  // multiple times (e.g. Maintenance Required — Tenant AND Landlord/Agent).
+  function genActionId(): string {
+    return `act_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  }
+
+  function normaliseAction(a: any): any {
+    return {
+      _id:          a._id || genActionId(),
+      actionId:     a.actionId,
+      responsibility: a.responsibility ?? '',
+      conditions:   a.conditions ?? (a.condition ? [a.condition] : []),
+    }
+  }
+
   function openActionsModal(itemId: string, label: string, coCondition: string) {
     const existing = getItemActions(itemId)
     const lines = coCondition
       .split('\n')
       .map((l: string) => l.trim())
       .filter(Boolean)
-    // Normalise: migrate legacy `condition: string` → `conditions: string[]`
-    const migratedActions = existing.map((a: any) => ({
-      ...a,
-      conditions: a.conditions ?? (a.condition ? [a.condition] : []),
-    }))
+    const normed = existing.map(normaliseAction)
     setActionsModal({
       itemId,
       itemLabel:      label,
-      workingActions: JSON.parse(JSON.stringify(migratedActions)),
+      workingActions: JSON.parse(JSON.stringify(normed)),
       conditionLines: lines,
     })
   }
 
-  // Normalise action: migrate legacy condition string → conditions array
-  function normaliseAction(a: any): any {
-    if (a.conditions) return a
-    return { ...a, conditions: a.condition ? [a.condition] : [] }
+  function modalInstanceCount(actionId: any): number {
+    return (actionsModal?.workingActions || []).filter((a: any) => a.actionId === actionId).length
   }
 
-  // Use functional setState to avoid stale-closure bugs when adding multiple actions
-  function modalToggleAction(actionId: any) {
+  // Always ADD a new instance — tap the same catalogue button to add another entry
+  function modalAddAction(actionId: any) {
     setActionsModal(prev => {
       if (!prev) return prev
-      const has = prev.workingActions.some((a: any) => a.actionId === actionId)
-      if (has) {
-        return { ...prev, workingActions: prev.workingActions.filter((a: any) => a.actionId !== actionId) }
-      } else {
-        return {
-          ...prev,
-          workingActions: [
-            ...prev.workingActions,
-            { actionId, responsibility: actionResponsibilities[0] || '', conditions: [] },
-          ],
-        }
+      return {
+        ...prev,
+        workingActions: [
+          ...prev.workingActions,
+          normaliseAction({ actionId, responsibility: actionResponsibilities[0] || '', conditions: [] }),
+        ],
       }
     })
   }
 
-  function modalRemoveAction(actionId: any) {
+  function modalRemoveAction(_id: string) {
     setActionsModal(prev => {
       if (!prev) return prev
-      return { ...prev, workingActions: prev.workingActions.filter((a: any) => a.actionId !== actionId) }
+      return { ...prev, workingActions: prev.workingActions.filter((a: any) => a._id !== _id) }
     })
   }
 
-  function modalSetResponsibility(actionId: any, value: string) {
+  function modalSetResponsibility(_id: string, value: string) {
     setActionsModal(prev => {
       if (!prev) return prev
       return {
         ...prev,
         workingActions: prev.workingActions.map((a: any) =>
-          a.actionId === actionId ? { ...a, responsibility: value } : a
+          a._id === _id ? { ...a, responsibility: value } : a
         ),
       }
     })
   }
 
-  // Toggle a condition line in/out of the conditions array for an action
-  function modalToggleCondition(actionId: any, line: string) {
+  function modalToggleCondition(_id: string, line: string) {
     setActionsModal(prev => {
       if (!prev) return prev
       return {
         ...prev,
         workingActions: prev.workingActions.map((a: any) => {
-          if (a.actionId !== actionId) return a
-          const norm = normaliseAction(a)
-          const has = norm.conditions.includes(line)
-          return { ...norm, conditions: has ? norm.conditions.filter((c: string) => c !== line) : [...norm.conditions, line] }
+          if (a._id !== _id) return a
+          const has = a.conditions.includes(line)
+          return { ...a, conditions: has ? a.conditions.filter((c: string) => c !== line) : [...a.conditions, line] }
         }),
       }
     })
@@ -1498,11 +1500,12 @@ export default function RoomInspectionScreen() {
                 </TouchableOpacity>
                 {getItemActions(item.id).length > 0 && (
                   <View style={styles.actionPillsRow}>
-                    {getItemActions(item.id).map((a: any) => {
+                    {getItemActions(item.id).map((a: any, ai: number) => {
                       const cat = actionCatalogue.find((c: any) => c.id === a.actionId)
                       const col = cat?.color || '#64748b'
+                      const key = a._id || `${a.actionId}_${ai}`
                       return (
-                        <View key={a.actionId} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
+                        <View key={key} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
                           <View style={[styles.actionPillDot, { backgroundColor: col }]} />
                           <Text style={[styles.actionPillText, { color: col }]}>{cat?.name || String(a.actionId)}</Text>
                           {a.responsibility ? <Text style={[styles.actionPillResp, { color: col }]}>· {a.responsibility}</Text> : null}
@@ -1747,11 +1750,12 @@ export default function RoomInspectionScreen() {
                     </TouchableOpacity>
                     {getItemActions(sub._sid).length > 0 && (
                       <View style={styles.actionPillsRow}>
-                        {getItemActions(sub._sid).map((a: any) => {
+                        {getItemActions(sub._sid).map((a: any, ai: number) => {
                           const cat = actionCatalogue.find((c: any) => c.id === a.actionId)
                           const col = cat?.color || '#64748b'
+                          const key = a._id || `${a.actionId}_${ai}`
                           return (
-                            <View key={a.actionId} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
+                            <View key={key} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
                               <View style={[styles.actionPillDot, { backgroundColor: col }]} />
                               <Text style={[styles.actionPillText, { color: col }]}>{cat?.name || String(a.actionId)}</Text>
                               {a.responsibility ? <Text style={[styles.actionPillResp, { color: col }]}>· {a.responsibility}</Text> : null}
@@ -2105,28 +2109,34 @@ export default function RoomInspectionScreen() {
               </View>
 
               <ScrollView style={actStyles.scrollArea} keyboardShouldPersistTaps="handled">
-                {/* Catalogue toggle list */}
-                <Text style={actStyles.sectionLbl}>Select actions</Text>
+                {/* Catalogue — tap to add an instance (same action can be added multiple times) */}
+                <Text style={actStyles.sectionLbl}>Add action</Text>
+                <Text style={actStyles.sectionHint}>Tap to add. Same action can be added more than once for different responsibilities.</Text>
                 {actionCatalogue.length === 0 ? (
                   <Text style={actStyles.emptyText}>No actions configured — add them in Settings → Actions.</Text>
                 ) : (
                   actionCatalogue.map((cat: any) => {
-                    const isActive = (actionsModal?.workingActions || []).some((a: any) => a.actionId === cat.id)
+                    const count = modalInstanceCount(cat.id)
+                    const isActive = count > 0
                     return (
                       <TouchableOpacity
                         key={cat.id}
                         style={[actStyles.catBtn, isActive && { borderColor: cat.color + '80', backgroundColor: cat.color + '18' }]}
-                        onPress={() => modalToggleAction(cat.id)}
+                        onPress={() => modalAddAction(cat.id)}
                       >
                         <View style={[actStyles.catDot, { backgroundColor: cat.color }]} />
                         <Text style={[actStyles.catName, isActive && { color: cat.color, fontWeight: '700' }]}>{cat.name}</Text>
-                        {isActive && <Text style={[actStyles.catCheck, { color: cat.color }]}>✓</Text>}
+                        {isActive && (
+                          <View style={[actStyles.countBadge, { backgroundColor: cat.color }]}>
+                            <Text style={actStyles.countBadgeText}>{count}</Text>
+                          </View>
+                        )}
                       </TouchableOpacity>
                     )
                   })
                 )}
 
-                {/* Detail rows for assigned actions */}
+                {/* Detail rows — one per action instance, keyed by _id */}
                 {(actionsModal?.workingActions || []).length > 0 && (
                   <>
                     <View style={actStyles.divider} />
@@ -2135,14 +2145,14 @@ export default function RoomInspectionScreen() {
                       const cat = actionCatalogue.find((c: any) => c.id === action.actionId)
                       const col = cat?.color || '#64748b'
                       const condLines = actionsModal?.conditionLines || []
-                      const actionConditions: string[] = normaliseAction(action).conditions
+                      const actionConditions: string[] = action.conditions || []
                       return (
-                        <View key={action.actionId} style={actStyles.detailRow}>
-                          {/* Action name label + delete button */}
+                        <View key={action._id} style={actStyles.detailRow}>
+                          {/* Action name + remove button */}
                           <View style={actStyles.detailLabel}>
                             <View style={[actStyles.catDot, { backgroundColor: col }]} />
-                            <Text style={[actStyles.detailName, { color: col }]}>{cat?.name || String(action.actionId)}</Text>
-                            <TouchableOpacity onPress={() => modalRemoveAction(action.actionId)} style={actStyles.detailRemoveBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Text style={[actStyles.detailName, { color: col, flex: 1 }]}>{cat?.name || String(action.actionId)}</Text>
+                            <TouchableOpacity onPress={() => modalRemoveAction(action._id)} style={actStyles.detailRemoveBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                               <Text style={actStyles.detailRemoveText}>✕</Text>
                             </TouchableOpacity>
                           </View>
@@ -2156,7 +2166,7 @@ export default function RoomInspectionScreen() {
                                   <TouchableOpacity
                                     key={r}
                                     style={[actStyles.respBtn, action.responsibility === r && actStyles.respBtnActive]}
-                                    onPress={() => modalSetResponsibility(action.actionId, r)}
+                                    onPress={() => modalSetResponsibility(action._id, r)}
                                   >
                                     <Text style={[actStyles.respBtnText, action.responsibility === r && actStyles.respBtnTextActive]}>{r}</Text>
                                   </TouchableOpacity>
@@ -2176,7 +2186,7 @@ export default function RoomInspectionScreen() {
                                     <TouchableOpacity
                                       key={line}
                                       style={[actStyles.condLine, checked && actStyles.condLineActive]}
-                                      onPress={() => modalToggleCondition(action.actionId, line)}
+                                      onPress={() => modalToggleCondition(action._id, line)}
                                     >
                                       <View style={[actStyles.condCheckbox, checked && actStyles.condCheckboxActive]}>
                                         {checked && <Text style={actStyles.condCheckmark}>✓</Text>}
@@ -2191,14 +2201,13 @@ export default function RoomInspectionScreen() {
                                 style={[styles.notesInput, { minHeight: 40 }]}
                                 value={actionConditions.join('\n')}
                                 onChangeText={v => {
-                                  // Replace the whole conditions list from free-text lines
                                   const lines = v.split('\n').map((l: string) => l.trim()).filter(Boolean)
                                   setActionsModal(prev => {
                                     if (!prev) return prev
                                     return {
                                       ...prev,
                                       workingActions: prev.workingActions.map((a: any) =>
-                                        a.actionId === action.actionId ? { ...normaliseAction(a), conditions: lines } : a
+                                        a._id === action._id ? { ...a, conditions: lines } : a
                                       ),
                                     }
                                   })
@@ -2440,12 +2449,14 @@ const actStyles = StyleSheet.create({
   headerTitle:  { fontSize: font.lg, fontWeight: '800', color: colors.text },
   headerSub:    { fontSize: font.sm, color: colors.textMid, marginTop: 2 },
   scrollArea:   { padding: spacing.md },
-  sectionLbl:   { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, color: colors.textLight, marginBottom: 8, marginTop: 4 },
-  emptyText:    { fontSize: font.sm, color: colors.textLight, fontStyle: 'italic', textAlign: 'center', paddingVertical: 12 },
-  catBtn:       { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, marginBottom: 6 },
-  catDot:       { width: 10, height: 10, borderRadius: 3, flexShrink: 0 },
-  catName:      { flex: 1, fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
-  catCheck:     { fontSize: font.sm, fontWeight: '700' },
+  sectionLbl:       { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, color: colors.textLight, marginBottom: 4, marginTop: 4 },
+  sectionHint:      { fontSize: 11, color: colors.textLight, fontStyle: 'italic', marginBottom: 8 },
+  emptyText:        { fontSize: font.sm, color: colors.textLight, fontStyle: 'italic', textAlign: 'center', paddingVertical: 12 },
+  catBtn:           { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, marginBottom: 6 },
+  catDot:           { width: 10, height: 10, borderRadius: 3, flexShrink: 0 },
+  catName:          { flex: 1, fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
+  countBadge:       { width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  countBadgeText:   { fontSize: 11, fontWeight: '700', color: '#fff' },
   divider:      { height: 1, backgroundColor: colors.border, marginVertical: 12 },
   detailRow:    { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
   detailLabel:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
@@ -2462,10 +2473,4 @@ const actStyles = StyleSheet.create({
   condLineActive:   { backgroundColor: colors.primaryLight, borderColor: colors.primary },
   condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1 },
   condLineTextActive: { color: colors.primary, fontWeight: '600' },
-  condCheckbox:     { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  condCheckboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  condCheckmark:    { fontSize: 11, color: 'white', fontWeight: '800', lineHeight: 14 },
-  footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
-  detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
-  detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
-})
+  condCheckbox:     { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.s

@@ -20,7 +20,7 @@ import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 
-type ReviewItem = { label: string; cond: string; isEmpty: boolean }
+type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean }
 type ReviewRoom  = { name: string; items: ReviewItem[] }
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
@@ -180,14 +180,16 @@ export default function PropertyOverviewScreen() {
         const cond = isCheckOut
           ? (rd[key]?.[String(item.id)]?.checkOutCondition || '')
           : (rd[key]?.[String(item.id)]?.condition || '')
-        items.push({ label: item.name || item.label || '', cond, isEmpty: !cond })
+        const desc = isCheckOut ? '' : (rd[key]?.[String(item.id)]?.description || '')
+        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !desc })
       }
       for (const extra of (rd[key]?._extra || [])) {
         const eid = extra._eid
         const cond = isCheckOut
           ? (rd[key]?.[eid]?.checkOutCondition || '')
           : (rd[key]?.[eid]?.condition || '')
-        items.push({ label: extra.name || 'Added item', cond, isEmpty: !cond })
+        const desc = isCheckOut ? '' : (rd[key]?.[eid]?.description || '')
+        items.push({ label: extra.name || 'Added item', desc, cond, isEmpty: !cond && !desc })
       }
       if (items.length > 0) rooms.push({ name: displayName, items })
     }
@@ -202,7 +204,8 @@ export default function PropertyOverviewScreen() {
         const cond = isCheckOut
           ? (rd[cr.key]?.[eid]?.checkOutCondition || '')
           : (rd[cr.key]?.[eid]?.condition || '')
-        items.push({ label: extra.name || 'Added item', cond, isEmpty: !cond })
+        const desc = isCheckOut ? '' : (rd[cr.key]?.[eid]?.description || '')
+        items.push({ label: extra.name || 'Added item', desc, cond, isEmpty: !cond && !desc })
       }
       if (items.length > 0) rooms.push({ name: cr.name || 'Room', items })
     }
@@ -508,7 +511,10 @@ export default function PropertyOverviewScreen() {
                       <Text style={rvStyles.itemLabel}>{item.label}</Text>
                       {item.isEmpty
                         ? <Text style={rvStyles.itemMissing}>⚠ Not filled</Text>
-                        : <Text style={rvStyles.itemCond} numberOfLines={3}>{item.cond}</Text>
+                        : <>
+                            {!!item.desc && <Text style={rvStyles.itemDesc} numberOfLines={2}>{item.desc}</Text>}
+                            {!!item.cond && <Text style={rvStyles.itemCond} numberOfLines={3}>{item.cond}</Text>}
+                          </>
                       }
                     </View>
                   ))}
@@ -783,30 +789,10 @@ const rvStyles = StyleSheet.create({
   itemLast:    { borderBottomWidth: 0 },
   itemEmpty:   { backgroundColor: '#fff5f5' },
   itemLabel:   { fontSize: font.sm, fontWeight: '600', color: colors.text },
-  itemCond:    { fontSize: font.sm, color: colors.textMid, marginTop: 2, lineHeight: 18 },
+  itemDesc:    { fontSize: font.sm, color: colors.textMid, marginTop: 2, lineHeight: 18 },
+  itemCond:    { fontSize: font.sm, color: colors.textMid, marginTop: 1, lineHeight: 18 },
   itemMissing: { fontSize: font.xs, color: colors.danger, fontWeight: '700', marginTop: 2 },
   footer: {
     padding: spacing.md,
     paddingTop: spacing.sm,
     gap: spacing.sm,
-    backgroundColor: colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  btnEdit: {
-    padding: 13,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderColor: colors.borderDark,
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  btnEditText: { fontSize: font.md, fontWeight: '600', color: colors.textMid },
-  btnGo: {
-    padding: 15,
-    borderRadius: radius.md,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-  },
-  btnGoText: { fontSize: font.lg, fontWeight: '700', color: '#fff' },
-})
