@@ -2473,4 +2473,10 @@ const actStyles = StyleSheet.create({
   condLineActive:   { backgroundColor: colors.primaryLight, borderColor: colors.primary },
   condLineText:     { fontSize: font.sm, color: colors.textMid, flex: 1 },
   condLineTextActive: { color: colors.primary, fontWeight: '600' },
-  condCheckbox:     { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.s
+  condCheckbox:     { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  condCheckboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  condCheckmark:    { fontSize: 11, color: 'white', fontWeight: '800', lineHeight: 14 },
+  footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
+  detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
+  detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
+})
