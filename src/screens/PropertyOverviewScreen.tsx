@@ -512,8 +512,18 @@ export default function PropertyOverviewScreen() {
                       {item.isEmpty
                         ? <Text style={rvStyles.itemMissing}>⚠ Not filled</Text>
                         : <>
-                            {!!item.desc && <Text style={rvStyles.itemDesc} numberOfLines={2}>{item.desc}</Text>}
-                            {!!item.cond && <Text style={rvStyles.itemCond} numberOfLines={3}>{item.cond}</Text>}
+                            {!!item.desc && (
+                              <View style={rvStyles.fieldBlock}>
+                                <Text style={rvStyles.fieldLabel}>Description</Text>
+                                <Text style={rvStyles.itemDesc}>{item.desc}</Text>
+                              </View>
+                            )}
+                            {!!item.cond && (
+                              <View style={rvStyles.fieldBlock}>
+                                <Text style={rvStyles.fieldLabel}>{inspection.inspection_type === 'check_out' ? 'Condition' : 'Condition'}</Text>
+                                <Text style={rvStyles.itemCond}>{item.cond}</Text>
+                              </View>
+                            )}
                           </>
                       }
                     </View>
@@ -789,8 +799,10 @@ const rvStyles = StyleSheet.create({
   itemLast:    { borderBottomWidth: 0 },
   itemEmpty:   { backgroundColor: '#fff5f5' },
   itemLabel:   { fontSize: font.sm, fontWeight: '600', color: colors.text },
-  itemDesc:    { fontSize: font.sm, color: colors.textMid, marginTop: 2, lineHeight: 18 },
-  itemCond:    { fontSize: font.sm, color: colors.textMid, marginTop: 1, lineHeight: 18 },
+  fieldBlock:  { marginTop: spacing.xs },
+  fieldLabel:  { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+  itemDesc:    { fontSize: font.sm, color: colors.text, lineHeight: 19 },
+  itemCond:    { fontSize: font.sm, color: colors.textMid, lineHeight: 19 },
   itemMissing: { fontSize: font.xs, color: colors.danger, fontWeight: '700', marginTop: 2 },
   footer: {
     padding: spacing.md,
