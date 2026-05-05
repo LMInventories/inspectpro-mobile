@@ -15,6 +15,7 @@ import { api } from '../services/api'
 import { syncSingleInspection, SyncProgress } from '../services/syncService'
 import { useAuthStore } from '../stores/authStore'
 import Header from '../components/Header'
+import SignaturePad from '../components/SignaturePad'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
@@ -43,13 +44,18 @@ export default function PropertyOverviewScreen() {
   const route = useRoute<Route>()
   const insets = useSafeAreaInsets()
   const { inspectionId } = route.params
-  const { activeInspection, loadInspection, updateItemInReport } = useInspectionStore()
+  const { activeInspection, loadInspection, updateItemInReport, setReportData } = useInspectionStore()
   const { user } = useAuthStore()
   const [starting, setStarting] = useState(false)
   const [finalising, setFinalising] = useState(false)
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [reviewRooms, setReviewRooms] = useState<ReviewRoom[]>([])
+  const [showSignature, setShowSignature] = useState(false)
+  // sigStep: 'clerk' | 'tenant'
+  const [sigStep, setSigStep] = useState<'clerk' | 'tenant'>('clerk')
+  const [clerkSig, setClerkSig] = useState<string | null>(null)
+  const [tenantSig, setTenantSig] = useState<string | null>(null)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
 
@@ -214,6 +220,42 @@ export default function PropertyOverviewScreen() {
     setShowReview(true)
   }
 
+  function openSignatureFlow() {
+    setClerkSig(null)
+    setTenantSig(null)
+    setSigStep('clerk')
+    setShowSignature(true)
+  }
+
+  async function commitFinalise(clerkSignature: string | null, tenantSignature: string | null) {
+    // Persist signatures into report_data._signatures so they sync to the server
+    const rd = inspection.report_data ? JSON.parse(inspection.report_data) : {}
+    const sigs: Record<string, any> = rd._signatures || {}
+    const now = new Date().toISOString()
+    if (clerkSignature) {
+      sigs.clerk = { signature_data: clerkSignature, signer_name: user?.name || '', signed_at: now }
+    }
+    if (tenantSignature) {
+      sigs.tenant = { signature_data: tenantSignature, signer_name: '', signed_at: now }
+    }
+    rd._signatures = sigs
+    // Write updated report_data (with _signatures) back to the store
+    setReportData(inspectionId, rd)
+    setFinalising(true)
+    try {
+      markFinalised(inspectionId)
+      await loadInspection(inspectionId)
+      Alert.alert(
+        'Finalised ✓',
+        isAiMode
+          ? 'Report finalised. When synced, it will be marked Complete and sent to all recipients automatically.'
+          : 'Inspection marked as finalised. It will be queued for typist processing on your next sync.'
+      )
+    } finally {
+      setFinalising(false)
+    }
+  }
+
   async function handleFinalise() {
     if (isFinalised) {
       Alert.alert(
@@ -237,33 +279,8 @@ export default function PropertyOverviewScreen() {
         ]
       )
     } else {
-      Alert.alert(
-        'Finalise Inspection',
-        isAiMode
-          ? 'This report will be marked Complete and automatically sent to all recipients when synced.\n\nPlease ensure all rooms, conditions, and photos have been reviewed and are accurate before finalising — once synced, the report is delivered immediately.'
-          : 'Mark this inspection as complete on device. When synced, it will be queued for typist processing instead of staying Active.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Finalise',
-            onPress: async () => {
-              setFinalising(true)
-              try {
-                markFinalised(inspectionId)
-                await loadInspection(inspectionId)
-                Alert.alert(
-                  'Finalised ✓',
-                  isAiMode
-                    ? 'Report finalised. When synced, it will be marked Complete and sent to all recipients automatically.'
-                    : 'Inspection marked as finalised. It will be queued for typist processing on your next sync.'
-                )
-              } finally {
-                setFinalising(false)
-              }
-            },
-          },
-        ]
-      )
+      // Open signature collection first
+      openSignatureFlow()
     }
   }
 
@@ -488,6 +505,70 @@ export default function PropertyOverviewScreen() {
 
       </ScrollView>
 
+
+      {/* ── Signature capture modal ─────────────────────────────────────── */}
+      <Modal visible={showSignature} animationType="slide" presentationStyle="fullScreen">
+        <View style={[sigStyles.screen, { paddingTop: insets.top }]}>
+          <View style={sigStyles.header}>
+            <Text style={sigStyles.title}>
+              {sigStep === 'clerk' ? 'Inspector Signature' : 'Tenant Signature'}
+            </Text>
+            <Text style={sigStyles.subtitle}>
+              {sigStep === 'clerk'
+                ? 'Please sign to confirm this report is accurate.'
+                : 'Ask the tenant to sign below, or skip if not present.'}
+            </Text>
+          </View>
+
+          <View style={sigStyles.padWrap}>
+            <SignaturePad
+              height={180}
+              onSave={(dataUrl) => {
+                if (sigStep === 'clerk') {
+                  setClerkSig(dataUrl)
+                  // Move to tenant step
+                  setSigStep('tenant')
+                } else {
+                  setTenantSig(dataUrl)
+                  setShowSignature(false)
+                  commitFinalise(clerkSig, dataUrl)
+                }
+              }}
+              onClear={() => {}}
+            />
+          </View>
+
+          <View style={[sigStyles.footer, { paddingBottom: insets.bottom + 8 }]}>
+            {sigStep === 'clerk' ? (
+              <TouchableOpacity
+                style={sigStyles.btnCancel}
+                onPress={() => setShowSignature(false)}
+              >
+                <Text style={sigStyles.btnCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            ) : (
+              <>
+                <TouchableOpacity
+                  style={sigStyles.btnCancel}
+                  onPress={() => { setSigStep('clerk') }}
+                >
+                  <Text style={sigStyles.btnCancelText}>← Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={sigStyles.btnSkip}
+                  onPress={() => {
+                    setShowSignature(false)
+                    commitFinalise(clerkSig, null)
+                  }}
+                >
+                  <Text style={sigStyles.btnSkipText}>Skip (not present)</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Pre-finalise review overlay ─────────────────────────────────────── */}
       <Modal visible={showReview} animationType="slide" presentationStyle="fullScreen">
         <View style={[rvStyles.screen, { paddingTop: insets.top }]}>
@@ -545,7 +626,7 @@ export default function PropertyOverviewScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={rvStyles.btnGo}
-              onPress={() => { setShowReview(false); handleFinalise() }}
+              onPress={() => { setShowReview(false); openSignatureFlow() }}
             >
               <Text style={rvStyles.btnGoText}>Looks Good — Finalise ✓</Text>
             </TouchableOpacity>
@@ -752,6 +833,55 @@ const ipStyles = StyleSheet.create({
     borderRadius: 3,
   },
   barUpload: { backgroundColor: colors.accent },
+})
+
+// ── Signature modal styles ────────────────────────────────────────────────────
+const sigStyles = StyleSheet.create({
+  screen:   { flex: 1, backgroundColor: colors.background },
+  header: {
+    padding: spacing.md,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  title:    { fontSize: font.xl, fontWeight: '700', color: colors.text },
+  subtitle: { fontSize: font.sm, color: colors.textLight, marginTop: 3, lineHeight: 18 },
+  padWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.md,
+  },
+  footer: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    padding: spacing.md,
+    paddingTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  btnCancel: {
+    padding: 13,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.borderDark,
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    minWidth: 80,
+  },
+  btnCancelText: { fontSize: font.md, fontWeight: '600', color: colors.textMid },
+  btnSkip: {
+    flex: 1,
+    padding: 13,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.borderDark,
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  btnSkipText: { fontSize: font.md, fontWeight: '600', color: colors.textMid },
 })
 
 // ── Pre-finalise review overlay styles ───────────────────────────────────────
