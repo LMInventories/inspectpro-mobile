@@ -125,8 +125,9 @@ export function useAudioRecorder() {
     } catch {}
   }, [])
 
-  function formatDuration(ms: number) {
-    const s = Math.round(ms / 1000)
+  function formatDuration(ms: number | undefined | null) {
+    const safeMs = (typeof ms === 'number' && isFinite(ms)) ? ms : 0
+    const s = Math.round(safeMs / 1000)
     const m = Math.floor(s / 60)
     const sec = s % 60
     return `${m}:${sec.toString().padStart(2, '0')}`

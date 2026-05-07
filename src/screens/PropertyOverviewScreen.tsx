@@ -21,7 +21,8 @@ import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 
-type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean }
+type ReviewSub  = { label: string; cond: string }
+type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[] }
 type ReviewRoom  = { name: string; items: ReviewItem[] }
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
@@ -170,6 +171,19 @@ export default function PropertyOverviewScreen() {
     const roomNames: Record<string, string> = rd['_roomNames'] || {}
     const rooms: ReviewRoom[] = []
 
+    // Extract condition from a data blob, respecting check-out vs inventory
+    const getCond = (data: any): string => data
+      ? (isCheckOut ? (data.checkOutCondition || data.condition || '') : (data.condition || ''))
+      : ''
+
+    // Build sub-items from _subs array on an item's data blob
+    const buildSubs = (itemData: any): ReviewSub[] => {
+      return ((itemData?._subs) || []).map((sub: any) => ({
+        label: sub.description || sub.label || '—',
+        cond:  isCheckOut ? (sub.checkOutCondition || sub.condition || '') : (sub.condition || ''),
+      })).filter((s: ReviewSub) => s.label || s.cond)
+    }
+
     // Template rooms
     const templateSections: any[] = (template?.sections || []).filter(
       (s: any) => s.section_type === 'room'
@@ -183,19 +197,20 @@ export default function PropertyOverviewScreen() {
 
       for (const item of (section.items || [])) {
         if (deleted.has(String(item.id))) continue
-        const cond = isCheckOut
-          ? (rd[key]?.[String(item.id)]?.checkOutCondition || '')
-          : (rd[key]?.[String(item.id)]?.condition || '')
-        const desc = isCheckOut ? '' : (rd[key]?.[String(item.id)]?.description || '')
-        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !desc })
+        const iid      = String(item.id)
+        const itemData = rd[key]?.[iid]
+        const cond     = getCond(itemData)
+        const desc     = !isCheckOut ? (itemData?.description || '') : ''
+        const subs     = buildSubs(itemData)
+        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !subs.length, subs })
       }
       for (const extra of (rd[key]?._extra || [])) {
-        const eid = extra._eid
-        const cond = isCheckOut
-          ? (rd[key]?.[eid]?.checkOutCondition || '')
-          : (rd[key]?.[eid]?.condition || '')
-        const desc = isCheckOut ? '' : (rd[key]?.[eid]?.description || '')
-        items.push({ label: extra.name || 'Added item', desc, cond, isEmpty: !cond && !desc })
+        if (!extra._eid || deleted.has(String(extra._eid))) continue
+        const merged   = { ...(rd[key]?.[extra._eid] || {}), ...extra }
+        const cond     = getCond(merged)
+        const desc     = !isCheckOut ? (merged.description || '') : ''
+        const subs     = buildSubs(merged)
+        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs })
       }
       if (items.length > 0) rooms.push({ name: displayName, items })
     }
@@ -204,16 +219,17 @@ export default function PropertyOverviewScreen() {
     const customRooms: { key: string; name: string }[] = rd['_customRooms'] || []
     for (const cr of customRooms) {
       if (hiddenRooms.includes(cr.key)) continue
+      const deleted = new Set<string>((rd[cr.key]?._deleted || []).map(String))
       const items: ReviewItem[] = []
       for (const extra of (rd[cr.key]?._extra || [])) {
-        const eid = extra._eid
-        const cond = isCheckOut
-          ? (rd[cr.key]?.[eid]?.checkOutCondition || '')
-          : (rd[cr.key]?.[eid]?.condition || '')
-        const desc = isCheckOut ? '' : (rd[cr.key]?.[eid]?.description || '')
-        items.push({ label: extra.name || 'Added item', desc, cond, isEmpty: !cond && !desc })
+        if (!extra._eid || deleted.has(String(extra._eid))) continue
+        const merged = { ...(rd[cr.key]?.[extra._eid] || {}), ...extra }
+        const cond   = getCond(merged)
+        const desc   = !isCheckOut ? (merged.description || '') : ''
+        const subs   = buildSubs(merged)
+        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs })
       }
-      if (items.length > 0) rooms.push({ name: cr.name || 'Room', items })
+      if (items.length > 0) rooms.push({ name: roomNames[cr.key] ?? cr.name ?? 'Room', items })
     }
 
     setReviewRooms(rooms)
@@ -590,7 +606,7 @@ export default function PropertyOverviewScreen() {
                                ii === room.items.length - 1 && rvStyles.itemLast]}
                     >
                       <Text style={rvStyles.itemLabel}>{item.label}</Text>
-                      {item.isEmpty
+                      {item.isEmpty && !item.subs?.length
                         ? <Text style={rvStyles.itemMissing}>⚠ Not filled</Text>
                         : <>
                             {!!item.desc && (
@@ -601,8 +617,21 @@ export default function PropertyOverviewScreen() {
                             )}
                             {!!item.cond && (
                               <View style={rvStyles.fieldBlock}>
-                                <Text style={rvStyles.fieldLabel}>{inspection.inspection_type === 'check_out' ? 'Condition' : 'Condition'}</Text>
+                                <Text style={rvStyles.fieldLabel}>Condition</Text>
                                 <Text style={rvStyles.itemCond}>{item.cond}</Text>
+                              </View>
+                            )}
+                            {item.subs && item.subs.length > 0 && (
+                              <View style={rvStyles.subsBlock}>
+                                {item.subs.map((sub, si) => (
+                                  <View key={si} style={rvStyles.subRow}>
+                                    <Text style={rvStyles.subLabel}>{sub.label}</Text>
+                                    {sub.cond
+                                      ? <Text style={rvStyles.subCond}>{sub.cond}</Text>
+                                      : <Text style={rvStyles.subMissing}>⚠ Not filled</Text>
+                                    }
+                                  </View>
+                                ))}
                               </View>
                             )}
                           </>
@@ -934,6 +963,17 @@ const rvStyles = StyleSheet.create({
   itemDesc:    { fontSize: font.sm, color: colors.text, lineHeight: 19 },
   itemCond:    { fontSize: font.sm, color: colors.textMid, lineHeight: 19 },
   itemMissing: { fontSize: font.xs, color: colors.danger, fontWeight: '700', marginTop: 2 },
+  subsBlock: {
+    marginTop: 8,
+    paddingLeft: 10,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    gap: 6,
+  },
+  subRow:     { gap: 2 },
+  subLabel:   { fontSize: font.xs, fontWeight: '700', color: colors.textLight },
+  subCond:    { fontSize: font.sm, color: colors.textMid, lineHeight: 18 },
+  subMissing: { fontSize: font.xs, color: colors.danger, fontWeight: '600' },
   footer: {
     padding: spacing.md,
     paddingTop: spacing.sm,

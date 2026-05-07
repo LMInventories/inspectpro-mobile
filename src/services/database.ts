@@ -200,18 +200,34 @@ export async function deleteAudioRecording(id: number, fileUri: string): Promise
   } catch {}
 }
 
+// Map snake_case DB columns to camelCase so callers always see durationMs, fileUri, etc.
+function normaliseRow(row: any): any {
+  if (!row) return row
+  return {
+    ...row,
+    durationMs: row.durationMs ?? row.duration_ms ?? 0,
+    fileUri:    row.fileUri    ?? row.file_uri    ?? '',
+    sectionKey: row.sectionKey ?? row.section_key ?? '',
+    itemKey:    row.itemKey    ?? row.item_key    ?? '',
+    itemName:   row.itemName   ?? row.item_name   ?? '',
+    createdAt:  row.createdAt  ?? row.created_at  ?? '',
+  }
+}
+
 export function getAudioRecordings(inspectionId: number): any[] {
-  return db.getAllSync(
+  const rows = db.getAllSync(
     'SELECT * FROM audio_recordings WHERE inspection_id = ? ORDER BY created_at DESC',
     [inspectionId]
   )
+  return rows.map(normaliseRow)
 }
 
 export function getAudioRecordingsForItem(inspectionId: number, sectionKey: string, itemKey: string): any[] {
-  return db.getAllSync(
+  const rows = db.getAllSync(
     'SELECT * FROM audio_recordings WHERE inspection_id = ? AND section_key = ? AND item_key = ? ORDER BY created_at DESC',
     [inspectionId, sectionKey, itemKey]
   )
+  return rows.map(normaliseRow)
 }
 
 export function updateTranscription(recordingId: number, transcription: string): void {
