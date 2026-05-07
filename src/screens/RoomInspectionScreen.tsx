@@ -121,6 +121,11 @@ export default function RoomInspectionScreen() {
   const [transcribingUris, setTranscribingUris] = useState<Record<string, string | null>>({})
   const [aiError, setAiError]                   = useState('')
 
+  // Serialised transcription queue — prevents concurrent API calls when the user
+  // presses multiple item buttons in quick succession.
+  const transcriptionQueueRef = useRef<Array<() => Promise<void>>>([])
+  const transcriptionRunningRef = useRef(false)
+
   // Cleanliness dropdown state
   const [cleanlinessOpen, setCleanlinessOpen]   = useState(false)
   const [cleanlinessItemId, setCleanlinessItemId] = useState('')
@@ -564,6 +569,24 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
+  // ── Transcription queue helpers ───────────────────────────────────────────
+  // Jobs pushed here run one-at-a-time so rapid button presses don't fire
+  // concurrent API calls that can race on setReportData or trigger rate limits.
+  function enqueueTranscription(job: () => Promise<void>) {
+    transcriptionQueueRef.current.push(job)
+    drainTranscriptionQueue()
+  }
+
+  async function drainTranscriptionQueue() {
+    if (transcriptionRunningRef.current) return
+    transcriptionRunningRef.current = true
+    while (transcriptionQueueRef.current.length > 0) {
+      const job = transcriptionQueueRef.current.shift()!
+      try { await job() } catch {}
+    }
+    transcriptionRunningRef.current = false
+  }
+
   // ── AI Transcription ──────────────────────────────────────────────────────
   async function transcribeItem(
     itemId: string,
@@ -855,28 +878,20 @@ export default function RoomInspectionScreen() {
     const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, item.id)
     setRecordings(prev => ({ ...prev, [item.id]: recs }))
 
-    // Trigger AI transcription if AI typist assigned
+    // Trigger AI transcription if AI typist assigned — enqueue so rapid presses
+    // don't fire concurrent API calls.
     if (hasAiTypist) {
       const label = item.label || item.name || ''
-      transcribeItem(item.id, label, uri, durationMs)
+      enqueueTranscription(() => transcribeItem(item.id, label, uri, durationMs))
     }
   }
 
-  async function handleSubItemRecordingComplete(
+  async function transcribeSubItem(
     parentItemId: string,
     sid: string,
     subLabel: string,
     uri: string,
-    durationMs: number
   ) {
-    // Save audio under the sid key
-    saveAudioRecording(inspectionId, sectionKey, sectionName, sid, subLabel, subLabel, uri, durationMs)
-    const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, sid)
-    setRecordings(prev => ({ ...prev, [sid]: recs }))
-
-    if (!hasAiTypist) return
-
-    // Transcribe and fill this sub-item's description + condition
     setAiProcessingItem(sid)
     setTranscribingUris(prev => ({ ...prev, [sid]: uri }))
     setAiError('')
@@ -900,7 +915,6 @@ export default function RoomInspectionScreen() {
       if (sub) {
         let changed = false
         if (isCheckOut_) {
-          // Check-out: put verbatim AI condition into checkOutCondition with "As Inventory+" prefix
           const aiCondition = result.condition || result.description
           if (aiCondition) {
             const existingCO = sub.checkOutCondition || ''
@@ -925,6 +939,22 @@ export default function RoomInspectionScreen() {
       setAiProcessingItem(null)
       setTranscribingUris(prev => ({ ...prev, [sid]: null }))
     }
+  }
+
+  async function handleSubItemRecordingComplete(
+    parentItemId: string,
+    sid: string,
+    subLabel: string,
+    uri: string,
+    durationMs: number
+  ) {
+    saveAudioRecording(inspectionId, sectionKey, sectionName, sid, subLabel, subLabel, uri, durationMs)
+    const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, sid)
+    setRecordings(prev => ({ ...prev, [sid]: recs }))
+
+    if (!hasAiTypist) return
+
+    enqueueTranscription(() => transcribeSubItem(parentItemId, sid, subLabel, uri))
   }
 
   async function handleAddItem() {
