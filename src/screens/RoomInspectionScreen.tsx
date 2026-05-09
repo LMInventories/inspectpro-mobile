@@ -73,8 +73,9 @@ export default function RoomInspectionScreen() {
   // Sub-item quantity modal — opened when clerk taps the ⊕ swipe action
   const [subQtyModal, setSubQtyModal] = useState<{ itemId: string; label: string; count: number } | null>(null)
 
-  // ── Check-out mode ────────────────────────────────────────────────────────
-  const [isCheckOut_, setIsCheckOut_] = useState(false)
+  // ── Check-out / Damage Report mode ───────────────────────────────────────
+  const [isCheckOut_, setIsCheckOut_]         = useState(false)
+  const [isDamageReport_, setIsDamageReport_] = useState(false)
   const [actionCatalogue, setActionCatalogue] = useState<any[]>([])
   const [actionResponsibilities, setActionResponsibilities] = useState<string[]>([])
   const [actionsModal, setActionsModal] = useState<{
@@ -210,9 +211,11 @@ export default function RoomInspectionScreen() {
         setTypistMode_(resolved)
         setHasAiTypist(resolved === 'ai_instant')  // per-item mic only in ai_instant
 
-        // Detect check-out mode and load action catalogue (once per screen)
-        const checkOut = fresh?.inspection_type === 'check_out'
+        // Detect check-out / damage report mode and load action catalogue (once per screen)
+        const checkOut     = fresh?.inspection_type === 'check_out'
+        const damageReport = fresh?.inspection_type === 'damage_report'
         setIsCheckOut_(checkOut)
+        setIsDamageReport_(damageReport)
         if (checkOut && actionCatalogue.length === 0) {
           try {
             const actRes = await api.getActions()
@@ -238,6 +241,14 @@ export default function RoomInspectionScreen() {
           adaptExtraItem(e._eid, e.name || '', type)
         )
         const allFixedItems = [...templateItems, ...extras]
+        // Apply name overrides for renamed template items (stored in _names)
+        const savedNames: Record<string, string> = savedRd[sectionKey]?._names || {}
+        if (Object.keys(savedNames).length > 0) {
+          allFixedItems.forEach((it: any) => {
+            const override = savedNames[String(it.id)]
+            if (override) { it.label = override; it.name = override }
+          })
+        }
         // Apply saved item order if present
         const fixedOrder: string[] = (savedRd[sectionKey]?._itemOrder || [])
         if (fixedOrder.length > 0) {
@@ -602,14 +613,15 @@ export default function RoomInspectionScreen() {
       const audioB64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
 
       const response = await api.transcribeItem({
-        audio:       audioB64,
-        mimeType:    'audio/m4a',
+        audio:          audioB64,
+        mimeType:       'audio/m4a',
         itemLabel,
-        roomName:    sectionName,
-        sectionId:   sectionKey,
-        rowId:       itemId,
-        sectionType: sectionType_,
-        isCheckOut:  isCheckOut_,
+        roomName:       sectionName,
+        sectionId:      sectionKey,
+        rowId:          itemId,
+        sectionType:    sectionType_,
+        isCheckOut:     isCheckOut_,
+        isDamageReport: isDamageReport_,
       })
 
       const result = response.data
@@ -670,7 +682,12 @@ export default function RoomInspectionScreen() {
 
       let changed = false
       if (sectionType_ === 'room') {
-        if (isCheckOut_) {
+        if (isDamageReport_) {
+          // Damage report: AI returns condition only — write directly, no prefix
+          if (shouldWrite('condition', result.condition, row.condition)) {
+            row.condition = computeValue('condition', result.condition, row.condition); changed = true
+          }
+        } else if (isCheckOut_) {
           // Check-out: AI result goes into checkOutCondition.
           // "As Inventory+" is always the first line (placeholder = no damage / matches inventory).
           // Any AI-dictated condition is appended below it.
@@ -763,6 +780,9 @@ export default function RoomInspectionScreen() {
 
       if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
       const row = rd[sectionKey][itemId]
+
+      // Mark item as transcribed so subsequent passes skip it unless explicitly amended
+      if (!row._transcribed) { row._transcribed = true; changed = true }
 
       // Fill main item fields — respect amendment action flags from the AI
       const descAction = fields._descAction || 'fill'  // 'fill' | 'overwrite' | 'append'
@@ -898,14 +918,15 @@ export default function RoomInspectionScreen() {
     try {
       const audioB64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
       const response = await api.transcribeItem({
-        audio:       audioB64,
-        mimeType:    'audio/m4a',
-        itemLabel:   subLabel,
-        roomName:    sectionName,
-        sectionId:   sectionKey,
-        rowId:       sid,
-        sectionType: 'room',
-        isCheckOut:  isCheckOut_,
+        audio:          audioB64,
+        mimeType:       'audio/m4a',
+        itemLabel:      subLabel,
+        roomName:       sectionName,
+        sectionId:      sectionKey,
+        rowId:          sid,
+        sectionType:    'room',
+        isCheckOut:     isCheckOut_,
+        isDamageReport: isDamageReport_,
       })
       const result = response.data
       const fresh = await getLocalInspection(inspectionId)
@@ -914,7 +935,9 @@ export default function RoomInspectionScreen() {
       const sub = subs.find((s: any) => s._sid === sid)
       if (sub) {
         let changed = false
-        if (isCheckOut_) {
+        if (isDamageReport_) {
+          if (result.condition && !sub.condition) { sub.condition = result.condition; changed = true }
+        } else if (isCheckOut_) {
           const aiCondition = result.condition || result.description
           if (aiCondition) {
             const existingCO = sub.checkOutCondition || ''
@@ -1034,7 +1057,12 @@ export default function RoomInspectionScreen() {
     if (!rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = []
     const extraIdx = rd[sectionKey]['_extra'].findIndex((e: any) => e._eid === renameItemId)
     if (extraIdx >= 0) {
+      // Custom item — update _extra
       rd[sectionKey]['_extra'][extraIdx].name = renameItemName.trim()
+    } else {
+      // Template item — store name override in _names so it survives sync
+      if (!rd[sectionKey]['_names']) rd[sectionKey]['_names'] = {}
+      rd[sectionKey]['_names'][renameItemId] = renameItemName.trim()
     }
     await setReportData(inspectionId, rd)
     setItems(prev => prev.map(i => i.id === renameItemId
@@ -1549,17 +1577,19 @@ export default function RoomInspectionScreen() {
           ) : (
             /* ── CHECK IN layout ── */
             <>
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Description</Text>
-                <TextInput
-                  style={styles.notesInput}
-                  value={getField(item.id, 'description')}
-                  onChangeText={v => setField(item.id, 'description', v)}
-                  placeholder="Describe item appearance, state, notes…"
-                  placeholderTextColor={colors.textLight}
-                  multiline textAlignVertical="top"
-                />
-              </View>
+              {!isDamageReport_ && (
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Description</Text>
+                  <TextInput
+                    style={styles.notesInput}
+                    value={getField(item.id, 'description')}
+                    onChangeText={v => setField(item.id, 'description', v)}
+                    placeholder="Describe item appearance, state, notes…"
+                    placeholderTextColor={colors.textLight}
+                    multiline textAlignVertical="top"
+                  />
+                </View>
+              )}
               {item.hasCondition !== false && (
                 <View style={styles.fieldGroup}>
                   <Text style={styles.fieldLabel}>
@@ -2016,11 +2046,13 @@ export default function RoomInspectionScreen() {
             sectionKey={sectionKey}
             sectionName={sectionName}
             sectionType="room"
+            isDamageReport={isDamageReport_}
             items={items.map((it: any): RoomDictationItem => ({
               id:             it.id,
               name:           it.label || it.name || '',
               hasCondition:   it.hasCondition !== false,
               hasDescription: it.hasDescription !== false,
+              isTranscribed:  !!getField(it.id, '_transcribed'),
               // Check-out: include existing sub-items so the AI can route dictation to the right _sid
               subs: isCheckOut_
                 ? getSubs(it.id).map((s: any) => ({ _sid: s._sid, description: s.description || '' }))

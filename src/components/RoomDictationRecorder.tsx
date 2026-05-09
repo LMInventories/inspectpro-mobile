@@ -49,6 +49,7 @@ export interface RoomDictationItem {
   name: string
   hasCondition?: boolean
   hasDescription?: boolean
+  isTranscribed?: boolean  // true if this item was filled in a previous transcription pass
   subs?: Array<{ _sid: string; description: string }>  // check-out: existing sub-items for routing
 }
 
@@ -63,6 +64,7 @@ interface Props {
   sectionKey: string
   sectionName: string
   sectionType?: string   // 'room' (default) or fixed section type
+  isDamageReport?: boolean
   items: RoomDictationItem[]
   onTranscribed: (filled: Record<string, Record<string, any>>) => void
   showAiButton?: boolean
@@ -79,6 +81,7 @@ export default function RoomDictationRecorder({
   sectionKey,
   sectionName,
   sectionType = 'room',
+  isDamageReport = false,
   items,
   onTranscribed,
   showAiButton = true,
@@ -317,12 +320,16 @@ export default function RoomDictationRecorder({
       // Detect check-out mode: at least one item has subs populated
       const isCheckOut = items.some(it => it.subs !== undefined)
 
+      const processedItemIds = items.filter(it => it.isTranscribed).map(it => it.id)
+
       const response = await api.transcribeRoom({
-        clips:       clipPayloads,
+        clips:            clipPayloads,
         sectionName,
         sectionKey,
         sectionType,
         isCheckOut,
+        isDamageReport,
+        processedItemIds: processedItemIds.length > 0 ? processedItemIds : undefined,
         items: items.map(it => ({
           id:             it.id,
           name:           it.name,
