@@ -40,7 +40,7 @@ import {
 import * as FileSystem from 'expo-file-system/legacy'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import SwipeableRow from './SwipeableRow'
-import { saveAudioRecording } from '../services/database'
+import { saveAudioRecording, deleteAudioRecording, getAudioRecordingsForSection } from '../services/database'
 import { api } from '../services/api'
 import { colors, font, radius, spacing } from '../utils/theme'
 
@@ -53,6 +53,7 @@ export interface RoomDictationItem {
 }
 
 interface SavedClip {
+  id?: number  // DB row id — present for persisted clips, used for deletion
   uri: string
   durationMs: number
 }
@@ -127,6 +128,17 @@ export default function RoomDictationRecorder({
     playerRef.current?.remove()
   }, [])
 
+  // Restore any clips saved before the user navigated away
+  useEffect(() => {
+    const saved = getAudioRecordingsForSection(inspectionId, sectionKey)
+    if (saved.length > 0) {
+      const restored: SavedClip[] = saved.map((r: any) => ({ id: r.id, uri: r.fileUri, durationMs: r.durationMs }))
+      setClips(restored)
+      setTotalMs(restored.reduce((sum, c) => sum + c.durationMs, 0))
+      setMode('paused')
+    }
+  }, [inspectionId, sectionKey])
+
   // ── Timer ─────────────────────────────────────────────────────────────────
   function startTimer() {
     setElapsed(0)
@@ -192,14 +204,15 @@ export default function RoomDictationRecorder({
       try { await FileSystem.copyAsync({ from: uri, to: destUri }) } catch {}
       const finalUri = destUri
 
+      let clipId: number | undefined
       try {
-        saveAudioRecording(
+        clipId = saveAudioRecording(
           inspectionId, sectionKey, sectionName,
           undefined, undefined, sectionName, finalUri, durationMs,
         )
       } catch {}
 
-      setClips(prev => [...prev, { uri: finalUri, durationMs }])
+      setClips(prev => [...prev, { id: clipId, uri: finalUri, durationMs }])
       setTotalMs(prev => prev + durationMs)
       setElapsed(0)
       setMode('paused')
@@ -218,7 +231,12 @@ export default function RoomDictationRecorder({
     }
     setClips(prev => {
       const removed = prev.find(c => c.uri === uri)
-      if (removed) setTotalMs(t => t - removed.durationMs)
+      if (removed) {
+        setTotalMs(t => t - removed.durationMs)
+        if (removed.id !== undefined) {
+          deleteAudioRecording(removed.id, uri).catch(() => {})
+        }
+      }
       return prev.filter(c => c.uri !== uri)
     })
   }
@@ -234,7 +252,12 @@ export default function RoomDictationRecorder({
           playerRef.current?.remove()
           playerRef.current = null
           setPlayingUri(null)
-          setClips([])
+          setClips(prev => {
+            prev.forEach(c => {
+              if (c.id !== undefined) deleteAudioRecording(c.id, c.uri).catch(() => {})
+            })
+            return []
+          })
           setTotalMs(0)
           setElapsed(0)
           setMode('idle')

@@ -184,13 +184,14 @@ export function saveAudioRecording(
   fileUri: string,
   durationMs: number,
   transcription?: string
-): void {
-  db.runSync(
+): number {
+  const result = db.runSync(
     `INSERT INTO audio_recordings
        (inspection_id, section_key, section_name, item_key, item_name, label, file_uri, duration_ms, transcription, created_at, synced)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [inspectionId, sectionKey, sectionName, itemKey || null, itemName || null, label, fileUri, durationMs, transcription || null, new Date().toISOString()]
   )
+  return result.lastInsertRowId
 }
 
 export async function deleteAudioRecording(id: number, fileUri: string): Promise<void> {
@@ -218,6 +219,14 @@ export function getAudioRecordings(inspectionId: number): any[] {
   const rows = db.getAllSync(
     'SELECT * FROM audio_recordings WHERE inspection_id = ? ORDER BY created_at DESC',
     [inspectionId]
+  )
+  return rows.map(normaliseRow)
+}
+
+export function getAudioRecordingsForSection(inspectionId: number, sectionKey: string): any[] {
+  const rows = db.getAllSync(
+    'SELECT * FROM audio_recordings WHERE inspection_id = ? AND section_key = ? AND item_key IS NULL ORDER BY created_at ASC',
+    [inspectionId, sectionKey]
   )
   return rows.map(normaliseRow)
 }

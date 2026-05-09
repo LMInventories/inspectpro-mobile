@@ -533,7 +533,7 @@ export default function CameraScreen() {
 
               <TouchableOpacity
                 style={[styles.shutter, isCapturing && styles.shutterDisabled]}
-                onPress={handleCapture}
+                onPressIn={handleCapture}
                 disabled={isCapturing}
               >
                 {isCapturing
