@@ -1388,8 +1388,8 @@ export default function RoomInspectionScreen() {
 
     return (
       <View style={styles.photoBlock}>
-        {/* Check In reference photos — read-only */}
-        {srcPhotos.length > 0 && (
+        {/* Check In reference photos — read-only, only on check-out inspections */}
+        {isCheckOut_ && srcPhotos.length > 0 && (
           <View style={styles.sourcePhotoBlock}>
             <Text style={styles.sourcePhotoLabel}>📋 Check In</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>

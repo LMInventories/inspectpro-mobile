@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, Modal,
+  ActivityIndicator, Alert, Modal, Switch,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
@@ -129,6 +129,23 @@ export default function FetchInspectionsScreen() {
   const [fetching, setFetching]       = useState(false)
   const [results, setResults]         = useState<{ id: number; address: string; success: boolean; error?: string }[] | null>(null)
   const [confirmModal, setConfirmModal] = useState(false)
+  const [showComplete, setShowComplete] = useState(false)
+
+  const displayList = showComplete
+    ? serverList
+    : serverList.filter(i => i.status !== 'complete')
+
+  function toggleShowComplete(val: boolean) {
+    setShowComplete(val)
+    if (!val) {
+      setSelected(prev => {
+        const completeIds = new Set(serverList.filter(i => i.status === 'complete').map(i => i.id))
+        const n = new Set(prev)
+        for (const id of completeIds) n.delete(id)
+        return n
+      })
+    }
+  }
 
   useFocusEffect(useCallback(() => {
     loadServer()
@@ -162,10 +179,10 @@ export default function FetchInspectionsScreen() {
   }
 
   function toggleAll() {
-    if (selected.size === serverList.length) {
+    if (selected.size === displayList.length) {
       setSelected(new Set())
     } else {
-      setSelected(new Set(serverList.map(i => i.id)))
+      setSelected(new Set(displayList.map(i => i.id)))
     }
   }
 
@@ -389,17 +406,27 @@ export default function FetchInspectionsScreen() {
         </View>
       ) : (
         <>
+          <View style={styles.filterRow}>
+            <Text style={styles.filterLabel}>Show Complete</Text>
+            <Switch
+              value={showComplete}
+              onValueChange={toggleShowComplete}
+              trackColor={{ false: colors.border, true: colors.primaryLight }}
+              thumbColor={showComplete ? colors.primary : colors.textLight}
+            />
+          </View>
+
           <View style={styles.listHeader}>
-            <Text style={styles.listCount}>{serverList.length} inspection{serverList.length !== 1 ? 's' : ''} available</Text>
+            <Text style={styles.listCount}>{displayList.length} inspection{displayList.length !== 1 ? 's' : ''} available</Text>
             <TouchableOpacity onPress={toggleAll}>
               <Text style={styles.toggleAll}>
-                {selected.size === serverList.length ? 'Deselect All' : 'Select All'}
+                {selected.size === displayList.length ? 'Deselect All' : 'Select All'}
               </Text>
             </TouchableOpacity>
           </View>
 
           <FlatList
-            data={serverList}
+            data={displayList}
             keyExtractor={i => String(i.id)}
             renderItem={renderItem}
             contentContainerStyle={styles.list}
@@ -475,6 +502,8 @@ const styles = StyleSheet.create({
   resultsTitle: { fontSize: font.md, fontWeight: '700', color: colors.text, marginBottom: 4 },
   resultOk: { fontSize: font.sm, color: colors.success, fontWeight: '600' },
   resultFail: { fontSize: font.sm, color: colors.danger },
+  filterRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  filterLabel: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
   listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
   listCount: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
   toggleAll: { fontSize: font.sm, color: colors.accent, fontWeight: '600' },
