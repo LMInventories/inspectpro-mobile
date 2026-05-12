@@ -538,6 +538,7 @@ export default function PropertyOverviewScreen() {
 
           <View style={sigStyles.padWrap}>
             <SignaturePad
+              key={sigStep}
               height={180}
               onSave={(dataUrl) => {
                 if (sigStep === 'clerk') {

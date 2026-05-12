@@ -70,6 +70,52 @@ async function extractBase64PhotosToFiles(inspectionId: number, rd: any): Promis
   return rd
 }
 
+/**
+ * Download remote HTTPS photo URLs to local files and replace the URLs with
+ * file:// paths. Runs after extractBase64PhotosToFiles so S3-hosted photos from
+ * completed source inspections are also available offline during check-out.
+ */
+async function downloadRemotePhotosToFiles(inspectionId: number, rd: any): Promise<any> {
+  const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+  let dirReady = false
+
+  const ensureDir = async () => {
+    if (!dirReady) {
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+      dirReady = true
+    }
+  }
+
+  for (const sectionKey of Object.keys(rd)) {
+    const section = rd[sectionKey]
+    if (!section || typeof section !== 'object' || Array.isArray(section)) continue
+
+    for (const itemKey of Object.keys(section)) {
+      const item = section[itemKey]
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      if (!Array.isArray(item._photos)) continue
+
+      const hasRemote = item._photos.some((u: string) => typeof u === 'string' && u.startsWith('https://'))
+      if (!hasRemote) continue
+
+      await ensureDir()
+      item._photos = await Promise.all(
+        item._photos.map(async (uri: string) => {
+          if (!uri.startsWith('https://')) return uri
+          try {
+            const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+            const result = await FileSystem.downloadAsync(uri, dest)
+            return result.status === 200 ? result.uri : uri
+          } catch {
+            return uri  // keep remote URL as fallback
+          }
+        })
+      )
+    }
+  }
+  return rd
+}
+
 type Nav = StackNavigationProp<RootStackParamList, 'FetchInspections'>
 
 export default function FetchInspectionsScreen() {
@@ -96,10 +142,9 @@ export default function FetchInspectionsScreen() {
         api.getInspections(),
         getLocalInspections(),
       ])
-      const assigned = (serverRes.data as any[]).filter((i: any) =>
-        ['assigned', 'active', 'processing'].includes(i.status)
-      )
-      setServerList(assigned)
+      // Show all inspections for this clerk regardless of status — completed/review
+      // reports must remain downloadable so clerks can re-open and amend them offline.
+      setServerList(serverRes.data as any[])
       setLocalIds(new Set(local.map((i: any) => i.id)))
     } catch {
       Alert.alert('Error', 'Could not load inspections. Check your connection.')
@@ -181,22 +226,48 @@ export default function FetchInspectionsScreen() {
           }
         }
 
-        // Fallback for check-out inspections with no template assigned:
-        // inherit the template from the source check-in inspection.
-        const hasSections = Array.isArray(normalised.template?.sections) &&
-                            normalised.template.sections.length > 0
-        if (!hasSections && d.source_inspection_id) {
+        // Source check-in inspection — fetch for two purposes:
+        //   1. Template inheritance: CO inspections may have no template; inherit from CI.
+        //   2. Photo caching: download CI photos to device so they're visible offline
+        //      during the check-out (shown in the per-item "Check-In Photos" accordion).
+        if (d.source_inspection_id) {
           try {
-            const srcRes    = await api.getInspection(d.source_inspection_id)
-            const srcTmplId = srcRes.data?.template_id
-            if (srcTmplId && srcTmplId !== templateId) {
-              const srcTmplRes = await api.getTemplate(srcTmplId)
-              normalised.template    = srcTmplRes.data
-              normalised.template_id = srcTmplId   // store so offline re-fetch works
-              console.log(`[FetchInspections] check-out template inherited from source inspection ${d.source_inspection_id}`)
+            const srcRes  = await api.getInspection(d.source_inspection_id)
+            const srcData = srcRes.data
+
+            // 1. Template inheritance when CO has no sections
+            const hasSections = Array.isArray(normalised.template?.sections) &&
+                                normalised.template.sections.length > 0
+            if (!hasSections) {
+              const srcTmplId = srcData?.template_id
+              if (srcTmplId && srcTmplId !== templateId) {
+                try {
+                  const srcTmplRes = await api.getTemplate(srcTmplId)
+                  normalised.template    = srcTmplRes.data
+                  normalised.template_id = srcTmplId
+                  console.log(`[FetchInspections] check-out template inherited from source inspection ${d.source_inspection_id}`)
+                } catch (tmplErr) {
+                  console.warn('[FetchInspections] Could not fetch source template:', tmplErr)
+                }
+              }
+            }
+
+            // 2. Cache source CI report_data with all photos materialised to local files
+            const srcRd = srcData?.report_data
+            if (srcRd) {
+              try {
+                const srcRdObj = typeof srcRd === 'string' ? JSON.parse(srcRd) : srcRd
+                // Extract any base64 data URIs → local files
+                let processed = await extractBase64PhotosToFiles(d.source_inspection_id, srcRdObj)
+                // Download any S3/HTTPS photo URLs → local files
+                processed = await downloadRemotePhotosToFiles(d.source_inspection_id, processed)
+                normalised.source_report_data = JSON.stringify(processed)
+              } catch (rdErr) {
+                console.warn('[FetchInspections] Could not cache source CI photos:', rdErr)
+              }
             }
           } catch (srcErr) {
-            console.warn('[FetchInspections] Could not inherit template from source inspection:', srcErr)
+            console.warn('[FetchInspections] Could not fetch source inspection:', srcErr)
           }
         }
 
@@ -310,8 +381,8 @@ export default function FetchInspectionsScreen() {
       ) : serverList.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>📋</Text>
-          <Text style={styles.emptyTitle}>No assigned inspections</Text>
-          <Text style={styles.emptySub}>There are no inspections assigned to you on the server.</Text>
+          <Text style={styles.emptyTitle}>No inspections found</Text>
+          <Text style={styles.emptySub}>There are no inspections on the server for your account.</Text>
           <TouchableOpacity style={styles.refreshBtn} onPress={loadServer}>
             <Text style={styles.refreshBtnText}>↺ Refresh</Text>
           </TouchableOpacity>
@@ -319,7 +390,7 @@ export default function FetchInspectionsScreen() {
       ) : (
         <>
           <View style={styles.listHeader}>
-            <Text style={styles.listCount}>{serverList.length} inspection{serverList.length !== 1 ? 's' : ''} assigned</Text>
+            <Text style={styles.listCount}>{serverList.length} inspection{serverList.length !== 1 ? 's' : ''} available</Text>
             <TouchableOpacity onPress={toggleAll}>
               <Text style={styles.toggleAll}>
                 {selected.size === serverList.length ? 'Deselect All' : 'Select All'}

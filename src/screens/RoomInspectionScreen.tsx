@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Animated, Dimensions,
+  KeyboardAvoidingView, Platform, Animated, Dimensions, useWindowDimensions,
 } from 'react-native'
 import {
   GestureHandlerRootView,
@@ -85,6 +85,15 @@ export default function RoomInspectionScreen() {
     conditionLines: string[]
   } | null>(null)
 
+  // Landscape detection — header scrolls with content in landscape to maximise
+  // the vertical space available when the keyboard is showing.
+  const { width: winWidth, height: winHeight } = useWindowDimensions()
+  const isLandscape = winWidth > winHeight
+
+  // Y-position cache for each item card, populated via onLayout.
+  // Used by handleTextFocus to scroll the focused item into view.
+  const itemLayoutsRef = useRef<Map<string, number>>(new Map())
+
   // ── Item drag-to-reorder ───────────────────────────────────────────────────
   // Approximate row height used to compute target drop index during drag.
   // Items vary in height but this gives a reasonable gap-preview.
@@ -134,8 +143,10 @@ export default function RoomInspectionScreen() {
   // Room dictation state — always visible for all modes
   const [roomTranscribing, setRoomTranscribing] = useState(false)
 
-  // Source inspection photos (read-only reference for check-out)
+  // Source check-in report_data — read from local DB (pre-downloaded at fetch time)
   const [sourceReportData, setSourceReportData] = useState<Record<string, any> | null>(null)
+  // Tracks which items have the CI photos accordion open
+  const [ciPhotosExpanded, setCiPhotosExpanded] = useState<Record<string, boolean>>({})
 
   // Track which photo target is pending (for camera handoff)
   const cameraTargetRef = useRef<{ type: 'item'; itemId: string } | { type: 'overview' } | null>(null)
@@ -155,20 +166,28 @@ export default function RoomInspectionScreen() {
 
   useEffect(() => { buildItems() }, [sectionKey])
 
-  // Fetch source (check-in) inspection photos whenever the active inspection changes
-  useEffect(() => { loadSourcePhotos() }, [activeInspection?.source_inspection_id])
+  // Load source CI report_data from local DB whenever the active inspection changes.
+  // Pre-downloaded at fetch time — no network call needed here.
+  useEffect(() => { loadSourcePhotos() }, [activeInspection?.id])
 
-  async function loadSourcePhotos() {
-    const sourceId = activeInspection?.source_inspection_id
-    if (!sourceId) { setSourceReportData(null); return }
+  function loadSourcePhotos() {
+    const raw = activeInspection?.source_report_data
+    if (!raw) { setSourceReportData(null); return }
     try {
-      const res = await api.getInspection(sourceId)
-      const rd = res.data?.report_data
-      if (!rd) return
-      setSourceReportData(typeof rd === 'string' ? JSON.parse(rd) : rd)
+      setSourceReportData(typeof raw === 'string' ? JSON.parse(raw) : raw)
     } catch {
-      // No source inspection available — silently ignore
+      setSourceReportData(null)
     }
+  }
+
+  function handleTextFocus(itemId: string) {
+    const y = itemLayoutsRef.current.get(itemId)
+    if (y === undefined) return
+    // Small delay lets the keyboard animation start before we scroll, so the
+    // KeyboardAvoidingView has already resized the content area.
+    setTimeout(() => {
+      itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
+    }, 120)
   }
 
   async function buildItems() {
@@ -997,6 +1016,8 @@ export default function RoomInspectionScreen() {
     setItems(prev => [...prev, newItem])
     setNewItemName('')
     setAddItemModal(false)
+    // Scroll to the new item once React has laid it out (≈200 ms is enough)
+    setTimeout(() => itemScrollRef.current?.scrollToEnd({ animated: true }), 200)
   }
 
   async function deleteItemImmediate(itemId: string) {
@@ -1436,6 +1457,41 @@ export default function RoomInspectionScreen() {
     )
   }
 
+  function renderCheckInPhotos(item: any) {
+    if (!isCheckOut_) return null
+    const photos: string[] = sourceReportData?.[sectionKey]?.[String(item.id)]?._photos || []
+    if (photos.length === 0) return null
+
+    const expanded = ciPhotosExpanded[item.id] ?? false
+
+    return (
+      <View style={styles.ciPhotosBlock}>
+        <TouchableOpacity
+          style={styles.ciPhotosHeader}
+          onPress={() => setCiPhotosExpanded(prev => ({ ...prev, [item.id]: !expanded }))}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.ciPhotosHeaderText}>
+            📷  Check-In Photos ({photos.length})
+          </Text>
+          <Text style={styles.ciPhotosChevron}>{expanded ? '▴' : '▾'}</Text>
+        </TouchableOpacity>
+        {expanded && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.ciPhotosScroll}
+            contentContainerStyle={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8 }}
+          >
+            {photos.map((uri, idx) => (
+              <Image key={idx} source={{ uri }} style={styles.ciPhotoThumb} resizeMode="cover" />
+            ))}
+          </ScrollView>
+        )}
+      </View>
+    )
+  }
+
   function renderItem(item: any, idx: number) {
     const label = item.label || item.name || ''
 
@@ -1473,6 +1529,7 @@ export default function RoomInspectionScreen() {
     return (
       <Animated.View
         key={item.id}
+        onLayout={(e) => { itemLayoutsRef.current.set(item.id, e.nativeEvent.layout.y) }}
         style={
           isDragging
             ? { transform: [{ translateY: itemDragYAnim }], zIndex: 20, elevation: 8 }
@@ -1524,6 +1581,9 @@ export default function RoomInspectionScreen() {
                   <Text style={styles.coReadOnlyText}>{getField(item.id, 'inventoryCondition') || '—'}</Text>
                 </View>
               </View>
+              {/* Check-In reference photos — collapsible, for visual comparison */}
+              {renderCheckInPhotos(item)}
+
               {/* Condition at Check Out — editable, one line per condition.
                    "As Inventory+" is auto-set on first focus (means item matches check-in,
                    any extra conditions are appended below it on new lines). */}
@@ -1533,6 +1593,7 @@ export default function RoomInspectionScreen() {
                   style={styles.notesInput}
                   value={getField(item.id, 'checkOutCondition')}
                   onFocus={() => {
+                    handleTextFocus(item.id)
                     if (!getField(item.id, 'checkOutCondition')) {
                       setField(item.id, 'checkOutCondition', 'As Inventory+')
                     }
@@ -1583,6 +1644,7 @@ export default function RoomInspectionScreen() {
                   <TextInput
                     style={styles.notesInput}
                     value={getField(item.id, 'description')}
+                    onFocus={() => handleTextFocus(item.id)}
                     onChangeText={v => setField(item.id, 'description', v)}
                     placeholder="Describe item appearance, state, notes…"
                     placeholderTextColor={colors.textLight}
@@ -1618,6 +1680,7 @@ export default function RoomInspectionScreen() {
                     <TextInput
                       style={styles.notesInput}
                       value={getField(item.id, 'condition')}
+                      onFocus={() => handleTextFocus(item.id)}
                       onChangeText={v => setField(item.id, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn, Damaged…"
                       placeholderTextColor={colors.textLight}
@@ -1637,6 +1700,7 @@ export default function RoomInspectionScreen() {
             <TextInput
               style={styles.notesInput}
               value={getField(item.id, 'condition')}
+              onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'condition', v)}
               placeholder="Describe condition…"
               placeholderTextColor={colors.textLight}
@@ -1660,6 +1724,7 @@ export default function RoomInspectionScreen() {
             <TextInput
               style={styles.notesInput}
               value={getField(item.id, 'notes')}
+              onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'notes', v)}
               placeholder="Notes…" placeholderTextColor={colors.textLight}
               multiline textAlignVertical="top"
@@ -1690,6 +1755,7 @@ export default function RoomInspectionScreen() {
             <TextInput
               style={styles.notesInput}
               value={getField(item.id, 'cleanlinessNotes')}
+              onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'cleanlinessNotes', v)}
               placeholder="Additional notes…" placeholderTextColor={colors.textLight}
               multiline textAlignVertical="top"
@@ -1704,6 +1770,7 @@ export default function RoomInspectionScreen() {
             <TextInput
               style={styles.notesInput}
               value={getField(item.id, 'description')}
+              onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'description', v)}
               placeholder="e.g. 2 × Yale keys…"
               placeholderTextColor={colors.textLight}
@@ -1719,6 +1786,7 @@ export default function RoomInspectionScreen() {
             <TextInput
               style={styles.notesInput}
               value={getField(item.id, 'locationSerial')}
+              onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'locationSerial', v)}
               placeholder={'Located to [location]\nSerial Number: [number]'}
               placeholderTextColor={colors.textLight}
@@ -1734,12 +1802,16 @@ export default function RoomInspectionScreen() {
             <TextInput
               style={[styles.notesInput, styles.inlineInput]}
               value={getField(item.id, 'reading')}
+              onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'reading', v)}
               placeholder="e.g. 12345.6" placeholderTextColor={colors.textLight}
               keyboardType="decimal-pad"
             />
           </View>
         )}
+
+        {/* Check-In reference photos — fixed sections only; room items handled above */}
+        {sectionType_ !== 'room' && renderCheckInPhotos(item)}
 
         {/* Photos */}
         {renderPhotos(item)}
@@ -1781,6 +1853,7 @@ export default function RoomInspectionScreen() {
                       style={styles.notesInput}
                       value={sub.checkOutCondition || ''}
                       onFocus={() => {
+                        handleTextFocus(item.id)
                         if (!sub.checkOutCondition) {
                           setSubField(item.id, sub._sid, 'checkOutCondition', 'As Inventory+')
                         }
@@ -1866,6 +1939,7 @@ export default function RoomInspectionScreen() {
                     <TextInput
                       style={styles.notesInput}
                       value={sub.description}
+                      onFocus={() => handleTextFocus(item.id)}
                       onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
                       placeholder="Describe sub-item…"
                       placeholderTextColor={colors.textLight}
@@ -1877,6 +1951,7 @@ export default function RoomInspectionScreen() {
                     <TextInput
                       style={styles.notesInput}
                       value={sub.condition}
+                      onFocus={() => handleTextFocus(item.id)}
                       onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn…"
                       placeholderTextColor={colors.textLight}
@@ -1920,40 +1995,45 @@ export default function RoomInspectionScreen() {
     )
   }
 
+  // In landscape the header scrolls with the content so the keyboard doesn't
+  // push it off screen and steal vertical space from the form fields.
+  const headerBlock = (
+    <>
+      <Header title={sectionName} subtitle={activeInspection?.property_address} onBack={() => navigation.goBack()} />
+      {typistMode_ === 'ai_instant' && (
+        <View style={styles.aiBanner}>
+          <Text style={styles.aiBannerIcon}>✨</Text>
+          <Text style={styles.aiBannerText}>AI Instant — tap 🎙 next to each item to fill fields automatically</Text>
+        </View>
+      )}
+      {typistMode_ === 'ai_room' && (
+        <View style={styles.aiBanner}>
+          <Text style={styles.aiBannerIcon}>✨</Text>
+          <Text style={styles.aiBannerText}>AI by Room — record the whole room, then tap Transcribe to fill fields</Text>
+        </View>
+      )}
+      {typistMode_ === 'human' && (
+        <View style={[styles.aiBanner, styles.aiBannerHuman]}>
+          <Text style={styles.aiBannerIcon}>🎙</Text>
+          <Text style={styles.aiBannerText}>Human Typist assigned — record audio below, it will sync to the typist</Text>
+        </View>
+      )}
+      {aiError ? (
+        <View style={styles.aiErrorBanner}>
+          <Text style={styles.aiErrorText}>⚠️ {aiError}</Text>
+          <TouchableOpacity onPress={() => setAiError('')}><Text style={styles.aiErrorDismiss}>✕</Text></TouchableOpacity>
+        </View>
+      ) : null}
+    </>
+  )
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={[styles.screen, { paddingTop: insets.top }]}>
-        <Header title={sectionName} subtitle={activeInspection?.property_address} onBack={() => navigation.goBack()} />
-
-        {/* Typist mode banner */}
-        {typistMode_ === 'ai_instant' && (
-          <View style={styles.aiBanner}>
-            <Text style={styles.aiBannerIcon}>✨</Text>
-            <Text style={styles.aiBannerText}>AI Instant — tap 🎙 next to each item to fill fields automatically</Text>
-          </View>
-        )}
-        {typistMode_ === 'ai_room' && (
-          <View style={styles.aiBanner}>
-            <Text style={styles.aiBannerIcon}>✨</Text>
-            <Text style={styles.aiBannerText}>AI by Room — record the whole room, then tap Transcribe to fill fields</Text>
-          </View>
-        )}
-        {typistMode_ === 'human' && (
-          <View style={[styles.aiBanner, styles.aiBannerHuman]}>
-            <Text style={styles.aiBannerIcon}>🎙</Text>
-            <Text style={styles.aiBannerText}>Human Typist assigned — record audio below, it will sync to the typist</Text>
-          </View>
-        )}
-
-
-        {/* AI error banner */}
-        {aiError ? (
-          <View style={styles.aiErrorBanner}>
-            <Text style={styles.aiErrorText}>⚠️ {aiError}</Text>
-            <TouchableOpacity onPress={() => setAiError('')}><Text style={styles.aiErrorDismiss}>✕</Text></TouchableOpacity>
-          </View>
-        ) : null}
+        {/* Portrait: header fixed above scroll. Landscape: header scrolls with content
+            so the keyboard doesn't eat the fixed header space on small screens. */}
+        {!isLandscape && headerBlock}
 
         {loading ? (
           <View style={styles.loading}><ActivityIndicator color={colors.primary} size="large" /></View>
@@ -1970,6 +2050,7 @@ export default function RoomInspectionScreen() {
             ]}
             keyboardShouldPersistTaps="handled"
           >
+            {isLandscape && headerBlock}
             {/* ── Room Overview Photos ──────────────────────────────────── */}
             {sectionType_ === 'room' && (() => {
               const ovPhotos = getOverviewPhotos()
@@ -2502,6 +2583,21 @@ const styles = StyleSheet.create({
   actionPillDot: { width: 7, height: 7, borderRadius: 4 },
   actionPillText: { fontSize: 12, fontWeight: '600' },
   actionPillResp: { fontSize: 11, fontWeight: '500', opacity: 0.75 },
+  // Check-In photos accordion (shown during check-out inspections)
+  ciPhotosBlock: {
+    marginTop: 6, marginBottom: 4,
+    borderWidth: 1, borderColor: '#c7d2fe',
+    borderRadius: radius.md, overflow: 'hidden',
+    backgroundColor: '#eef2ff',
+  },
+  ciPhotosHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 9,
+  },
+  ciPhotosHeaderText: { fontSize: font.sm, fontWeight: '600', color: '#4338ca' },
+  ciPhotosChevron:    { fontSize: 11, color: '#6366f1' },
+  ciPhotosScroll:     { backgroundColor: '#fff' },
+  ciPhotoThumb:       { width: 96, height: 72, borderRadius: radius.sm },
 })
 
 const actStyles = StyleSheet.create({

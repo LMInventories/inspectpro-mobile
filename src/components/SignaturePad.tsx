@@ -57,8 +57,11 @@ export default function SignaturePad({
       },
       onPanResponderRelease: () => {
         if (currentStroke.current.length > 0) {
-          setStrokes(prev => [...prev, { points: currentStroke.current }])
+          // Snapshot before clearing — functional updates run async, so the ref
+          // must not be cleared until after the snapshot is captured.
+          const completed = currentStroke.current.slice()
           currentStroke.current = []
+          setStrokes(prev => [...prev, { points: completed }])
         }
       },
     })
@@ -124,6 +127,10 @@ export default function SignaturePad({
       const length = Math.sqrt(dx * dx + dy * dy)
       if (length < 0.5) continue
       const angle = Math.atan2(dy, dx) * (180 / Math.PI)
+      // Position the view so its center sits at the midpoint of the segment —
+      // default center-based rotation then places endpoints exactly at p1 and p2.
+      const cx = (p1.x + p2.x) / 2
+      const cy = (p1.y + p2.y) / 2
       lines.push(
         <View
           key={`${key}-${i}`}
@@ -132,12 +139,11 @@ export default function SignaturePad({
             {
               width: length,
               height: strokeWidth,
-              left: p1.x,
-              top: p1.y - strokeWidth / 2,
+              left: cx - length / 2,
+              top: cy - strokeWidth / 2,
               transform: [{ rotate: `${angle}deg` }],
-              transformOrigin: '0 50%',
               backgroundColor: strokeColor,
-            } as any,
+            },
           ]}
         />
       )

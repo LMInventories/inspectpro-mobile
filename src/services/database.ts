@@ -39,6 +39,9 @@ export function initDatabase(): void {
   // Per-inspection typist mode — overrides the clerk-level global setting.
   // Null means "inherit from clerk profile".  Stored as TEXT: 'ai_instant'|'ai_room'|'human'
   try { db.runSync('ALTER TABLE inspections ADD COLUMN typist_mode TEXT') } catch {}
+  // Source check-in report_data cached at CO download time so CI photos are
+  // available offline without a network call during the inspection.
+  try { db.runSync('ALTER TABLE inspections ADD COLUMN source_report_data TEXT') } catch {}
 }
 
 export function saveInspection(inspection: any): void {
@@ -48,35 +51,33 @@ export function saveInspection(inspection: any): void {
   const now = new Date().toISOString()
   if (existing) {
     db.runSync(
-      'UPDATE inspections SET data = ?, report_data = ?, status = ?, updated_at = ? WHERE id = ?',
-      [JSON.stringify(inspection), inspection.report_data || null, inspection.status, now, inspection.id]
+      'UPDATE inspections SET data = ?, report_data = ?, source_report_data = ?, status = ?, updated_at = ? WHERE id = ?',
+      [JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, inspection.id]
     )
   } else {
     db.runSync(
-      `INSERT INTO inspections (id, data, report_data, status, local_status, downloaded_at, updated_at, synced)
-       VALUES (?, ?, ?, ?, 'downloaded', ?, ?, 0)`,
-      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.status, now, now]
+      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced)
+       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0)`,
+      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now]
     )
   }
 }
 
 export function getLocalInspections(): any[] {
   const rows = db.getAllSync<{
-    data: string; report_data: string | null; local_status: string;
-    synced: number; is_finalised: number; typist_mode: string | null;
-  }>('SELECT data, report_data, local_status, synced, is_finalised, typist_mode FROM inspections ORDER BY downloaded_at DESC')
+    data: string; report_data: string | null; source_report_data: string | null;
+    local_status: string; synced: number; is_finalised: number; typist_mode: string | null;
+  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode FROM inspections ORDER BY downloaded_at DESC')
   return rows.map(r => {
     const base = JSON.parse(r.data)
     return {
       ...base,
-      report_data:  r.report_data,
-      local_status: r.local_status,
-      synced:       r.synced === 1,
-      is_finalised: r.is_finalised === 1,
-      // Merged value used for sync and display
-      typist_mode: r.typist_mode ?? base.typist_mode ?? null,
-      // Separate field: only set when the clerk explicitly changed it on the device.
-      // Used by RoomInspectionScreen to give per-inspection overrides highest priority.
+      report_data:        r.report_data,
+      source_report_data: r.source_report_data,
+      local_status:       r.local_status,
+      synced:             r.synced === 1,
+      is_finalised:       r.is_finalised === 1,
+      typist_mode:        r.typist_mode ?? base.typist_mode ?? null,
       local_typist_override: r.typist_mode ?? null,
     }
   })
@@ -84,18 +85,19 @@ export function getLocalInspections(): any[] {
 
 export function getLocalInspection(id: number): any | null {
   const r = db.getFirstSync<{
-    data: string; report_data: string | null; local_status: string;
-    synced: number; is_finalised: number; typist_mode: string | null;
-  }>('SELECT data, report_data, local_status, synced, is_finalised, typist_mode FROM inspections WHERE id = ?', [id])
+    data: string; report_data: string | null; source_report_data: string | null;
+    local_status: string; synced: number; is_finalised: number; typist_mode: string | null;
+  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode FROM inspections WHERE id = ?', [id])
   if (!r) return null
   const base = JSON.parse(r.data)
   return {
     ...base,
-    report_data:  r.report_data,
-    local_status: r.local_status,
-    synced:       r.synced === 1,
-    is_finalised: r.is_finalised === 1,
-    typist_mode: r.typist_mode ?? base.typist_mode ?? null,
+    report_data:        r.report_data,
+    source_report_data: r.source_report_data,
+    local_status:       r.local_status,
+    synced:             r.synced === 1,
+    is_finalised:       r.is_finalised === 1,
+    typist_mode:        r.typist_mode ?? base.typist_mode ?? null,
     local_typist_override: r.typist_mode ?? null,
   }
 }
