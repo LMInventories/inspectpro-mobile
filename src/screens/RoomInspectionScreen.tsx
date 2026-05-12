@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Animated, Dimensions, useWindowDimensions,
+  KeyboardAvoidingView, Keyboard, Platform, Animated, Dimensions, useWindowDimensions,
 } from 'react-native'
 import {
   GestureHandlerRootView,
@@ -183,11 +183,28 @@ export default function RoomInspectionScreen() {
   function handleTextFocus(itemId: string) {
     const y = itemLayoutsRef.current.get(itemId)
     if (y === undefined) return
-    // Small delay lets the keyboard animation start before we scroll, so the
-    // KeyboardAvoidingView has already resized the content area.
-    setTimeout(() => {
-      itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
-    }, 120)
+    const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
+
+    if (Platform.OS === 'android') {
+      // On Android, wait for the keyboard to be fully visible before scrolling so
+      // KeyboardAvoidingView has finished resizing the content area.
+      let done = false
+      const sub = Keyboard.addListener('keyboardDidShow', () => {
+        if (done) return
+        done = true
+        sub.remove()
+        doScroll()
+      })
+      // Fallback: keyboard may already be visible (switching between inputs)
+      setTimeout(() => {
+        if (done) return
+        done = true
+        sub.remove()
+        doScroll()
+      }, 350)
+    } else {
+      setTimeout(doScroll, 120)
+    }
   }
 
   async function buildItems() {
@@ -2029,7 +2046,7 @@ export default function RoomInspectionScreen() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         {/* Portrait: header fixed above scroll. Landscape: header scrolls with content
             so the keyboard doesn't eat the fixed header space on small screens. */}
