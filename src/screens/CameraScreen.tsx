@@ -261,8 +261,8 @@ export default function CameraScreen() {
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
     Animated.sequence([
-      Animated.timing(captureFlash, { toValue: 0.35, duration: 10,  useNativeDriver: true }),
-      Animated.timing(captureFlash, { toValue: 0,    duration: 40,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0.35, duration: 5,   useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0,    duration: 20,  useNativeDriver: true }),
     ]).start()
   }
 
