@@ -290,25 +290,36 @@ export async function syncSingleInspection(
 
     const payload: any = { report_data: JSON.stringify(rdForSync) }
 
-    const role        = user?.role
-    const typistMode  = (fresh as any)?.typist_mode ?? null
-    const freshStatus = fresh?.status || inspection.status
-    const localStatus = fresh?.local_status || inspection.local_status
-    const isActive    = freshStatus === 'active' || localStatus === 'active'
-    const typistName  = (fresh?.typist_name || fresh?.typist?.name || '').toLowerCase()
-    const typistIsAi  = fresh?.typist_is_ai === true ||
-                        fresh?.typist?.is_ai === true ||
-                        typistName === 'ai typist' ||
-                        typistName.startsWith('ai ')
-    const isAiMode    = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_room'
-    const isFinalised = !!(fresh as any)?.is_finalised
+    const role           = user?.role
+    const typistMode     = (fresh as any)?.typist_mode ?? null
+    const freshStatus    = fresh?.status || inspection.status
+    const localStatus    = fresh?.local_status || inspection.local_status
+    const inspectionType = (fresh as any)?.inspection_type || inspection.inspection_type
+    const isActive       = freshStatus === 'active' || localStatus === 'active'
+    const typistName     = (fresh?.typist_name || fresh?.typist?.name || '').toLowerCase()
+    const typistIsAi     = fresh?.typist_is_ai === true ||
+                           fresh?.typist?.is_ai === true ||
+                           typistName === 'ai typist' ||
+                           typistName.startsWith('ai ')
+    const isAiMode       = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_room'
+    const isFinalised    = !!(fresh as any)?.is_finalised
 
     if (typistMode !== null) payload.typist_mode = typistMode
 
-    if (role === 'clerk' && isActive) {
-      if (isFinalised) {
-        payload.status = isAiMode ? 'complete' : 'processing'
-      }
+    if (inspectionType === 'heads_up' && isActive && isFinalised) {
+      // Heads-Up Reports have no typist step — always go straight to complete
+      payload.status = 'complete'
+    } else if ((role === 'admin' || role === 'manager') && isFinalised) {
+      // Admins/managers bypass the review step — finalised reports go straight
+      // to Complete so they can be sent to clients without a browser login.
+      // isActive is intentionally NOT required: admins frequently fetch jobs
+      // that are already in 'processing' or 'review' status after the clerk or
+      // typist step, so freshStatus is never 'active' for those jobs.
+      payload.status = 'complete'
+    } else if (role === 'clerk' && isActive && isFinalised) {
+      // Clerk-finalised reports go to Review for admin approval regardless of
+      // typist mode or inspection type (admin then marks Complete from the web).
+      payload.status = 'review'
     } else if (role === 'typist' && freshStatus === 'processing') {
       payload.status = 'review'
     }

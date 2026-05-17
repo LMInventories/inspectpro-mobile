@@ -35,6 +35,7 @@ import {
   Animated,
   Image,
   BackHandler,
+  AppState,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
@@ -88,6 +89,12 @@ export default function CameraScreen() {
   const rotAnim = useRef(new Animated.Value(0)).current
   const lastOrientRef = useRef<string>('portrait_up')
   const isFocused = useIsFocused()
+
+  // ── Camera remount key ─────────────────────────────────────────────────────
+  // VisionCamera can enter a broken state after the app is backgrounded and
+  // resumed. Incrementing this key forces the Camera component to unmount and
+  // remount, which fully reinitialises the native camera session.
+  const [cameraKey, setCameraKey] = useState(0)
 
   useEffect(() => {
     if (!isFocused) return
@@ -158,10 +165,29 @@ export default function CameraScreen() {
   })
   const frontDevice = useCameraDevice('front')
 
-  // Re-fetch device list when camera permission is granted
+  // Re-fetch device list when camera permission is granted or screen gains focus
   useEffect(() => {
     try { setAllDevices(Camera.getAvailableCameraDevices()) } catch {}
   }, [hasPermission])
+
+  useFocusEffect(useCallback(() => {
+    try { setAllDevices(Camera.getAvailableCameraDevices()) } catch {}
+  }, []))
+
+  // Force a full Camera remount when the app returns from background.
+  // VisionCamera's native session can silently break after backgrounding;
+  // toggling isActive alone doesn't always recover it.
+  useEffect(() => {
+    if (!isFocused) return
+    let prevState = AppState.currentState
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (prevState.match(/inactive|background/) && nextState === 'active') {
+        setCameraKey(k => k + 1)
+      }
+      prevState = nextState
+    })
+    return () => sub.remove()
+  }, [isFocused])
 
   // From all devices, find back-facing cameras and pick best main + ultra-wide.
   const backDevices: CameraDevice[] = allDevices.filter((d: CameraDevice) => d.position === 'back')
@@ -235,8 +261,8 @@ export default function CameraScreen() {
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
     Animated.sequence([
-      Animated.timing(captureFlash, { toValue: 0.35, duration: 20,  useNativeDriver: true }),
-      Animated.timing(captureFlash, { toValue: 0,    duration: 80,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0.35, duration: 10,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0,    duration: 40,  useNativeDriver: true }),
     ]).start()
   }
 
@@ -436,6 +462,7 @@ export default function CameraScreen() {
           <GestureDetector gesture={tapGesture}>
             <View style={styles.viewfinder}>
               <Camera
+                key={cameraKey}
                 ref={cameraRef}
                 style={StyleSheet.absoluteFill}
                 device={device}

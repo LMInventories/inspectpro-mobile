@@ -151,6 +151,13 @@ export default function RoomInspectionScreen() {
   // Track which photo target is pending (for camera handoff)
   const cameraTargetRef = useRef<{ type: 'item'; itemId: string } | { type: 'overview' } | null>(null)
 
+  // Clear the camera handler when this screen unmounts so stale closures don't
+  // accumulate. On focus-loss (navigating TO the camera) the handler must stay
+  // alive — clearCameraTarget must only run on full unmount, not on blur.
+  useEffect(() => {
+    return () => { clearCameraTarget() }
+  }, [])
+
   useFocusEffect(useCallback(() => { loadInspection(inspectionId) }, [inspectionId]))
 
   // Pick up any photo parked in cameraStore (fallback if handler was GC'd)

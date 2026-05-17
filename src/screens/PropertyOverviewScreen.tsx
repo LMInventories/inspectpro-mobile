@@ -169,7 +169,6 @@ export default function PropertyOverviewScreen() {
 
     const hiddenRooms: string[] = rd['_hiddenRooms'] || []
     const roomNames: Record<string, string> = rd['_roomNames'] || {}
-    const rooms: ReviewRoom[] = []
 
     // Extract condition from a data blob, respecting check-out vs inventory
     const getCond = (data: any): string => data
@@ -183,6 +182,10 @@ export default function PropertyOverviewScreen() {
         cond:  isCheckOut ? (sub.checkOutCondition || sub.condition || '') : (sub.condition || ''),
       })).filter((s: ReviewSub) => s.label || s.cond)
     }
+
+    // Collect all rooms into a Map so we can apply _roomOrder afterwards,
+    // mirroring the buildOrderedRooms() logic in RoomSelectionScreen.
+    const roomMap = new Map<string, ReviewRoom>()
 
     // Template rooms
     const templateSections: any[] = (template?.sections || []).filter(
@@ -212,7 +215,7 @@ export default function PropertyOverviewScreen() {
         const subs     = buildSubs(merged)
         items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs })
       }
-      if (items.length > 0) rooms.push({ name: displayName, items })
+      if (items.length > 0) roomMap.set(key, { name: displayName, items })
     }
 
     // Custom rooms
@@ -229,7 +232,23 @@ export default function PropertyOverviewScreen() {
         const subs   = buildSubs(merged)
         items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs })
       }
-      if (items.length > 0) rooms.push({ name: roomNames[cr.key] ?? cr.name ?? 'Room', items })
+      if (items.length > 0) roomMap.set(cr.key, { name: roomNames[cr.key] ?? cr.name ?? 'Room', items })
+    }
+
+    // Apply user-defined room order (_roomOrder mirrors RoomSelectionScreen drag order).
+    // Rooms not yet in _roomOrder fall through to end in their default order.
+    const order: string[] = rd['_roomOrder'] || []
+    const rooms: ReviewRoom[] = []
+    const seen = new Set<string>()
+    for (const key of order) {
+      if (roomMap.has(key)) { rooms.push(roomMap.get(key)!); seen.add(key) }
+    }
+    for (const section of templateSections) {
+      const key = String(section.id)
+      if (!seen.has(key) && roomMap.has(key)) rooms.push(roomMap.get(key)!)
+    }
+    for (const cr of customRooms) {
+      if (!seen.has(cr.key) && roomMap.has(cr.key)) rooms.push(roomMap.get(cr.key)!)
     }
 
     setReviewRooms(rooms)

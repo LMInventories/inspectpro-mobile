@@ -52,13 +52,18 @@ export default function LoginScreen() {
   }
 
   return (
+    // On Android the manifest sets windowSoftInputMode="adjustNothing" (required
+    // to prevent tab-bar layout jank). KAV behavior="height" is therefore a no-op
+    // on Android, so we disable it there and let automaticallyAdjustKeyboardInsets
+    // on the ScrollView handle inset compensation instead.
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: colors.surface }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + spacing.xl }]}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'android'}
       >
         {/* Logo */}
         <View style={styles.logoWrap}>

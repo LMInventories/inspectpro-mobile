@@ -46,11 +46,15 @@ export function triggerCapture(fileUri: string): void {
 /**
  * Call this in a useFocusEffect on the originating screen as a safety net.
  * Returns the pending URI and clears it, or returns null if nothing is waiting.
+ *
+ * Intentionally does NOT clear _handler — the handler must stay alive so that
+ * late-arriving triggerCapture calls (from async file copies that finish after
+ * the user has navigated back) can still reach the originating screen.
+ * _handler is only cleared by clearCameraTarget() or by the next setCameraTarget().
  */
 export function processPendingPhotos(): string | null {
   const uri = _pendingUri
   _pendingUri = null
-  _handler = null
   return uri
 }
 
