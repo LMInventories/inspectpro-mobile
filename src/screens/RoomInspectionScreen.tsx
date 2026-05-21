@@ -23,7 +23,7 @@ import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../ser
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
 import Header from '../components/Header'
-import { colors, font, radius, spacing } from '../utils/theme'
+import { colors, useColors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
 import SwipeableRow from '../components/SwipeableRow'
 
@@ -172,6 +172,19 @@ export default function RoomInspectionScreen() {
   }, []))
 
   useEffect(() => { buildItems() }, [sectionKey])
+
+  // ── Dynamic theme colours ────────────────────────────────────────────────────
+  const c  = useColors()
+  const dm = {
+    bg:        { backgroundColor: c.background },
+    surface:   { backgroundColor: c.surface },
+    border:    { borderColor: c.border },
+    text:      { color: c.text },
+    textMid:   { color: c.textMid },
+    textLight: { color: c.textLight },
+    muted:     { backgroundColor: c.muted },
+    input:     { backgroundColor: c.surface, borderColor: c.border, color: c.text } as const,
+  }
 
   // Load source CI report_data from local DB whenever the active inspection changes.
   // Pre-downloaded at fetch time — no network call needed here.
@@ -1425,7 +1438,7 @@ export default function RoomInspectionScreen() {
         )}
         {/* Top row: label + icon buttons */}
         <View style={styles.photosHeader}>
-          <Text style={styles.fieldLabel}>
+          <Text style={[styles.fieldLabel, dm.textLight]}>
             Photos{count > 0 ? ` (${count})` : ''}
           </Text>
           <View style={styles.photoIconBtns}>
@@ -1545,10 +1558,11 @@ export default function RoomInspectionScreen() {
       ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: itemLabel, count: 1 }) }, ...baseActions]
       : baseActions
 
-    const isDragging = itemDragFrom === idx
-    const shift = (itemDragFrom !== null && itemDragTo !== null && !isDragging)
+    const isDragging  = itemDragFrom === idx
+    const shift       = (itemDragFrom !== null && itemDragTo !== null && !isDragging)
       ? getItemShift(idx, itemDragFrom, itemDragTo)
       : 0
+    const photoCount  = (getReportData()[sectionKey]?.[String(item.id)]?._photos as string[] | undefined)?.length ?? 0
 
     return (
       <Animated.View
@@ -1566,11 +1580,16 @@ export default function RoomInspectionScreen() {
         actions={itemActions}
         disabled={itemDragFrom !== null}
       >
-      <View style={[styles.itemCard, isDragging && styles.itemCardDragging]}>
+      <View style={[styles.itemCard, dm.surface, { borderColor: c.border }, isDragging && styles.itemCardDragging]}>
         {/* Header */}
         <View style={styles.itemHeader}>
           <View style={styles.itemHeaderLeft}>
-            <Text style={styles.itemName}>{label}</Text>
+            <Text style={[styles.itemName, dm.text]}>{label}</Text>
+            {photoCount > 0 && (
+              <View style={styles.photoCountBadge}>
+                <Text style={styles.photoCountText}>📷 {photoCount}</Text>
+              </View>
+            )}
           </View>
           {/* Drag handle — long-press and drag to reorder */}
           <GestureDetector gesture={makeItemDragGesture(idx)}>
@@ -1581,7 +1600,7 @@ export default function RoomInspectionScreen() {
         </View>
 
         {/* Question label for smoke/health/fire */}
-        {item.question ? <Text style={styles.questionText}>{item.question}</Text> : null}
+        {item.question ? <Text style={[styles.questionText, dm.textMid]}>{item.question}</Text> : null}
 
         {/* ── ROOM ITEMS ── */}
         {sectionType_ === 'room' && (
@@ -1590,19 +1609,19 @@ export default function RoomInspectionScreen() {
             <>
               {/* Description — read-only from check-in */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Description</Text>
-                <View style={styles.coReadOnly}>
-                  <Text style={styles.coReadOnlyText}>{getField(item.id, 'description') || '—'}</Text>
+                <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
+                <View style={[styles.coReadOnly, dm.muted, { borderColor: c.border }]}>
+                  <Text style={[styles.coReadOnlyText, dm.textMid]}>{getField(item.id, 'description') || '—'}</Text>
                 </View>
               </View>
               {/* Condition at Check In — read-only */}
               <View style={styles.fieldGroup}>
                 <View style={styles.coLabelRow}>
-                  <Text style={styles.fieldLabel}>Condition at Check In</Text>
+                  <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check In</Text>
                   <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>Inventory</Text></View>
                 </View>
-                <View style={styles.coReadOnly}>
-                  <Text style={styles.coReadOnlyText}>{getField(item.id, 'inventoryCondition') || '—'}</Text>
+                <View style={[styles.coReadOnly, dm.muted, { borderColor: c.border }]}>
+                  <Text style={[styles.coReadOnlyText, dm.textMid]}>{getField(item.id, 'inventoryCondition') || '—'}</Text>
                 </View>
               </View>
               {/* Check-In reference photos — collapsible, for visual comparison */}
@@ -1612,9 +1631,9 @@ export default function RoomInspectionScreen() {
                    "As Inventory+" is auto-set on first focus (means item matches check-in,
                    any extra conditions are appended below it on new lines). */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Condition at Check Out</Text>
+                <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                 <TextInput
-                  style={styles.notesInput}
+                  style={[styles.notesInput, dm.input]}
                   value={getField(item.id, 'checkOutCondition')}
                   onFocus={() => {
                     handleTextFocus(item.id)
@@ -1624,13 +1643,13 @@ export default function RoomInspectionScreen() {
                   }}
                   onChangeText={v => setField(item.id, 'checkOutCondition', v)}
                   placeholder="As Inventory+"
-                  placeholderTextColor={colors.textLight}
+                  placeholderTextColor={c.textLight}
                   multiline textAlignVertical="top"
                 />
               </View>
               {/* Actions */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Actions</Text>
+                <Text style={[styles.fieldLabel, dm.textLight]}>Actions</Text>
                 <TouchableOpacity
                   style={[styles.actionsBtn, getItemActions(item.id).length > 0 && styles.actionsBtnActive]}
                   onPress={() => openActionsModal(item.id, item.label || item.name || '', getField(item.id, 'checkOutCondition'))}
@@ -1664,21 +1683,21 @@ export default function RoomInspectionScreen() {
             <>
               {!isDamageReport_ && (
                 <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>Description</Text>
+                  <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
                   <TextInput
-                    style={styles.notesInput}
+                    style={[styles.notesInput, dm.input]}
                     value={getField(item.id, 'description')}
                     onFocus={() => handleTextFocus(item.id)}
                     onChangeText={v => setField(item.id, 'description', v)}
                     placeholder="Describe item appearance, state, notes…"
-                    placeholderTextColor={colors.textLight}
+                    placeholderTextColor={c.textLight}
                     multiline textAlignVertical="top"
                   />
                 </View>
               )}
               {item.hasCondition !== false && (
                 <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>
+                  <Text style={[styles.fieldLabel, dm.textLight]}>
                     {item.answerOptions?.length ? item.label : 'Condition'}
                   </Text>
                   {item.answerOptions?.length ? (
@@ -1702,12 +1721,12 @@ export default function RoomInspectionScreen() {
                     </View>
                   ) : (
                     <TextInput
-                      style={styles.notesInput}
+                      style={[styles.notesInput, dm.input]}
                       value={getField(item.id, 'condition')}
                       onFocus={() => handleTextFocus(item.id)}
                       onChangeText={v => setField(item.id, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn, Damaged…"
-                      placeholderTextColor={colors.textLight}
+                      placeholderTextColor={c.textLight}
                       multiline textAlignVertical="top"
                     />
                   )}
@@ -1720,14 +1739,14 @@ export default function RoomInspectionScreen() {
         {/* ── FIXED: condition_summary — condition text box ── */}
         {item.hasConditionText && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Condition</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
             <TextInput
-              style={styles.notesInput}
+              style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'condition')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'condition', v)}
               placeholder="Describe condition…"
-              placeholderTextColor={colors.textLight}
+              placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
             />
           </View>
@@ -1736,7 +1755,7 @@ export default function RoomInspectionScreen() {
         {/* Answer — smoke alarms, health & safety, fire door */}
         {item.hasAnswer && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Answer</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Answer</Text>
             <OptionPicker options={ANSWER_OPTIONS} value={getField(item.id, 'answer')} onSelect={v => setField(item.id, 'answer', v)} />
           </View>
         )}
@@ -1744,13 +1763,13 @@ export default function RoomInspectionScreen() {
         {/* Notes — smoke/health/fire door */}
         {item.hasNotes && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Notes</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Notes</Text>
             <TextInput
-              style={styles.notesInput}
+              style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'notes')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'notes', v)}
-              placeholder="Notes…" placeholderTextColor={colors.textLight}
+              placeholder="Notes…" placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
             />
           </View>
@@ -1759,7 +1778,7 @@ export default function RoomInspectionScreen() {
         {/* Cleanliness — cleaning summary — dropdown */}
         {item.hasCleanliness && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Cleanliness</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Cleanliness</Text>
             <TouchableOpacity
               style={styles.dropdownBtn}
               onPress={() => { setCleanlinessItemId(item.id); setCleanlinessOpen(true) }}
@@ -1775,13 +1794,13 @@ export default function RoomInspectionScreen() {
         {/* Cleanliness notes */}
         {item.hasCleanlinessNotes && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Additional Notes</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Additional Notes</Text>
             <TextInput
-              style={styles.notesInput}
+              style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'cleanlinessNotes')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'cleanlinessNotes', v)}
-              placeholder="Additional notes…" placeholderTextColor={colors.textLight}
+              placeholder="Additional notes…" placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
             />
           </View>
@@ -1790,14 +1809,14 @@ export default function RoomInspectionScreen() {
         {/* Keys — description */}
         {item.hasDescription && sectionType_ !== 'room' && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Description</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
             <TextInput
-              style={styles.notesInput}
+              style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'description')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'description', v)}
               placeholder="e.g. 2 × Yale keys…"
-              placeholderTextColor={colors.textLight}
+              placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
             />
           </View>
@@ -1806,14 +1825,14 @@ export default function RoomInspectionScreen() {
         {/* Location / serial */}
         {item.hasLocationSerial && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Location / Serial</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Location / Serial</Text>
             <TextInput
-              style={styles.notesInput}
+              style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'locationSerial')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'locationSerial', v)}
               placeholder={'Located to [location]\nSerial Number: [number]'}
-              placeholderTextColor={colors.textLight}
+              placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
             />
           </View>
@@ -1822,13 +1841,13 @@ export default function RoomInspectionScreen() {
         {/* Meter reading */}
         {item.hasReading && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Reading</Text>
+            <Text style={[styles.fieldLabel, dm.textLight]}>Reading</Text>
             <TextInput
               style={[styles.notesInput, styles.inlineInput]}
               value={getField(item.id, 'reading')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'reading', v)}
-              placeholder="e.g. 12345.6" placeholderTextColor={colors.textLight}
+              placeholder="e.g. 12345.6" placeholderTextColor={c.textLight}
               keyboardType="decimal-pad"
             />
           </View>
@@ -1857,24 +1876,24 @@ export default function RoomInspectionScreen() {
                     </Text>
                   </View>
                   <View style={styles.fieldGroup}>
-                    <Text style={styles.fieldLabel}>Description</Text>
-                    <View style={styles.coReadOnly}>
-                      <Text style={styles.coReadOnlyText}>{sub.description || '—'}</Text>
+                    <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
+                    <View style={[styles.coReadOnly, dm.muted, { borderColor: c.border }]}>
+                      <Text style={[styles.coReadOnlyText, dm.textMid]}>{sub.description || '—'}</Text>
                     </View>
                   </View>
                   <View style={styles.fieldGroup}>
                     <View style={styles.coLabelRow}>
-                      <Text style={styles.fieldLabel}>Condition at Check In</Text>
+                      <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check In</Text>
                       <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>Inventory</Text></View>
                     </View>
-                    <View style={styles.coReadOnly}>
-                      <Text style={styles.coReadOnlyText}>{sub.inventoryCondition || sub.condition || '—'}</Text>
+                    <View style={[styles.coReadOnly, dm.muted, { borderColor: c.border }]}>
+                      <Text style={[styles.coReadOnlyText, dm.textMid]}>{sub.inventoryCondition || sub.condition || '—'}</Text>
                     </View>
                   </View>
                   <View style={styles.fieldGroup}>
-                    <Text style={styles.fieldLabel}>Condition at Check Out</Text>
+                    <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                     <TextInput
-                      style={styles.notesInput}
+                      style={[styles.notesInput, dm.input]}
                       value={sub.checkOutCondition || ''}
                       onFocus={() => {
                         handleTextFocus(item.id)
@@ -1884,13 +1903,13 @@ export default function RoomInspectionScreen() {
                       }}
                       onChangeText={v => setSubField(item.id, sub._sid, 'checkOutCondition', v)}
                       placeholder="As Inventory+"
-                      placeholderTextColor={colors.textLight}
+                      placeholderTextColor={c.textLight}
                       multiline textAlignVertical="top"
                     />
                   </View>
                   {/* Sub-item Actions — same modal as main items, keyed by _sid */}
                   <View style={styles.fieldGroup}>
-                    <Text style={styles.fieldLabel}>Actions</Text>
+                    <Text style={[styles.fieldLabel, dm.textLight]}>Actions</Text>
                     <TouchableOpacity
                       style={[styles.actionsBtn, getItemActions(sub._sid).length > 0 && styles.actionsBtnActive]}
                       onPress={() => openActionsModal(
@@ -1959,26 +1978,26 @@ export default function RoomInspectionScreen() {
                     </TouchableOpacity>
                   </View>
                   <View style={styles.fieldGroup}>
-                    <Text style={styles.fieldLabel}>Description</Text>
+                    <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
                     <TextInput
-                      style={styles.notesInput}
+                      style={[styles.notesInput, dm.input]}
                       value={sub.description}
                       onFocus={() => handleTextFocus(item.id)}
                       onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
                       placeholder="Describe sub-item…"
-                      placeholderTextColor={colors.textLight}
+                      placeholderTextColor={c.textLight}
                       multiline textAlignVertical="top"
                     />
                   </View>
                   <View style={styles.fieldGroup}>
-                    <Text style={styles.fieldLabel}>Condition</Text>
+                    <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
                     <TextInput
-                      style={styles.notesInput}
+                      style={[styles.notesInput, dm.input]}
                       value={sub.condition}
                       onFocus={() => handleTextFocus(item.id)}
                       onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn…"
-                      placeholderTextColor={colors.textLight}
+                      placeholderTextColor={c.textLight}
                       multiline textAlignVertical="top"
                     />
                   </View>
@@ -2054,7 +2073,7 @@ export default function RoomInspectionScreen() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <View style={[styles.screen, dm.bg, { paddingTop: insets.top }]}>
         {/* Portrait: header fixed above scroll. Landscape: header scrolls with content
             so the keyboard doesn't eat the fixed header space on small screens. */}
         {!isLandscape && headerBlock}
@@ -2380,7 +2399,7 @@ export default function RoomInspectionScreen() {
                                   })
                                 }}
                                 placeholder="e.g. Heavy marks to low level door…"
-                                placeholderTextColor={colors.textLight}
+                                placeholderTextColor={c.textLight}
                                 multiline
                               />
                             )}
@@ -2434,7 +2453,7 @@ export default function RoomInspectionScreen() {
           <View style={mStyles.overlay}><View style={mStyles.box}>
             <Text style={mStyles.title}>Add Item</Text>
             <TextInput style={mStyles.input} value={newItemName} onChangeText={setNewItemName}
-              placeholder="Item name…" placeholderTextColor={colors.textLight} autoFocus />
+              placeholder="Item name…" placeholderTextColor={c.textLight} autoFocus />
             <View style={mStyles.actions}>
               <TouchableOpacity style={mStyles.cancel} onPress={() => { setAddItemModal(false); setNewItemName('') }}>
                 <Text style={mStyles.cancelText}>Cancel</Text>
@@ -2493,6 +2512,8 @@ const styles = StyleSheet.create({
   deleteBtn: { fontSize: font.md, color: colors.danger, padding: 4 },
   itemDragHandle: { paddingHorizontal: 8, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
   itemDragHandleIcon: { fontSize: 18, color: colors.textLight, letterSpacing: 1 },
+  photoCountBadge: { backgroundColor: colors.primaryLight, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, flexShrink: 0 },
+  photoCountText:  { fontSize: 11, color: colors.primary, fontWeight: '700' },
   questionText: { fontSize: font.sm, color: colors.textMid, fontStyle: 'italic', marginBottom: spacing.xs },
   fieldGroup: { marginTop: 8 },
   fieldLabel: { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },

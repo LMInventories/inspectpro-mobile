@@ -13,24 +13,46 @@
  *   • Server returns 503 (S3 not configured)   → encode all photos as base64
  *   • Individual upload fails                   → encode that photo as base64
  *
- * This drops sync payload from ~18 MB (base64) to ~50 KB (text only) when S3
- * is configured.
+ * Retry strategy:
+ *   • Up to MAX_SYNC_RETRIES attempts with exponential backoff (2^n seconds)
+ *   • Retries on: network errors, 502, 503, 504, 429
+ *   • No retry on: 4xx auth errors (401, 403), 409 conflict, 413 too large
+ *
+ * Conflict detection:
+ *   • `server_updated_at` (the updated_at value from the last download/sync)
+ *     is sent with every sync request so the server can reject with HTTP 409
+ *     if another device has pushed changes since we last pulled.
+ *
+ * Audio cleanup:
+ *   • After a successful sync, local audio files are deleted from device storage
+ *     and their DB rows are marked synced — they are no longer needed on-device.
  */
-import { getLocalInspection, getAudioRecordings, markSynced } from './database'
+import { getLocalInspection, getAudioRecordings, markSynced, markAudioSynced } from './database'
 import { api } from './api'
 import * as FileSystem from 'expo-file-system/legacy'
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
+import { Alert } from 'react-native'
 
-export type SyncResult = { id: number; address: string; success: boolean; error?: string }
+export type SyncResult = { id: number; address: string; success: boolean; error?: string; conflict?: boolean }
 
 export type SyncProgress = {
-  phase: 'audio' | 'photos' | 'uploading'
+  phase: 'audio' | 'photos' | 'uploading' | 'retrying'
   done: number
   total: number
+  attempt?: number
 }
 
-const MAX_PHOTO_PX = 1400   // longest edge in pixels
-const SYNC_QUALITY = 0.72   // JPEG quality (0 = worst, 1 = lossless)
+const MAX_PHOTO_PX    = 1400   // longest edge in pixels
+const SYNC_QUALITY    = 0.72   // JPEG quality (0 = worst, 1 = lossless)
+const MAX_SYNC_RETRIES = 3     // max upload attempts (1 initial + 2 retries)
+
+// Status codes that are safe to retry (transient server / network issues)
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+
+// ── Delay helper ─────────────────────────────────────────────────────────────
+function sleep(ms: number) {
+  return new Promise<void>(resolve => setTimeout(resolve, ms))
+}
 
 // ── Compress a photo to a local temp JPEG, returns its URI ───────────────────
 async function compressPhoto(uri: string): Promise<string> {
@@ -217,6 +239,64 @@ export async function uploadPhotosToS3(
   return rd
 }
 
+// ── Audio cleanup — delete local files after successful server sync ───────────
+async function cleanupAudioFiles(inspectionId: number): Promise<void> {
+  try {
+    const recs = getAudioRecordings(inspectionId)
+    for (const rec of recs) {
+      const uri = rec.file_uri || rec.fileUri
+      if (uri) {
+        try {
+          await FileSystem.deleteAsync(uri, { idempotent: true })
+          console.log(`[Sync] deleted audio file: ${uri}`)
+        } catch (e) {
+          console.warn(`[Sync] could not delete audio file ${uri}:`, e)
+        }
+      }
+    }
+    markAudioSynced(inspectionId)
+    console.log(`[Sync] audio cleanup complete for inspection ${inspectionId} (${recs.length} files)`)
+  } catch (e) {
+    // Non-fatal — audio files will be cleaned up on next sync or when storage runs low
+    console.warn('[Sync] audio cleanup failed:', e)
+  }
+}
+
+// ── Sync upload with exponential backoff retry ────────────────────────────────
+async function syncWithRetry(
+  id: number,
+  payload: any,
+  onProgress?: (p: SyncProgress) => void
+): Promise<{ data: any }> {
+  let lastErr: any
+  for (let attempt = 1; attempt <= MAX_SYNC_RETRIES; attempt++) {
+    try {
+      onProgress?.({ phase: 'uploading', done: 0, total: 1, attempt })
+      const res = await api.syncInspection(id, payload)
+      onProgress?.({ phase: 'uploading', done: 1, total: 1, attempt })
+      return res
+    } catch (err: any) {
+      lastErr = err
+      const status = err?.response?.status
+
+      // Never retry auth / permission / conflict / payload-too-large errors
+      if (status === 401 || status === 403 || status === 409 || status === 413) {
+        throw err
+      }
+
+      if (attempt < MAX_SYNC_RETRIES && (RETRYABLE_STATUSES.has(status) || !status)) {
+        const delayMs = Math.pow(2, attempt) * 1000  // 2s, 4s, 8s…
+        console.log(`[Sync] attempt ${attempt} failed (${status ?? 'network'}), retrying in ${delayMs / 1000}s…`)
+        onProgress?.({ phase: 'retrying', done: attempt, total: MAX_SYNC_RETRIES, attempt })
+        await sleep(delayMs)
+      } else {
+        throw err
+      }
+    }
+  }
+  throw lastErr
+}
+
 // ── Main sync function ────────────────────────────────────────────────────────
 
 export async function syncSingleInspection(
@@ -285,10 +365,14 @@ export async function syncSingleInspection(
       onProgress
     )
 
-    // ── Upload to server ─────────────────────────────────────────────────────
-    onProgress?.({ phase: 'uploading', done: 0, total: 1 })
-
+    // ── Build sync payload ───────────────────────────────────────────────────
     const payload: any = { report_data: JSON.stringify(rdForSync) }
+
+    // Conflict detection: tell the server what updated_at we last saw.
+    // The server returns 409 if someone else has pushed changes since then.
+    if (fresh?.server_updated_at) {
+      payload.client_updated_at = fresh.server_updated_at
+    }
 
     const role           = user?.role
     const typistMode     = (fresh as any)?.typist_mode ?? null
@@ -312,24 +396,38 @@ export async function syncSingleInspection(
     } else if ((role === 'admin' || role === 'manager') && isFinalised) {
       // Admins/managers bypass the review step — finalised reports go straight
       // to Complete so they can be sent to clients without a browser login.
-      // isActive is intentionally NOT required: admins frequently fetch jobs
-      // that are already in 'processing' or 'review' status after the clerk or
-      // typist step, so freshStatus is never 'active' for those jobs.
       payload.status = 'complete'
     } else if (role === 'clerk' && isActive && isFinalised) {
-      // Clerk-finalised reports go to Review for admin approval regardless of
-      // typist mode or inspection type (admin then marks Complete from the web).
+      // Clerk-finalised reports go to Review for admin approval.
       payload.status = 'review'
     } else if (role === 'typist' && freshStatus === 'processing') {
       payload.status = 'review'
     }
 
-    await api.syncInspection(id, payload)
-    markSynced(id)
-    onProgress?.({ phase: 'uploading', done: 1, total: 1 })
+    // ── Upload to server (with retry) ────────────────────────────────────────
+    const response = await syncWithRetry(id, payload, onProgress)
+
+    // ── Post-sync cleanup ────────────────────────────────────────────────────
+    // Store the server's new updated_at so next sync can detect conflicts.
+    const newServerUpdatedAt = response?.data?.updated_at ?? undefined
+    markSynced(id, newServerUpdatedAt)
+
+    // Delete local audio files now that the server has them.
+    // Non-fatal: if this fails the recordings stay on device until next sync.
+    if (totalAudio > 0) {
+      await cleanupAudioFiles(id)
+    }
+
     return { id, address: inspection.property_address, success: true }
 
   } catch (err: any) {
+    // ── Conflict detected — another device edited this inspection ────────────
+    if (err?.response?.status === 409) {
+      const msg = err.response?.data?.error || 'This inspection was edited on another device since you last synced it. Please re-download it to get the latest version.'
+      Alert.alert('Sync Conflict', msg, [{ text: 'OK' }])
+      return { id, address: inspection.property_address, success: false, conflict: true, error: 'Conflict — inspection edited elsewhere' }
+    }
+
     let msg = 'Network error'
     if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
       msg = 'Upload timed out — the payload may be too large or the server is slow. Try again on Wi-Fi.'

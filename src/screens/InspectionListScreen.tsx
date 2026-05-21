@@ -14,7 +14,7 @@ import StatusBadge from '../components/StatusBadge'
 import LocalBadge from '../components/LocalBadge'
 import CreateInspectionModal from '../components/CreateInspectionModal'
 import CreatePropertyModal from '../components/CreatePropertyModal'
-import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
+import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'InspectionList'>
 
@@ -32,6 +32,16 @@ export default function InspectionListScreen() {
   const [showCreateProp,  setShowCreateProp]  = useState(false)
 
   useFocusEffect(useCallback(() => { loadInspections() }, []))
+
+  const c  = useColors()
+  const dm = {
+    bg:        { backgroundColor: c.background },
+    surface:   { backgroundColor: c.surface },
+    text:      { color: c.text },
+    textMid:   { color: c.textMid },
+    textLight: { color: c.textLight },
+    muted:     { backgroundColor: c.muted },
+  }
 
   async function onRefresh() {
     setRefreshing(true)
@@ -86,7 +96,7 @@ export default function InspectionListScreen() {
 
     return (
       <TouchableOpacity
-        style={[styles.card, isSynced && styles.cardSynced]}
+        style={[styles.card, dm.surface, { borderColor: c.border }, isSynced && styles.cardSynced]}
         onPress={() => !isSynced && navigation.navigate('PropertyOverview', { inspectionId: item.id })}
         activeOpacity={isSynced ? 1 : 0.75}
       >
@@ -98,8 +108,8 @@ export default function InspectionListScreen() {
         <View style={styles.cardBody}>
           <View style={styles.cardTop}>
             <View style={styles.cardTopLeft}>
-              <Text style={styles.address} numberOfLines={2}>{item.property_address || 'Unknown address'}</Text>
-              <Text style={styles.client}>{item.client_name || '—'}</Text>
+              <Text style={[styles.address, dm.text]} numberOfLines={2}>{item.property_address || 'Unknown address'}</Text>
+              <Text style={[styles.client, dm.textMid]}>{item.client_name || '—'}</Text>
             </View>
             <View style={styles.cardTopRight}>
               <StatusBadge status={item.status} small />
@@ -109,14 +119,14 @@ export default function InspectionListScreen() {
             </View>
           </View>
 
-          <View style={styles.cardMeta}>
+          <View style={[styles.cardMeta, { borderTopColor: c.border }]}>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Type</Text>
-              <Text style={styles.metaValue}>{TYPE_LABELS[item.inspection_type] ?? item.inspection_type}</Text>
+              <Text style={[styles.metaValue, dm.text]}>{TYPE_LABELS[item.inspection_type] ?? item.inspection_type}</Text>
             </View>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Date</Text>
-              <Text style={styles.metaValue}>{formatDate(item.conduct_date)}</Text>
+              <Text style={[styles.metaValue, dm.text]}>{formatDate(item.conduct_date)}</Text>
             </View>
           </View>
 
@@ -133,7 +143,7 @@ export default function InspectionListScreen() {
                 <Text style={styles.syncedBannerText}>✓ Synced</Text>
               </View>
             ) : (
-              <Text style={styles.tapHint}>Tap to open →</Text>
+              <Text style={[styles.tapHint, dm.textLight]}>Tap to open →</Text>
             )}
           </View>
         </View>
@@ -153,12 +163,12 @@ export default function InspectionListScreen() {
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <View style={[styles.screen, dm.bg, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, dm.surface, { borderBottomColor: c.border }]}>
         <View>
-          <Text style={styles.headerTitle}>My Inspections</Text>
-          <Text style={styles.headerSub}>{user?.name}</Text>
+          <Text style={[styles.headerTitle, dm.text]}>My Inspections</Text>
+          <Text style={[styles.headerSub, dm.textLight]}>{user?.name}</Text>
         </View>
         <View style={styles.headerActions}>
           <TouchableOpacity style={styles.fetchBtn} onPress={() => navigation.navigate('FetchInspections')}>
@@ -167,8 +177,8 @@ export default function InspectionListScreen() {
           <TouchableOpacity style={styles.syncBtn} onPress={() => navigation.navigate('Sync')}>
             <Text style={styles.syncBtnText}>⇅ Sync</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-            <Text style={styles.logoutText}>⏻</Text>
+          <TouchableOpacity style={[styles.logoutBtn, dm.muted]} onPress={handleLogout}>
+            <Text style={[styles.logoutText, dm.textMid]}>⏻</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -176,8 +186,8 @@ export default function InspectionListScreen() {
       {inspections.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>📋</Text>
-          <Text style={styles.emptyTitle}>No inspections downloaded</Text>
-          <Text style={styles.emptySub}>Tap Fetch to download your assigned inspections.</Text>
+          <Text style={[styles.emptyTitle, dm.text]}>No inspections downloaded</Text>
+          <Text style={[styles.emptySub, dm.textMid]}>Tap Fetch to download your assigned inspections.</Text>
           <TouchableOpacity style={styles.btnPrimary} onPress={() => navigation.navigate('FetchInspections')}>
             <Text style={styles.btnPrimaryText}>↓ Fetch Inspections</Text>
           </TouchableOpacity>

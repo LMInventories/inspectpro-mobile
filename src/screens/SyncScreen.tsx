@@ -14,7 +14,7 @@ import { deleteLocalInspection } from '../services/database'
 import { syncSingleInspection, SyncResult, SyncProgress } from '../services/syncService'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
-import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
+import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'Sync'>
 
@@ -36,6 +36,16 @@ export default function SyncScreen() {
     loadInspections()
     setResults(null)
   }, []))
+
+  const c  = useColors()
+  const dm = {
+    bg:        { backgroundColor: c.background },
+    surface:   { backgroundColor: c.surface },
+    border:    { borderColor: c.border },
+    text:      { color: c.text },
+    textMid:   { color: c.textMid },
+    textLight: { color: c.textLight },
+  }
 
   const syncable = inspections.filter(i => !i.synced)
   const done     = inspections.filter(i => i.synced)
@@ -109,13 +119,13 @@ export default function SyncScreen() {
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <View style={[styles.screen, dm.bg, { paddingTop: insets.top }]}>
       <Header title="Sync" subtitle="Upload completed inspections" onBack={() => navigation.goBack()} />
 
       <ScrollView contentContainerStyle={styles.scroll}>
         {results && (
-          <View style={styles.resultsBox}>
-            <Text style={styles.resultsTitle}>{results.filter(r => r.success).length}/{results.length} synced successfully</Text>
+          <View style={[styles.resultsBox, dm.surface, dm.border]}>
+            <Text style={[styles.resultsTitle, dm.text]}>{results.filter(r => r.success).length}/{results.length} synced successfully</Text>
             {results.map(r => (
               <View key={r.id} style={styles.resultRow}>
                 <Text style={r.success ? styles.resultOk : styles.resultFail}>{r.success ? '✓' : '✕'} {r.address}</Text>
@@ -128,7 +138,7 @@ export default function SyncScreen() {
         {syncable.length > 0 && (
           <>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionLabel}>Ready to Sync ({syncable.length})</Text>
+              <Text style={[styles.sectionLabel, dm.textLight]}>Ready to Sync ({syncable.length})</Text>
               <TouchableOpacity onPress={toggleAll}>
                 <Text style={styles.toggleAllText}>{selected.size === syncable.length ? 'Deselect All' : 'Select All'}</Text>
               </TouchableOpacity>
@@ -137,15 +147,15 @@ export default function SyncScreen() {
             {syncable.map(inspection => {
               const isSel = selected.has(inspection.id)
               return (
-                <TouchableOpacity key={inspection.id} style={[styles.card, isSel && styles.cardSelected]} onPress={() => toggleSelect(inspection.id)}>
+                <TouchableOpacity key={inspection.id} style={[styles.card, dm.surface, dm.border, isSel && styles.cardSelected]} onPress={() => toggleSelect(inspection.id)}>
                   <View style={styles.cardCheck}>
-                    <View style={[styles.checkbox, isSel && styles.checkboxChecked]}>
+                    <View style={[styles.checkbox, { borderColor: c.borderDark }, isSel && styles.checkboxChecked]}>
                       {isSel && <Text style={styles.checkboxMark}>✓</Text>}
                     </View>
                   </View>
                   <View style={styles.cardContent}>
-                    <Text style={styles.cardAddress} numberOfLines={2}>{inspection.property_address}</Text>
-                    <Text style={styles.cardMeta}>{TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} · {formatDate(inspection.conduct_date)}</Text>
+                    <Text style={[styles.cardAddress, dm.text]} numberOfLines={2}>{inspection.property_address}</Text>
+                    <Text style={[styles.cardMeta, dm.textLight]}>{TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} · {formatDate(inspection.conduct_date)}</Text>
                     <View style={styles.badgeRow}>
                       <StatusBadge status={inspection.status} small />
                       {(inspection as any).is_finalised && (
@@ -189,13 +199,13 @@ export default function SyncScreen() {
         {done.length > 0 && (
           <>
             <View style={[styles.sectionHeader, { marginTop: spacing.lg }]}>
-              <Text style={styles.sectionLabel}>Synced — Awaiting Removal ({done.length})</Text>
+              <Text style={[styles.sectionLabel, dm.textLight]}>Synced — Awaiting Removal ({done.length})</Text>
             </View>
             {done.map(inspection => (
-              <View key={inspection.id} style={[styles.card, styles.cardDone]}>
+              <View key={inspection.id} style={[styles.card, dm.surface, dm.border, styles.cardDone]}>
                 <View style={styles.cardContent}>
-                  <Text style={[styles.cardAddress, styles.cardAddressDone]} numberOfLines={2}>{inspection.property_address}</Text>
-                  <Text style={styles.cardMeta}>{TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} · {formatDate(inspection.conduct_date)}</Text>
+                  <Text style={[styles.cardAddress, dm.textMid]} numberOfLines={2}>{inspection.property_address}</Text>
+                  <Text style={[styles.cardMeta, dm.textLight]}>{TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} · {formatDate(inspection.conduct_date)}</Text>
                 </View>
                 <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemove(inspection.id, inspection.property_address)}>
                   <Text style={styles.removeBtnText}>Remove</Text>
@@ -208,8 +218,8 @@ export default function SyncScreen() {
         {syncable.length === 0 && done.length === 0 && (
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>☁️</Text>
-            <Text style={styles.emptyTitle}>Nothing to sync</Text>
-            <Text style={styles.emptySub}>Download inspections from the Fetch screen first.</Text>
+            <Text style={[styles.emptyTitle, dm.textMid]}>Nothing to sync</Text>
+            <Text style={[styles.emptySub, dm.textLight]}>Download inspections from the Fetch screen first.</Text>
           </View>
         )}
         <View style={{ height: 40 }} />

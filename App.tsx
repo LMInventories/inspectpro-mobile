@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
-import { StatusBar } from 'react-native'
+import { StatusBar, View, Text, StyleSheet, useColorScheme } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 
 import { useAuthStore } from './src/stores/authStore'
 import { initDatabase } from './src/services/database'
+import { useNetworkStatus } from './src/hooks/useNetworkStatus'
+import { lightColors, darkColors } from './src/utils/theme'
+import { registerBackgroundSyncTask } from './src/tasks/backgroundSync'
 
 import LoginScreen from './src/screens/LoginScreen'
 import InspectionListScreen from './src/screens/InspectionListScreen'
@@ -54,15 +57,45 @@ export type RootStackParamList = {
 
 const Stack = createStackNavigator<RootStackParamList>()
 
+// ── Offline banner ────────────────────────────────────────────────────────────
+function OfflineBanner() {
+  return (
+    <View style={bannerStyles.banner}>
+      <Text style={bannerStyles.text}>⚠️  No connection — working offline</Text>
+    </View>
+  )
+}
+
+const bannerStyles = StyleSheet.create({
+  banner: {
+    backgroundColor: '#92400e',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  text: {
+    color: '#fef3c7',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+})
+
+// ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const { isAuthenticated, initAuth } = useAuthStore()
-  const [dbReady, setDbReady] = useState(false)
+  const [dbReady, setDbReady]         = useState(false)
+  const { isOnline }                  = useNetworkStatus()
+  const colorScheme                   = useColorScheme()
+  const isDark                        = colorScheme === 'dark'
+  const themeColors                   = isDark ? darkColors : lightColors
 
   useEffect(() => {
     async function bootstrap() {
       initDatabase()
       await initAuth()
       setDbReady(true)
+      // Register background sync task — best-effort, non-blocking
+      registerBackgroundSyncTask().catch(() => {})
     }
     bootstrap()
   }, [])
@@ -72,9 +105,16 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
+        <StatusBar
+          barStyle={isDark ? 'light-content' : 'dark-content'}
+          backgroundColor={themeColors.background}
+        />
+        {!isOnline && <OfflineBanner />}
         <NavigationContainer>
-          <Stack.Navigator screenOptions={{ headerShown: false, cardStyle: { backgroundColor: '#f8fafc' } }}>
+          <Stack.Navigator screenOptions={{
+            headerShown: false,
+            cardStyle: { backgroundColor: themeColors.background },
+          }}>
             {!isAuthenticated ? (
               <Stack.Screen name="Login" component={LoginScreen} />
             ) : (

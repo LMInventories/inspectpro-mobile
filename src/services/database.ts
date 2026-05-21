@@ -42,6 +42,13 @@ export function initDatabase(): void {
   // Source check-in report_data cached at CO download time so CI photos are
   // available offline without a network call during the inspection.
   try { db.runSync('ALTER TABLE inspections ADD COLUMN source_report_data TEXT') } catch {}
+  // Conflict detection: the server-side updated_at when this inspection was last
+  // downloaded or synced.  Sent on next sync so the server can reject if someone
+  // else has made a change in the meantime (HTTP 409).
+  try { db.runSync('ALTER TABLE inspections ADD COLUMN server_updated_at TEXT') } catch {}
+  // Idempotency key: a UUID sent with every sync request so the server can safely
+  // deduplicate retries without double-applying changes.
+  try { db.runSync('ALTER TABLE inspections ADD COLUMN idempotency_key TEXT') } catch {}
 }
 
 export function saveInspection(inspection: any): void {
@@ -49,16 +56,17 @@ export function saveInspection(inspection: any): void {
     'SELECT id FROM inspections WHERE id = ?', [inspection.id]
   )
   const now = new Date().toISOString()
+  const serverUpdatedAt = inspection.updated_at || null
   if (existing) {
     db.runSync(
-      'UPDATE inspections SET data = ?, report_data = ?, source_report_data = ?, status = ?, updated_at = ? WHERE id = ?',
-      [JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, inspection.id]
+      'UPDATE inspections SET data = ?, report_data = ?, source_report_data = ?, status = ?, updated_at = ?, server_updated_at = ? WHERE id = ?',
+      [JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, serverUpdatedAt, inspection.id]
     )
   } else {
     db.runSync(
-      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced)
-       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0)`,
-      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now]
+      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced, server_updated_at)
+       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0, ?)`,
+      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now, serverUpdatedAt]
     )
   }
 }
@@ -67,7 +75,8 @@ export function getLocalInspections(): any[] {
   const rows = db.getAllSync<{
     data: string; report_data: string | null; source_report_data: string | null;
     local_status: string; synced: number; is_finalised: number; typist_mode: string | null;
-  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode FROM inspections ORDER BY downloaded_at DESC')
+    server_updated_at: string | null; idempotency_key: string | null;
+  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode, server_updated_at, idempotency_key FROM inspections ORDER BY downloaded_at DESC')
   return rows.map(r => {
     const base = JSON.parse(r.data)
     return {
@@ -79,6 +88,8 @@ export function getLocalInspections(): any[] {
       is_finalised:       r.is_finalised === 1,
       typist_mode:        r.typist_mode ?? base.typist_mode ?? null,
       local_typist_override: r.typist_mode ?? null,
+      server_updated_at:  r.server_updated_at,
+      idempotency_key:    r.idempotency_key,
     }
   })
 }
@@ -87,7 +98,8 @@ export function getLocalInspection(id: number): any | null {
   const r = db.getFirstSync<{
     data: string; report_data: string | null; source_report_data: string | null;
     local_status: string; synced: number; is_finalised: number; typist_mode: string | null;
-  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode FROM inspections WHERE id = ?', [id])
+    server_updated_at: string | null; idempotency_key: string | null;
+  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode, server_updated_at, idempotency_key FROM inspections WHERE id = ?', [id])
   if (!r) return null
   const base = JSON.parse(r.data)
   return {
@@ -99,6 +111,8 @@ export function getLocalInspection(id: number): any | null {
     is_finalised:       r.is_finalised === 1,
     typist_mode:        r.typist_mode ?? base.typist_mode ?? null,
     local_typist_override: r.typist_mode ?? null,
+    server_updated_at:  r.server_updated_at,
+    idempotency_key:    r.idempotency_key,
   }
 }
 
@@ -137,10 +151,23 @@ export function updateInspectionServerStatus(inspectionId: number, status: strin
   } catch {}
 }
 
-export function markSynced(inspectionId: number): void {
+export function markSynced(inspectionId: number, newServerUpdatedAt?: string): void {
+  const now = new Date().toISOString()
   db.runSync(
-    'UPDATE inspections SET synced = 1, updated_at = ? WHERE id = ?',
-    [new Date().toISOString(), inspectionId]
+    'UPDATE inspections SET synced = 1, updated_at = ?, server_updated_at = COALESCE(?, server_updated_at) WHERE id = ?',
+    [now, newServerUpdatedAt ?? null, inspectionId]
+  )
+}
+
+/**
+ * Mark all audio recordings for an inspection as synced.
+ * Does NOT delete the files — that is done by syncService after confirming
+ * the server received them.
+ */
+export function markAudioSynced(inspectionId: number): void {
+  db.runSync(
+    'UPDATE audio_recordings SET synced = 1 WHERE inspection_id = ?',
+    [inspectionId]
   )
 }
 

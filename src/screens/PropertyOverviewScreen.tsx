@@ -16,7 +16,7 @@ import { syncSingleInspection, SyncProgress } from '../services/syncService'
 import { useAuthStore } from '../stores/authStore'
 import Header from '../components/Header'
 import SignaturePad from '../components/SignaturePad'
-import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
+import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
@@ -59,6 +59,17 @@ export default function PropertyOverviewScreen() {
   const [tenantSig, setTenantSig] = useState<string | null>(null)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
+
+  const c  = useColors()
+  const dm = {
+    bg:        { backgroundColor: c.background },
+    surface:   { backgroundColor: c.surface },
+    border:    { borderColor: c.border },
+    text:      { color: c.text },
+    textMid:   { color: c.textMid },
+    textLight: { color: c.textLight },
+    input:     { backgroundColor: c.surface, borderColor: c.border, color: c.text },
+  }
 
   const inspection = activeInspection?.id === inspectionId ? activeInspection : null
   if (!inspection) {
@@ -349,7 +360,7 @@ export default function PropertyOverviewScreen() {
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <View style={[styles.screen, dm.bg, { paddingTop: insets.top }]}>
       <Header
         title="Property Overview"
         onBack={() => navigation.goBack()}
@@ -380,11 +391,11 @@ export default function PropertyOverviewScreen() {
         </TouchableOpacity>
 
         {/* Address + Maps button */}
-        <View style={styles.addressBlock}>
+        <View style={[styles.addressBlock, dm.surface, { borderBottomColor: c.border }]}>
           <View style={styles.addressRow}>
             <View style={styles.addressText}>
-              <Text style={styles.address}>{inspection.property_address || 'Unknown address'}</Text>
-              <Text style={styles.clientName}>{inspection.client_name || '—'}</Text>
+              <Text style={[styles.address, dm.text]}>{inspection.property_address || 'Unknown address'}</Text>
+              <Text style={[styles.clientName, dm.textMid]}>{inspection.client_name || '—'}</Text>
             </View>
             <TouchableOpacity
               style={styles.mapsBtn}
@@ -455,8 +466,8 @@ export default function PropertyOverviewScreen() {
         </View>
 
         {/* Detail rows */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Inspection Details</Text>
+        <View style={[styles.section, dm.surface, dm.border]}>
+          <Text style={[styles.sectionTitle, dm.textLight]}>Inspection Details</Text>
           <DetailRow label="Type"       value={TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} />
           <DetailRow label="Date"       value={formatDate(inspection.conduct_date)} />
           <DetailRow label="Time"       value={formatTime(inspection.conduct_time_preference)} />
@@ -465,8 +476,8 @@ export default function PropertyOverviewScreen() {
         </View>
 
         {/* Typist mode — clerks can change this per-report without a system-wide setting */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Typist Mode</Text>
+        <View style={[styles.section, dm.surface, dm.border]}>
+          <Text style={[styles.sectionTitle, dm.textLight]}>Typist Mode</Text>
           <Text style={styles.modeHint}>
             Choose how this report is processed. Changing this here only affects this inspection.
           </Text>
@@ -515,8 +526,8 @@ export default function PropertyOverviewScreen() {
           })()}
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Property Details</Text>
+        <View style={[styles.section, dm.surface, dm.border]}>
+          <Text style={[styles.sectionTitle, dm.textLight]}>Property Details</Text>
           <DetailRow label="Address"   value={inspection.property_address || '—'} />
           <DetailRow label="Client"    value={inspection.client_name || '—'} />
           <DetailRow label="Tenant"    value={inspection.tenant_email || '—'} />
@@ -687,10 +698,11 @@ export default function PropertyOverviewScreen() {
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {
+  const c = useColors()
   return (
-    <View style={drStyles.row}>
-      <Text style={drStyles.label}>{label}</Text>
-      <Text style={drStyles.value}>{value}</Text>
+    <View style={[drStyles.row, { borderBottomColor: c.border }]}>
+      <Text style={[drStyles.label, { color: c.textMid }]}>{label}</Text>
+      <Text style={[drStyles.value, { color: c.text }]}>{value}</Text>
     </View>
   )
 }
