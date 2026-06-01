@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
-import { StatusBar, View, Text, StyleSheet, useColorScheme, ActivityIndicator } from 'react-native'
+import { StatusBar, View, Text, StyleSheet, ActivityIndicator } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuthStore } from './src/stores/authStore'
 import { initDatabase } from './src/services/database'
 import { useNetworkStatus } from './src/hooks/useNetworkStatus'
-import { lightColors, darkColors } from './src/utils/theme'
+import { lightColors } from './src/utils/theme'
 import { registerBackgroundSyncTask } from './src/tasks/backgroundSync'
 import FlashToast from './src/components/FlashToast'
 import { useSyncStore } from './src/stores/syncStore'
@@ -130,10 +130,7 @@ const bannerStyles = StyleSheet.create({
 export default function App() {
   const { isAuthenticated, initAuth } = useAuthStore()
   const [dbReady, setDbReady]         = useState(false)
-  const { isOnline }                  = useNetworkStatus()
-  const colorScheme                   = useColorScheme()
-  const isDark                        = colorScheme === 'dark'
-  const themeColors                   = isDark ? darkColors : lightColors
+  const { isOnline } = useNetworkStatus()
 
   useEffect(() => {
     async function bootstrap() {
@@ -153,14 +150,14 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar
-          barStyle={isDark ? 'light-content' : 'dark-content'}
-          backgroundColor={themeColors.background}
+          barStyle="dark-content"
+          backgroundColor={lightColors.background}
         />
         {!isOnline && <OfflineBanner />}
         <NavigationContainer>
           <Stack.Navigator screenOptions={{
             headerShown: false,
-            cardStyle: { backgroundColor: themeColors.background },
+            cardStyle: { backgroundColor: lightColors.background },
           }}>
             {!isAuthenticated ? (
               <Stack.Screen name="Login" component={LoginScreen} />

@@ -2,9 +2,7 @@
 //   Navy  #1e3a8a  — house outline, wordmark
 //   Cyan  #0ea5e9  — bar chart / arrow
 //   Teal  #10b981  — scroll / magnifier
-import { useColorScheme } from 'react-native'
 
-// ── Light palette (default) ───────────────────────────────────────────────────
 export const lightColors = {
   primary:     '#1e3a8a',  // navy — buttons, headers, active states
   primaryMid:  '#0ea5e9',  // cyan — highlights, links, AI badge
@@ -26,41 +24,12 @@ export const lightColors = {
   muted:       '#f1f5f9',
 }
 
-// ── Dark palette ──────────────────────────────────────────────────────────────
-// Designed for low-light inspection environments — high contrast, easy to read
-// with one hand on a torch.
-export const darkColors = {
-  primary:     '#3b82f6',  // lighter blue — visible on dark bg
-  primaryMid:  '#38bdf8',  // cyan stays similar
-  primaryLight:'#1e3a5f',  // deep blue for pill/selected backgrounds
-  accent:      '#34d399',  // lighter teal for dark bg
-  success:     '#34d399',
-  successLight:'#064e3b',
-  warning:     '#fbbf24',
-  warningLight:'#451a03',
-  danger:      '#f87171',  // lighter red for dark bg
-  dangerLight: '#450a0a',
-  surface:     '#1e293b',  // dark blue-grey card surface
-  background:  '#0f172a',  // near-black background
-  border:      '#334155',
-  borderDark:  '#475569',
-  text:        '#f1f5f9',  // near-white text
-  textMid:     '#94a3b8',
-  textLight:   '#64748b',
-  muted:       '#1e293b',
-}
-
-// ── Backward-compat export for static StyleSheet.create() ────────────────────
-// Static StyleSheets are evaluated once at module load and cannot read hooks.
-// Components with static StyleSheets use `colors` for layout-related colour
-// (which rarely changes between themes) and apply dynamic overrides inline for
-// foreground/background colours — see useColors() below.
+// Single palette — app is light-mode only.
 export const colors = lightColors
 
-// ── Hook — call inside a component to get the right palette ──────────────────
+// useColors() kept for compatibility with existing screens.
 export function useColors() {
-  const scheme = useColorScheme()
-  return scheme === 'dark' ? darkColors : lightColors
+  return lightColors
 }
 
 export const radius = {

@@ -1,42 +1,43 @@
 /**
- * useNetworkStatus — lightweight offline detection without extra packages.
+ * useNetworkStatus — lightweight connectivity check.
  *
- * Strategy: poll a HEAD request to the server health endpoint every 15 seconds,
- * and re-check whenever the app returns to the foreground (AppState change).
- * This avoids @react-native-community/netinfo and expo-network dependencies.
+ * Uses raw fetch (not the axios instance) so the 401-refresh interceptor
+ * and other axios middleware never interfere. fetch() only throws on a real
+ * network failure; any HTTP response — even 401, 404, 500 — means we're
+ * connected, so the server is reachable.
  *
- * Returns:
- *   isOnline — true = server reachable, false = offline or server down
- *   lastChecked — Date of the last check (or null before first check)
+ * Polls every 30 s and re-checks immediately when the app returns to
+ * the foreground.
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { AppState, AppStateStatus } from 'react-native'
-import { api } from '../services/api'
+import { BASE_URL } from '../services/api'
 
-const POLL_INTERVAL_MS = 15_000   // 15 s
-const CHECK_TIMEOUT_MS  = 5_000   // 5 s per individual probe
+const POLL_INTERVAL_MS = 30_000
+const CHECK_TIMEOUT_MS =  5_000
 
 async function probe(): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS)
   try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS)
-    await api.http.get('/api/health', {
-      signal: controller.signal as any,
-      timeout: CHECK_TIMEOUT_MS,
-      // Don't trigger the 401 interceptor on this call
-      _noRetry: true,
-    } as any)
-    clearTimeout(timer)
+    // HEAD request — minimal payload, no auth required.
+    // fetch() throws only on network errors; any HTTP status = online.
+    await fetch(`${BASE_URL}/api/health`, {
+      method: 'HEAD',
+      signal: controller.signal,
+    })
     return true
   } catch {
     return false
+  } finally {
+    clearTimeout(timer)
   }
 }
 
 export function useNetworkStatus() {
-  const [isOnline, setIsOnline]       = useState(true)   // optimistic default
+  const [isOnline, setIsOnline]       = useState(true)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
-  const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef = useRef(true)
 
   const check = useCallback(async () => {
@@ -48,18 +49,11 @@ export function useNetworkStatus() {
 
   useEffect(() => {
     mountedRef.current = true
-
-    // Initial check
     check()
-
-    // Periodic poll
     timerRef.current = setInterval(check, POLL_INTERVAL_MS)
-
-    // Re-check on foreground
     const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') check()
     })
-
     return () => {
       mountedRef.current = false
       if (timerRef.current) clearInterval(timerRef.current)
