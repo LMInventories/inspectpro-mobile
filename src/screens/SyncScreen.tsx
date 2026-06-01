@@ -10,8 +10,9 @@ import type { StackNavigationProp } from '@react-navigation/stack'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
+import { useSyncStore } from '../stores/syncStore'
 import { deleteLocalInspection } from '../services/database'
-import { syncSingleInspection, SyncResult, SyncProgress } from '../services/syncService'
+import { SyncResult, SyncProgress } from '../services/syncService'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
 import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -23,19 +24,18 @@ export default function SyncScreen() {
   const insets     = useSafeAreaInsets()
   const { inspections, loadInspections } = useInspectionStore()
   const { user } = useAuthStore()
+  const { syncing, progress, syncIndex, syncTotal, results, startSync, clearResults } = useSyncStore()
 
   const [selected, setSelected]         = useState<Set<number>>(new Set())
-  const [syncing, setSyncing]           = useState(false)
-  const [results, setResults]           = useState<SyncResult[] | null>(null)
   const [confirmModal, setConfirmModal] = useState(false)
-  const [progress, setProgress]         = useState<SyncProgress | null>(null)
-  const [syncIndex, setSyncIndex]       = useState(0)   // which inspection we're on
-  const [syncTotal, setSyncTotal]       = useState(0)   // total selected
 
   useFocusEffect(useCallback(() => {
     loadInspections()
-    setResults(null)
-  }, []))
+    if (!syncing) {
+      clearResults()
+      setSelected(new Set())
+    }
+  }, [syncing]))
 
   const c  = useColors()
   const dm = {
@@ -57,34 +57,18 @@ export default function SyncScreen() {
     setSelected(selected.size === syncable.length ? new Set() : new Set(syncable.map(i => i.id)))
   }
 
-  async function runSync() {
+  function runSync() {
     setConfirmModal(false)
-    setSyncing(true)
-    setResults(null)
-    const ids = Array.from(selected)
-    setSyncTotal(ids.length)
-    const res: SyncResult[] = []
-
-    for (let i = 0; i < ids.length; i++) {
-      setSyncIndex(i + 1)
-      setProgress(null)
-      const inspection = inspections.find(insp => insp.id === ids[i])
-      if (!inspection) continue
-      const result = await syncSingleInspection(ids[i], inspection, user, setProgress)
-      res.push(result)
-    }
-
-    await loadInspections()
-    setSyncing(false)
-    setProgress(null)
-    setResults(res)
+    const toSync = syncable.filter(i => selected.has(i.id))
     setSelected(new Set())
+    // startSync runs in the background — user can navigate away
+    startSync(toSync, user)
   }
 
   async function handleRemove(id: number, address: string) {
     Alert.alert(`Remove "${address}"?`, 'Removes the local copy. Only remove synced inspections.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: async () => { await deleteLocalInspection(id); await loadInspections() } },
+      { text: 'Remove', style: 'destructive', onPress: async () => { await deleteLocalInspection(id); loadInspections() } },
     ])
   }
 
@@ -169,28 +153,35 @@ export default function SyncScreen() {
               )
             })}
 
-            {syncing && progress ? (
-              <SyncProgressBar
-                progress={progress}
-                inspectionIndex={syncIndex}
-                inspectionTotal={syncTotal}
-              />
+            {syncing ? (
+              <>
+                {progress ? (
+                  <SyncProgressBar
+                    progress={progress}
+                    inspectionIndex={syncIndex}
+                    inspectionTotal={syncTotal}
+                  />
+                ) : (
+                  <View style={[styles.syncBtn, styles.syncBtnDisabled]}>
+                    <View style={styles.syncingRow}>
+                      <ActivityIndicator color="#fff" size="small" />
+                      <Text style={styles.syncBtnText}>Syncing {syncIndex}/{syncTotal}…</Text>
+                    </View>
+                  </View>
+                )}
+                <Text style={[styles.bgSyncNote, dm.textLight]}>
+                  You can navigate away — sync continues in the background.
+                </Text>
+              </>
             ) : (
               <TouchableOpacity
-                style={[styles.syncBtn, (selected.size === 0 || syncing) && styles.syncBtnDisabled]}
+                style={[styles.syncBtn, selected.size === 0 && styles.syncBtnDisabled]}
                 onPress={() => { if (selected.size > 0) setConfirmModal(true) }}
-                disabled={syncing || selected.size === 0}
+                disabled={selected.size === 0}
               >
-                {syncing ? (
-                  <View style={styles.syncingRow}>
-                    <ActivityIndicator color="#fff" size="small" />
-                    <Text style={styles.syncBtnText}>Preparing…</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.syncBtnText}>
-                    ⇅ Sync {selected.size > 0 ? `${selected.size} Inspection${selected.size !== 1 ? 's' : ''}` : ''}
-                  </Text>
-                )}
+                <Text style={styles.syncBtnText}>
+                  ⇅ Sync {selected.size > 0 ? `${selected.size} Inspection${selected.size !== 1 ? 's' : ''}` : ''}
+                </Text>
               </TouchableOpacity>
             )}
           </>
@@ -295,6 +286,7 @@ const styles = StyleSheet.create({
   syncBtnDisabled: { backgroundColor: colors.borderDark },
   syncBtnText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
   syncingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  bgSyncNote: { fontSize: font.xs, color: colors.textLight, textAlign: 'center', marginTop: spacing.xs, fontStyle: 'italic' },
   empty: { alignItems: 'center', justifyContent: 'center', paddingTop: 80, gap: spacing.md },
   emptyIcon: { fontSize: 48 },
   emptyTitle: { fontSize: font.lg, fontWeight: '700', color: colors.textMid },

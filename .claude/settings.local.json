@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "PowerShell(git *)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Bash(npx tsc *)",
+      "Bash(node_modules\\\\.bin\\\\tsc --noEmit)",
+      "PowerShell(& \"node_modules\\\\.bin\\\\tsc\" --noEmit 2>&1 | Select-Object -First 80)",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

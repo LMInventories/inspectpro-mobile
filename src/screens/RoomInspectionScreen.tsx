@@ -26,6 +26,7 @@ import Header from '../components/Header'
 import { colors, useColors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
 import SwipeableRow from '../components/SwipeableRow'
+import { useToastStore } from '../stores/toastStore'
 
 type Nav   = StackNavigationProp<RootStackParamList, 'RoomInspection'>
 type Route = RouteProp<RootStackParamList, 'RoomInspection'>
@@ -915,9 +916,9 @@ export default function RoomInspectionScreen() {
 
     if (changed || deletedItems.length > 0) {
       if (changed) setReportData(inspectionId, rd)
-      Alert.alert('✨ Room filled', `${parts.join(' · ')} in ${sectionName}.`)
+      useToastStore.getState().showToast(`✨ ${parts.join(' · ')} in ${sectionName}.`)
     } else {
-      Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
+      useToastStore.getState().showToast('Already filled — existing content preserved.', 'info')
     }
   }
 
@@ -943,9 +944,9 @@ export default function RoomInspectionScreen() {
     if (changed) {
       setReportData(inspectionId, rd)
       const count = Object.keys(filled).length
-      Alert.alert('✨ Section filled', `AI filled ${count} item${count !== 1 ? 's' : ''} in ${sectionName}.`)
+      useToastStore.getState().showToast(`✨ ${count} item${count !== 1 ? 's' : ''} filled in ${sectionName}.`)
     } else {
-      Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
+      useToastStore.getState().showToast('Already filled — existing content preserved.', 'info')
     }
   }
 

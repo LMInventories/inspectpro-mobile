@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
-import { StatusBar, View, Text, StyleSheet, useColorScheme } from 'react-native'
+import { StatusBar, View, Text, StyleSheet, useColorScheme, ActivityIndicator } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
-import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuthStore } from './src/stores/authStore'
 import { initDatabase } from './src/services/database'
 import { useNetworkStatus } from './src/hooks/useNetworkStatus'
 import { lightColors, darkColors } from './src/utils/theme'
 import { registerBackgroundSyncTask } from './src/tasks/backgroundSync'
+import FlashToast from './src/components/FlashToast'
+import { useSyncStore } from './src/stores/syncStore'
+import { setupNotifications } from './src/services/notificationService'
 
 import LoginScreen from './src/screens/LoginScreen'
 import InspectionListScreen from './src/screens/InspectionListScreen'
@@ -60,23 +63,66 @@ const Stack = createStackNavigator<RootStackParamList>()
 // ── Offline banner ────────────────────────────────────────────────────────────
 function OfflineBanner() {
   return (
-    <View style={bannerStyles.banner}>
-      <Text style={bannerStyles.text}>⚠️  No connection — working offline</Text>
+    <View style={bannerStyles.offlineBanner}>
+      <Text style={bannerStyles.offlineText}>⚠️  No connection — working offline</Text>
+    </View>
+  )
+}
+
+// ── Global sync progress banner ───────────────────────────────────────────────
+function SyncProgressBanner() {
+  const { syncing, syncIndex, syncTotal, progress } = useSyncStore()
+  const insets = useSafeAreaInsets()
+  if (!syncing) return null
+
+  let label = `Syncing ${syncIndex}/${syncTotal}…`
+  if (progress) {
+    if (progress.phase === 'photos')   label = `Syncing ${syncIndex}/${syncTotal} — photos ${progress.done}/${progress.total}`
+    if (progress.phase === 'audio')    label = `Syncing ${syncIndex}/${syncTotal} — audio ${progress.done}/${progress.total}`
+    if (progress.phase === 'uploading') label = `Syncing ${syncIndex}/${syncTotal} — uploading…`
+    if (progress.phase === 'retrying') label = `Syncing ${syncIndex}/${syncTotal} — retrying…`
+  }
+
+  return (
+    <View style={[bannerStyles.syncBanner, { paddingBottom: Math.max(insets.bottom, 8) }]} pointerEvents="none">
+      <ActivityIndicator color="#a5f3fc" size="small" />
+      <Text style={bannerStyles.syncText}>{label}</Text>
     </View>
   )
 }
 
 const bannerStyles = StyleSheet.create({
-  banner: {
+  offlineBanner: {
     backgroundColor: '#92400e',
     paddingVertical: 6,
     paddingHorizontal: 16,
     alignItems: 'center',
   },
-  text: {
+  offlineText: {
     color: '#fef3c7',
     fontSize: 13,
     fontWeight: '600',
+  },
+  syncBanner: {
+    position:         'absolute',
+    bottom:           0,
+    left:             0,
+    right:            0,
+    backgroundColor:  '#0f172a',
+    paddingVertical:  10,
+    paddingHorizontal: 16,
+    flexDirection:    'row',
+    alignItems:       'center',
+    gap:              10,
+    zIndex:           9000,
+    borderTopWidth:   1,
+    borderTopColor:   'rgba(99,102,241,0.4)',
+  },
+  syncText: {
+    color:      '#a5f3fc',
+    fontSize:   13,
+    fontWeight: '600',
+    flex:       1,
   },
 })
 
@@ -96,6 +142,7 @@ export default function App() {
       setDbReady(true)
       // Register background sync task — best-effort, non-blocking
       registerBackgroundSyncTask().catch(() => {})
+      setupNotifications().catch(() => {})  // request notification permission
     }
     bootstrap()
   }, [])
@@ -131,6 +178,9 @@ export default function App() {
             )}
           </Stack.Navigator>
         </NavigationContainer>
+        {/* Global overlays — rendered above all screens */}
+        <SyncProgressBanner />
+        <FlashToast />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   )
