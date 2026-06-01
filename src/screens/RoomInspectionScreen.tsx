@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
   KeyboardAvoidingView, Keyboard, Platform, Animated, Dimensions, useWindowDimensions,
+  FlatList,
 } from 'react-native'
 import {
   GestureHandlerRootView,
@@ -148,6 +149,47 @@ export default function RoomInspectionScreen() {
   const [sourceReportData, setSourceReportData] = useState<Record<string, any> | null>(null)
   // Tracks which items have the CI photos accordion open
   const [ciPhotosExpanded, setCiPhotosExpanded] = useState<Record<string, boolean>>({})
+
+  // ── Check-In photo lightbox (read-only) ────────────────────────────────────
+  const [ciLightbox, setCiLightbox]               = useState<{ photos: string[]; index: number } | null>(null)
+  const [ciScrollEnabled, setCiScrollEnabled]     = useState(true)
+  const ciScale     = useRef(new Animated.Value(1)).current
+  const ciLastScale = useRef(1)
+
+  const ciZoomGesture = useMemo(() => {
+    const pinch = Gesture.Pinch()
+      .runOnJS(true)
+      .onUpdate(e => {
+        ciScale.setValue(Math.max(1, Math.min(4, ciLastScale.current * e.scale)))
+      })
+      .onEnd(e => {
+        const final = Math.max(1, Math.min(4, ciLastScale.current * e.scale))
+        ciLastScale.current = final <= 1.05 ? 1 : final
+        if (ciLastScale.current === 1) {
+          Animated.spring(ciScale, { toValue: 1, useNativeDriver: true }).start()
+          setCiScrollEnabled(true)
+        } else {
+          setCiScrollEnabled(false)
+        }
+      })
+    const doubleTap = Gesture.Tap()
+      .runOnJS(true)
+      .numberOfTaps(2)
+      .onEnd(() => {
+        const next = ciLastScale.current > 1 ? 1 : 2.5
+        ciLastScale.current = next
+        Animated.spring(ciScale, { toValue: next, useNativeDriver: true }).start()
+        setCiScrollEnabled(next === 1)
+      })
+    return Gesture.Simultaneous(pinch, doubleTap)
+  }, [])
+
+  function closeCiLightbox() {
+    setCiLightbox(null)
+    ciLastScale.current = 1
+    ciScale.setValue(1)
+    setCiScrollEnabled(true)
+  }
 
   // Track which photo target is pending (for camera handoff)
   const cameraTargetRef = useRef<{ type: 'item'; itemId: string } | { type: 'overview' } | null>(null)
@@ -1432,7 +1474,9 @@ export default function RoomInspectionScreen() {
             <Text style={styles.sourcePhotoLabel}>📋 Check In</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
               {srcPhotos.map((uri: string, idx: number) => (
-                <Image key={idx} source={{ uri }} style={[styles.photoThumb, styles.sourcePhotoThumb]} />
+                <TouchableOpacity key={idx} onPress={() => setCiLightbox({ photos: srcPhotos, index: idx })} activeOpacity={0.8}>
+                  <Image source={{ uri }} style={[styles.photoThumb, styles.sourcePhotoThumb]} />
+                </TouchableOpacity>
               ))}
             </ScrollView>
           </View>
@@ -1522,7 +1566,9 @@ export default function RoomInspectionScreen() {
             contentContainerStyle={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8 }}
           >
             {photos.map((uri, idx) => (
-              <Image key={idx} source={{ uri }} style={styles.ciPhotoThumb} resizeMode="cover" />
+              <TouchableOpacity key={idx} onPress={() => setCiLightbox({ photos, index: idx })} activeOpacity={0.8}>
+                <Image source={{ uri }} style={styles.ciPhotoThumb} resizeMode="cover" />
+              </TouchableOpacity>
             ))}
           </ScrollView>
         )}
@@ -2204,6 +2250,64 @@ export default function RoomInspectionScreen() {
           />
         )}
 
+        {/* ── Check-In photo lightbox — read-only ───────────────────────────── */}
+        <Modal
+          visible={!!ciLightbox}
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={closeCiLightbox}
+        >
+          <View style={ciLbStyles.screen}>
+            {ciLightbox && (
+              <>
+                <FlatList
+                  data={ciLightbox.photos}
+                  keyExtractor={(_, i) => String(i)}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  scrollEnabled={ciScrollEnabled}
+                  style={StyleSheet.absoluteFill}
+                  initialScrollIndex={ciLightbox.index}
+                  getItemLayout={(_, index) => ({ length: winWidth, offset: winWidth * index, index })}
+                  renderItem={({ item: uri }) => (
+                    <View style={{ width: winWidth, height: winHeight, justifyContent: 'center', alignItems: 'center' }}>
+                      <GestureDetector gesture={ciZoomGesture}>
+                        <Animated.Image
+                          source={{ uri }}
+                          style={[ciLbStyles.image, { transform: [{ scale: ciScale }] }]}
+                          resizeMode="contain"
+                        />
+                      </GestureDetector>
+                    </View>
+                  )}
+                  onMomentumScrollEnd={(e) => {
+                    const i = Math.round(e.nativeEvent.contentOffset.x / winWidth)
+                    setCiLightbox(prev => prev ? { ...prev, index: i } : prev)
+                    ciLastScale.current = 1
+                    ciScale.setValue(1)
+                    setCiScrollEnabled(true)
+                  }}
+                />
+                <TouchableOpacity
+                  style={[ciLbStyles.closeBtn, { top: insets.top + 12 }]}
+                  onPress={closeCiLightbox}
+                >
+                  <Text style={ciLbStyles.closeBtnText}>✕</Text>
+                </TouchableOpacity>
+                <View style={[ciLbStyles.counter, { top: insets.top + 16 }]}>
+                  <Text style={ciLbStyles.counterText}>
+                    {ciLightbox.index + 1} / {ciLightbox.photos.length}{'  ·  '}pinch or double-tap to zoom
+                  </Text>
+                </View>
+                <View style={[ciLbStyles.badge, { bottom: insets.bottom + 24 }]}>
+                  <Text style={ciLbStyles.badgeText}>📋 Check-In Reference — Read Only</Text>
+                </View>
+              </>
+            )}
+          </View>
+        </Modal>
+
         {/* Cleanliness dropdown modal */}
         <Modal visible={cleanlinessOpen} transparent animationType="fade">
           <View style={mStyles.overlay}>
@@ -2683,4 +2787,28 @@ const actStyles = StyleSheet.create({
   footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
   detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
+})
+
+const ciLbStyles = StyleSheet.create({
+  screen:       { flex: 1, backgroundColor: '#000' },
+  image:        { width: '100%', height: '65%' },
+  closeBtn: {
+    position: 'absolute', left: 16, zIndex: 10,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  closeBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  counter: {
+    position: 'absolute', alignSelf: 'center', zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+  },
+  counterText:  { color: '#fff', fontSize: 12 },
+  badge: {
+    position: 'absolute', alignSelf: 'center', zIndex: 10,
+    backgroundColor: 'rgba(99,102,241,0.85)',
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8,
+  },
+  badgeText:    { color: '#fff', fontSize: 12, fontWeight: '600' },
 })

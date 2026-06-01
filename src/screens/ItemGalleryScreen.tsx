@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react'
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Image, Modal, Dimensions, Alert, ActivityIndicator,
@@ -9,7 +9,7 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImageManipulator from 'expo-image-manipulator'
 import * as FileSystem from 'expo-file-system/legacy'
-import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
@@ -106,6 +106,11 @@ export default function ItemGalleryScreen() {
   // Modals, but the OS scroll recogniser is unaffected.
   const lightboxFlatRef = useRef<FlatList<string>>(null)
 
+  // Pinch-to-zoom state — shared across all lightbox photos (reset on swipe)
+  const lightboxScale     = useRef(new Animated.Value(1)).current
+  const lightboxLastScale = useRef(1)
+  const [flatScrollEnabled, setFlatScrollEnabled] = useState(true)
+
   useEffect(() => {
     if (!lightboxUri) return
     const idx = photosRef.current.indexOf(lightboxUri)
@@ -117,6 +122,39 @@ export default function ItemGalleryScreen() {
     }, 0)
     return () => clearTimeout(t)
   }, [lightboxUri])
+
+  // ── Zoom gesture — created once, shared across all lightbox items ──────────
+  // Pinch scales 1×–4×; double-tap toggles 1× ↔ 2.5×.
+  // FlatList scroll is disabled while zoomed so 1-finger pan doesn't navigate.
+  const zoomGesture = useMemo(() => {
+    const pinch = Gesture.Pinch()
+      .runOnJS(true)
+      .onUpdate(e => {
+        lightboxScale.setValue(Math.max(1, Math.min(4, lightboxLastScale.current * e.scale)))
+      })
+      .onEnd(e => {
+        const final = Math.max(1, Math.min(4, lightboxLastScale.current * e.scale))
+        lightboxLastScale.current = final <= 1.05 ? 1 : final
+        if (lightboxLastScale.current === 1) {
+          Animated.spring(lightboxScale, { toValue: 1, useNativeDriver: true }).start()
+          setFlatScrollEnabled(true)
+        } else {
+          setFlatScrollEnabled(false)
+        }
+      })
+
+    const doubleTap = Gesture.Tap()
+      .runOnJS(true)
+      .numberOfTaps(2)
+      .onEnd(() => {
+        const next = lightboxLastScale.current > 1 ? 1 : 2.5
+        lightboxLastScale.current = next
+        Animated.spring(lightboxScale, { toValue: next, useNativeDriver: true }).start()
+        setFlatScrollEnabled(next === 1)
+      })
+
+    return Gesture.Simultaneous(pinch, doubleTap)
+  }, [])  // stable refs only — no deps needed
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getPhotos(): string[] {
@@ -632,7 +670,12 @@ export default function ItemGalleryScreen() {
         visible={!!lightboxUri}
         animationType="fade"
         statusBarTranslucent
-        onRequestClose={() => setLightboxUri(null)}
+        onRequestClose={() => {
+          setLightboxUri(null)
+          lightboxLastScale.current = 1
+          lightboxScale.setValue(1)
+          setFlatScrollEnabled(true)
+        }}
       >
         <View style={lbS.screen}>
           {/* Swipeable photo strip — fills screen, sits behind all overlays */}
@@ -643,16 +686,27 @@ export default function ItemGalleryScreen() {
             horizontal
             pagingEnabled
             showsHorizontalScrollIndicator={false}
+            scrollEnabled={flatScrollEnabled}
             style={StyleSheet.absoluteFill}
             renderItem={({ item: uri }) => (
               <View style={{ width: SW, height: SH, justifyContent: 'center', alignItems: 'center' }}>
-                <Image source={{ uri }} style={lbS.image} resizeMode="contain" />
+                <GestureDetector gesture={zoomGesture}>
+                  <Animated.Image
+                    source={{ uri }}
+                    style={[lbS.image, { transform: [{ scale: lightboxScale }] }]}
+                    resizeMode="contain"
+                  />
+                </GestureDetector>
               </View>
             )}
             onMomentumScrollEnd={(e) => {
               const newIndex = Math.round(e.nativeEvent.contentOffset.x / SW)
               if (newIndex >= 0 && newIndex < photosRef.current.length) {
                 setLightboxUri(photosRef.current[newIndex])
+                // Reset zoom when swiping to a new photo
+                lightboxLastScale.current = 1
+                lightboxScale.setValue(1)
+                setFlatScrollEnabled(true)
               }
             }}
             getItemLayout={(_, index) => ({ length: SW, offset: SW * index, index })}
@@ -660,11 +714,16 @@ export default function ItemGalleryScreen() {
 
           {lightboxUri && (
             <>
-              <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => setLightboxUri(null)}>
+              <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => {
+                setLightboxUri(null)
+                lightboxLastScale.current = 1
+                lightboxScale.setValue(1)
+                setFlatScrollEnabled(true)
+              }}>
                 <Text style={lbS.closeBtnText}>✕</Text>
               </TouchableOpacity>
               <View style={[lbS.counter, { top: insets.top + 16 }]}>
-                <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}</Text>
+                <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}  ·  pinch or double-tap to zoom</Text>
               </View>
               {rotating && (
                 <View style={lbS.overlay}>

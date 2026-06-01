@@ -116,6 +116,21 @@ export default function SyncScreen() {
                 {!r.success && <Text style={styles.resultError}>{r.error}</Text>}
               </View>
             ))}
+            {results.some(r => !r.success) && !syncing && (() => {
+              const failedIds = new Set(results.filter(r => !r.success).map(r => r.id))
+              const toRetry   = syncable.filter(i => failedIds.has(i.id))
+              if (toRetry.length === 0) return null
+              return (
+                <TouchableOpacity
+                  style={styles.retryFailedBtn}
+                  onPress={() => startSync(toRetry, user)}
+                >
+                  <Text style={styles.retryFailedText}>
+                    ↺ Retry {toRetry.length} Failed
+                  </Text>
+                </TouchableOpacity>
+              )
+            })()}
           </View>
         )}
 
@@ -287,6 +302,8 @@ const styles = StyleSheet.create({
   syncBtnText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
   syncingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   bgSyncNote: { fontSize: font.xs, color: colors.textLight, textAlign: 'center', marginTop: spacing.xs, fontStyle: 'italic' },
+  retryFailedBtn: { marginTop: spacing.sm, backgroundColor: colors.dangerLight, borderRadius: radius.md, padding: 10, alignItems: 'center' },
+  retryFailedText: { color: colors.danger, fontSize: font.sm, fontWeight: '700' },
   empty: { alignItems: 'center', justifyContent: 'center', paddingTop: 80, gap: spacing.md },
   emptyIcon: { fontSize: 48 },
   emptyTitle: { fontSize: font.lg, fontWeight: '700', color: colors.textMid },

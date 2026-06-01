@@ -16,7 +16,7 @@ import { BASE_URL } from '../services/api'
 const POLL_INTERVAL_MS = 30_000
 const CHECK_TIMEOUT_MS =  5_000
 
-async function probe(): Promise<boolean> {
+export async function probe(): Promise<boolean> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS)
   try {

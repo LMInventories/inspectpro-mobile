@@ -27,7 +27,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Animated,
-  Modal, ScrollView, Pressable,
+  Modal, ScrollView, Pressable, AppState,
 } from 'react-native'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
@@ -43,6 +43,8 @@ import SwipeableRow from './SwipeableRow'
 import { saveAudioRecording, deleteAudioRecording, getAudioRecordingsForSection } from '../services/database'
 import { api } from '../services/api'
 import { colors, font, radius, spacing } from '../utils/theme'
+import { probe } from '../hooks/useNetworkStatus'
+import { useToastStore } from '../stores/toastStore'
 
 export interface RoomDictationItem {
   id: string
@@ -89,10 +91,11 @@ export default function RoomDictationRecorder({
   const insets   = useSafeAreaInsets()
   const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
 
-  const [mode, setMode]       = useState<Mode>('idle')
-  const [elapsed, setElapsed] = useState(0)
-  const [totalMs, setTotalMs] = useState(0)
-  const [clips, setClips]     = useState<SavedClip[]>([])
+  const [mode, setMode]           = useState<Mode>('idle')
+  const [elapsed, setElapsed]     = useState(0)
+  const [totalMs, setTotalMs]     = useState(0)
+  const [clips, setClips]         = useState<SavedClip[]>([])
+  const [queuedOffline, setQueuedOffline] = useState(false)
 
   // Playback modal
   const [modalVisible, setModalVisible] = useState(false)
@@ -303,9 +306,30 @@ export default function RoomDictationRecorder({
     }
   }
 
+  // ── Auto-retry when app comes back online after queuing ──────────────────
+  useEffect(() => {
+    if (!queuedOffline) return
+    const sub = AppState.addEventListener('change', async (state) => {
+      if (state !== 'active') return
+      const online = await probe()
+      if (online) handleTranscribe()
+    })
+    return () => sub.remove()
+  }, [queuedOffline, handleTranscribe])
+
   // ── AI Transcribe ─────────────────────────────────────────────────────────
   const handleTranscribe = useCallback(async () => {
     if (clips.length === 0) return
+
+    // Check connectivity before sending — queue locally if offline
+    const online = await probe()
+    if (!online) {
+      setQueuedOffline(true)
+      useToastStore.getState().showToast('No connection — will transcribe when online', 'info')
+      return
+    }
+
+    setQueuedOffline(false)
     setMode('transcribing')
     try {
       const clipPayloads = await Promise.all(
@@ -352,6 +376,7 @@ export default function RoomDictationRecorder({
       }
 
       onTranscribed(filled)
+      setQueuedOffline(false)
       setClips([])
       setTotalMs(0)
       setElapsed(0)
@@ -371,6 +396,7 @@ export default function RoomDictationRecorder({
 
   // ── Status line below the row ─────────────────────────────────────────────
   function statusText() {
+    if (queuedOffline)  return `${clips.length} clip${clips.length !== 1 ? 's' : ''} saved · waiting for connection…`
     if (isTranscribing) return `AI filling ${sectionName}…`
     if (isRecording)    return `Recording ${sectionName} — pause to save clip`
     if (isPaused && hasClips) {
@@ -448,13 +474,17 @@ export default function RoomDictationRecorder({
         <View style={{ alignItems: 'center', gap: 6 }}>
           {showAiButton ? (
             <TouchableOpacity
-              style={[bar.aiBtn, (!hasClips || isRecording || isTranscribing) && bar.disabled]}
+              style={[
+                bar.aiBtn,
+                (!hasClips || isRecording || isTranscribing) && bar.disabled,
+                queuedOffline && bar.aiBtnQueued,
+              ]}
               onPress={handleTranscribe}
               disabled={!hasClips || isRecording || isTranscribing}
               activeOpacity={0.7}
             >
-              <Text style={bar.aiBtnIcon}>✨</Text>
-              <Text style={bar.aiBtnLabel}>Transcribe</Text>
+              <Text style={bar.aiBtnIcon}>{queuedOffline ? '⏳' : '✨'}</Text>
+              <Text style={bar.aiBtnLabel}>{queuedOffline ? 'Queued' : 'Transcribe'}</Text>
             </TouchableOpacity>
           ) : (
             <View style={bar.aiBtn} />
@@ -689,6 +719,7 @@ const bar = StyleSheet.create({
   aiBtnIcon:  { fontSize: 20 },
   aiBtnLabel: { fontSize: 9, color: 'rgba(255,255,255,0.7)', fontWeight: '700', textTransform: 'uppercase' },
   disabled:   { opacity: 0.3 },
+  aiBtnQueued: { backgroundColor: 'rgba(251,191,36,0.25)', borderColor: 'rgba(251,191,36,0.6)' },
 
   // ? help button
   helpBtn: {
