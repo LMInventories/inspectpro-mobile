@@ -108,9 +108,12 @@ export default function ItemGalleryScreen() {
   // Modals, but the OS scroll recogniser is unaffected.
   const lightboxFlatRef = useRef<FlatList<string>>(null)
 
-  // Pinch-to-zoom state — shared across all lightbox photos (reset on swipe)
-  const lightboxScale     = useRef(new Animated.Value(1)).current
-  const lightboxLastScale = useRef(1)
+  // Zoom + pan state — shared across all lightbox photos (reset on swipe)
+  const lightboxScale         = useRef(new Animated.Value(1)).current
+  const lightboxLastScale     = useRef(1)
+  const lightboxTranslateX    = useRef(new Animated.Value(0)).current
+  const lightboxTranslateY    = useRef(new Animated.Value(0)).current
+  const lightboxLastTranslate = useRef({ x: 0, y: 0 })
   const [flatScrollEnabled, setFlatScrollEnabled] = useState(true)
 
   useEffect(() => {
@@ -125,9 +128,16 @@ export default function ItemGalleryScreen() {
     return () => clearTimeout(t)
   }, [lightboxUri])
 
-  // ── Zoom gesture — created once, shared across all lightbox items ──────────
+  // ── Zoom + pan gesture — created once, shared across all lightbox items ─────
   // Pinch scales 1×–4×; double-tap toggles 1× ↔ 2.5×.
-  // FlatList scroll is disabled while zoomed so 1-finger pan doesn't navigate.
+  // Pan moves the image when zoomed; ignored at 1× so FlatList swipe-to-navigate works.
+  // FlatList scroll is disabled while zoomed so single-finger swipe doesn't navigate.
+  function resetLightboxTransform() {
+    lightboxLastTranslate.current = { x: 0, y: 0 }
+    lightboxTranslateX.setValue(0)
+    lightboxTranslateY.setValue(0)
+  }
+
   const zoomGesture = useMemo(() => {
     const pinch = Gesture.Pinch()
       .runOnJS(true)
@@ -139,6 +149,9 @@ export default function ItemGalleryScreen() {
         lightboxLastScale.current = final <= 1.05 ? 1 : final
         if (lightboxLastScale.current === 1) {
           Animated.spring(lightboxScale, { toValue: 1, useNativeDriver: true }).start()
+          lightboxLastTranslate.current = { x: 0, y: 0 }
+          lightboxTranslateX.setValue(0)
+          lightboxTranslateY.setValue(0)
           setFlatScrollEnabled(true)
         } else {
           setFlatScrollEnabled(false)
@@ -152,10 +165,32 @@ export default function ItemGalleryScreen() {
         const next = lightboxLastScale.current > 1 ? 1 : 2.5
         lightboxLastScale.current = next
         Animated.spring(lightboxScale, { toValue: next, useNativeDriver: true }).start()
+        if (next === 1) {
+          lightboxLastTranslate.current = { x: 0, y: 0 }
+          lightboxTranslateX.setValue(0)
+          lightboxTranslateY.setValue(0)
+        }
         setFlatScrollEnabled(next === 1)
       })
 
-    return Gesture.Simultaneous(pinch, doubleTap)
+    // Pan: only moves the image when zoomed — returns early at 1× so the FlatList
+    // scroll recogniser can still handle horizontal swipe-to-navigate.
+    const pan = Gesture.Pan()
+      .runOnJS(true)
+      .onUpdate(e => {
+        if (lightboxLastScale.current <= 1) return
+        lightboxTranslateX.setValue(lightboxLastTranslate.current.x + e.translationX)
+        lightboxTranslateY.setValue(lightboxLastTranslate.current.y + e.translationY)
+      })
+      .onEnd(e => {
+        if (lightboxLastScale.current <= 1) return
+        lightboxLastTranslate.current = {
+          x: lightboxLastTranslate.current.x + e.translationX,
+          y: lightboxLastTranslate.current.y + e.translationY,
+        }
+      })
+
+    return Gesture.Simultaneous(pinch, doubleTap, pan)
   }, [])  // stable refs only — no deps needed
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -715,6 +750,7 @@ export default function ItemGalleryScreen() {
           setLightboxUri(null)
           lightboxLastScale.current = 1
           lightboxScale.setValue(1)
+          resetLightboxTransform()
           setFlatScrollEnabled(true)
         }}
       >
@@ -737,7 +773,11 @@ export default function ItemGalleryScreen() {
                 <View style={{ width: SW, height: SH, justifyContent: 'center', alignItems: 'center' }}>
                   <Animated.Image
                     source={{ uri }}
-                    style={[lbS.image, { transform: [{ scale: lightboxScale }] }]}
+                    style={[lbS.image, { transform: [
+                      { scale: lightboxScale },
+                      { translateX: lightboxTranslateX },
+                      { translateY: lightboxTranslateY },
+                    ] }]}
                     resizeMode="contain"
                   />
                 </View>
@@ -747,9 +787,9 @@ export default function ItemGalleryScreen() {
               const newIndex = Math.round(e.nativeEvent.contentOffset.x / SW)
               if (newIndex >= 0 && newIndex < photosRef.current.length) {
                 setLightboxUri(photosRef.current[newIndex])
-                // Reset zoom when swiping to a new photo
                 lightboxLastScale.current = 1
                 lightboxScale.setValue(1)
+                resetLightboxTransform()
                 setFlatScrollEnabled(true)
               }
             }}
@@ -762,6 +802,7 @@ export default function ItemGalleryScreen() {
                 setLightboxUri(null)
                 lightboxLastScale.current = 1
                 lightboxScale.setValue(1)
+                resetLightboxTransform()
                 setFlatScrollEnabled(true)
               }}>
                 <Text style={lbS.closeBtnText}>✕</Text>

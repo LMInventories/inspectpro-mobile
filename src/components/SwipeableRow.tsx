@@ -8,6 +8,7 @@ interface Action {
   label: string
   bg: string
   onPress: () => void
+  wide?: boolean  // spans full grid width — use for destructive/bottom actions
 }
 
 interface Props {
@@ -23,25 +24,21 @@ export default function SwipeableRow({ children, actions, disabled }: Props) {
     swipeRef.current?.close()
   }
 
-  // Same actions shown on both left and right swipe
   function renderActions(
     _progress: Animated.AnimatedInterpolation<number>,
-    side: 'left' | 'right'
+    _side: 'left' | 'right'
   ) {
     if (!actions.length) return null
     return (
-      <View style={[styles.actionsRow, side === 'left' ? styles.actionsLeft : styles.actionsRight]}>
+      <View style={styles.grid}>
         {actions.map((action, i) => (
           <TouchableOpacity
             key={i}
-            style={[styles.actionBtn, { backgroundColor: action.bg }]}
-            onPress={() => {
-              close()
-              action.onPress()
-            }}
+            style={[styles.btn, { backgroundColor: action.bg }, action.wide && styles.btnWide]}
+            onPress={() => { close(); action.onPress() }}
           >
-            <Text style={styles.actionIcon}>{action.icon}</Text>
-            <Text style={styles.actionLabel}>{action.label}</Text>
+            <Text style={styles.btnIcon}>{action.icon}</Text>
+            <Text style={styles.btnLabel}>{action.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -64,23 +61,32 @@ export default function SwipeableRow({ children, actions, disabled }: Props) {
   )
 }
 
+const BTN_W = 64
+const GAP   = 2
+const PAD   = 2
+
 const styles = StyleSheet.create({
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-    gap: 2,
+  // 2-column wrapping grid — centred vertically inside the swipe panel
+  grid: {
+    flexDirection:  'row',
+    flexWrap:       'wrap',
+    alignContent:   'center',
+    justifyContent: 'flex-start',
+    width:          BTN_W * 2 + GAP + PAD * 2,
+    padding:        PAD,
+    gap:            GAP,
   },
-  actionsLeft:  { paddingRight: 4 },
-  actionsRight: { paddingLeft: 4 },
-  actionBtn: {
-    width: 64,
-    alignItems: 'center',
+  btn: {
+    width:          BTN_W,
+    minHeight:      54,
+    alignItems:     'center',
     justifyContent: 'center',
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    gap: 3,
+    borderRadius:   radius.md,
+    gap:            3,
   },
-  actionIcon:  { fontSize: 18 },
-  actionLabel: { fontSize: 9, fontWeight: '700', color: colors.text, letterSpacing: 0.2 },
+  btnWide: {
+    width: BTN_W * 2 + GAP,  // spans both columns
+  },
+  btnIcon:  { fontSize: 18 },
+  btnLabel: { fontSize: 9, fontWeight: '700', color: colors.text, letterSpacing: 0.2 },
 })

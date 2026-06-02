@@ -75,6 +75,16 @@ export default function RoomInspectionScreen() {
   // Sub-item quantity modal — opened when clerk taps the ⊕ swipe action
   const [subQtyModal, setSubQtyModal] = useState<{ itemId: string; label: string; count: number } | null>(null)
 
+  // Rearrange modal
+  const [rearrangeModal, setRearrangeModal]   = useState(false)
+  const [rearrangeItems, setRearrangeItems]   = useState<any[]>([])
+  const rearrangeDragFromRef  = useRef<number | null>(null)
+  const rearrangeDragToRef    = useRef<number | null>(null)
+  const [rearrangeDragFrom, setRearrangeDragFrom] = useState<number | null>(null)
+  const [rearrangeDragTo,   setRearrangeDragTo]   = useState<number | null>(null)
+  const rearrangeDragYAnim = useRef(new Animated.Value(0)).current
+  const REORDER_ROW_H = 56
+
   // ── Check-out / Damage Report mode ───────────────────────────────────────
   const [isCheckOut_, setIsCheckOut_]         = useState(false)
   const [isDamageReport_, setIsDamageReport_] = useState(false)
@@ -1174,6 +1184,80 @@ export default function RoomInspectionScreen() {
   }
 
   // ── Item drag-to-reorder helpers ──────────────────────────────────────────
+  // ── Rearrange modal ────────────────────────────────────────────────────────
+  function openRearrangeModal() {
+    setRearrangeItems([...items])
+    rearrangeDragYAnim.setValue(0)
+    setRearrangeDragFrom(null)
+    setRearrangeDragTo(null)
+    setRearrangeModal(true)
+  }
+
+  function getRearrangeShift(idx: number, from: number, to: number): number {
+    if (from < to)  { if (idx > from && idx <= to) return -REORDER_ROW_H }
+    else if (from > to) { if (idx >= to && idx < from) return REORDER_ROW_H }
+    return 0
+  }
+
+  function makeRearrangeGesture(idx: number) {
+    return Gesture.Pan()
+      .runOnJS(true)
+      .activateAfterLongPress(350)
+      .onStart(() => {
+        rearrangeDragFromRef.current = idx
+        rearrangeDragToRef.current   = idx
+        rearrangeDragYAnim.setValue(0)
+        setRearrangeDragFrom(idx)
+        setRearrangeDragTo(idx)
+      })
+      .onUpdate(e => {
+        rearrangeDragYAnim.setValue(e.translationY)
+        const newTo = Math.max(0, Math.min(
+          rearrangeItems.length - 1,
+          Math.round(idx + e.translationY / REORDER_ROW_H)
+        ))
+        if (newTo !== rearrangeDragToRef.current) {
+          rearrangeDragToRef.current = newTo
+          setRearrangeDragTo(newTo)
+        }
+      })
+      .onEnd(() => {
+        const from = rearrangeDragFromRef.current
+        const to   = rearrangeDragToRef.current
+        rearrangeDragYAnim.setValue(0)
+        rearrangeDragFromRef.current = null
+        rearrangeDragToRef.current   = null
+        setRearrangeDragFrom(null)
+        setRearrangeDragTo(null)
+        if (from !== null && to !== null && from !== to) {
+          setRearrangeItems(prev => {
+            const next = [...prev]
+            const [moved] = next.splice(from, 1)
+            next.splice(to, 0, moved)
+            return next
+          })
+        }
+      })
+      .onFinalize(() => {
+        rearrangeDragYAnim.setValue(0)
+        rearrangeDragFromRef.current = null
+        rearrangeDragToRef.current   = null
+        setRearrangeDragFrom(null)
+        setRearrangeDragTo(null)
+      })
+  }
+
+  async function saveRearrange() {
+    setItems(rearrangeItems)
+    const keys = rearrangeItems.map((i: any) => String(i.id))
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    rd[sectionKey]['_itemOrder'] = keys
+    await setReportData(inspectionId, rd)
+    setRearrangeModal(false)
+  }
+
   async function commitItemReorderByIndex(from: number, to: number) {
     // Reorder local state immediately for a responsive UI
     const reordered = [...items]
@@ -1579,31 +1663,16 @@ export default function RoomInspectionScreen() {
   function renderItem(item: any, idx: number) {
     const label = item.label || item.name || ''
 
-    const baseActions = [
-      {
-        icon: '✏️',
-        label: 'Rename',
-        bg: colors.primaryLight,
-        onPress: () => { setRenameItemId(item.id); setRenameItemName(label); setRenameItemModal(true) },
-      },
-      {
-        icon: '⧉',
-        label: 'Copy',
-        bg: '#e0f2fe',
-        onPress: () => duplicateItem(item.id, item),
-      },
-      {
-        icon: '🗑',
-        label: 'Delete',
-        bg: colors.dangerLight,
-        onPress: () => deleteItemConfirmed(item.id, label),
-      },
-    ]
-    // Add sub-item action for room items — opens quantity picker
     const itemLabel = item.label || item.name || 'Item'
-    const itemActions = (item.hasDescription && sectionType_ === 'room')
-      ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: itemLabel, count: 1 }) }, ...baseActions]
-      : baseActions
+    const isRoomItem = item.hasDescription && sectionType_ === 'room'
+    // 2-column grid layout: row1 = Sub-item/Rename, row2 = Copy/Rearrange, row3 = Delete (wide)
+    const itemActions = [
+      ...(isRoomItem ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: itemLabel, count: 1 }) }] : []),
+      { icon: '✏️', label: 'Rename',    bg: colors.primaryLight, onPress: () => { setRenameItemId(item.id); setRenameItemName(label); setRenameItemModal(true) } },
+      { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => duplicateItem(item.id, item) },
+      { icon: '⇅',  label: 'Rearrange', bg: '#f5f3ff',           onPress: () => openRearrangeModal() },
+      { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteItemConfirmed(item.id, label), wide: true },
+    ]
 
     const isDragging  = itemDragFrom === idx
     const shift       = (itemDragFrom !== null && itemDragTo !== null && !isDragging)
@@ -1638,12 +1707,6 @@ export default function RoomInspectionScreen() {
               </View>
             )}
           </View>
-          {/* Drag handle — long-press and drag to reorder */}
-          <GestureDetector gesture={makeItemDragGesture(idx)}>
-            <View style={styles.itemDragHandle} hitSlop={{ top: 10, bottom: 10, left: 10, right: 4 }}>
-              <Text style={styles.itemDragHandleIcon}>≡</Text>
-            </View>
-          </GestureDetector>
         </View>
 
         {/* Question label for smoke/health/fire */}
@@ -2194,7 +2257,7 @@ export default function RoomInspectionScreen() {
             })()}
 
                         {items.length > 0 && (
-              <Text style={styles.swipeHint}>Swipe for options · Drag  ≡  to reorder</Text>
+              <Text style={styles.swipeHint}>← Swipe left or right for options →</Text>
             )}
             {items.length === 0 && (
               <View style={styles.emptyNote}>
@@ -2569,6 +2632,58 @@ export default function RoomInspectionScreen() {
             </View>
           </View></View>
         </Modal>
+
+        {/* ── Rearrange items modal ─────────────────────────────────────────── */}
+        <Modal visible={rearrangeModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setRearrangeModal(false)}>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+          <View style={[rrStyles.screen, dm.bg, { paddingTop: insets.top }]}>
+            <View style={[rrStyles.header, dm.surface, { borderBottomColor: c.border }]}>
+              <TouchableOpacity onPress={() => setRearrangeModal(false)}>
+                <Text style={[rrStyles.cancel, dm.textMid]}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={[rrStyles.title, dm.text]}>Rearrange Items</Text>
+              <TouchableOpacity onPress={saveRearrange}>
+                <Text style={rrStyles.save}>Save</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={rrStyles.hint}>Hold any item and drag to reorder</Text>
+            <ScrollView
+              scrollEnabled={rearrangeDragFrom === null}
+              contentContainerStyle={rrStyles.list}
+            >
+              {rearrangeItems.map((item, idx) => {
+                const isDragging = rearrangeDragFrom === idx
+                const shift = (!isDragging && rearrangeDragFrom !== null && rearrangeDragTo !== null)
+                  ? getRearrangeShift(idx, rearrangeDragFrom, rearrangeDragTo)
+                  : 0
+                return (
+                  <Animated.View
+                    key={item.id}
+                    style={isDragging
+                      ? { transform: [{ translateY: rearrangeDragYAnim }], zIndex: 10, elevation: 6 }
+                      : shift !== 0 ? { transform: [{ translateY: shift }] } : {}
+                    }
+                  >
+                    <GestureDetector gesture={makeRearrangeGesture(idx)}>
+                      <View style={[rrStyles.row, dm.surface, { borderColor: c.border }, isDragging && rrStyles.rowDragging]}>
+                        <Text style={[rrStyles.rowLabel, dm.text]} numberOfLines={1}>
+                          {item.label || item.name || ''}
+                        </Text>
+                        <Text style={rrStyles.handle}>≡</Text>
+                      </View>
+                    </GestureDetector>
+                  </Animated.View>
+                )
+              })}
+            </ScrollView>
+            <View style={[rrStyles.footer, dm.surface, { borderTopColor: c.border, paddingBottom: insets.bottom + 8 }]}>
+              <TouchableOpacity style={rrStyles.saveBtn} onPress={saveRearrange}>
+                <Text style={rrStyles.saveBtnText}>Save Order</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          </GestureHandlerRootView>
+        </Modal>
       </View>
     </KeyboardAvoidingView>
     </GestureHandlerRootView>
@@ -2597,6 +2712,45 @@ const mStyles = StyleSheet.create({
   cancelText: { color: colors.textMid, fontWeight: '600' },
   confirm: { flex: 1, padding: 12, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: 'center' },
   confirmText: { color: '#fff', fontWeight: '700' },
+})
+const rrStyles = StyleSheet.create({
+  screen: { flex: 1 },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.md, paddingVertical: 14,
+    borderBottomWidth: 1,
+  },
+  cancel: { fontSize: font.md, fontWeight: '500' },
+  title:  { fontSize: font.md, fontWeight: '700' },
+  save:   { fontSize: font.md, fontWeight: '700', color: colors.primary },
+  hint: {
+    fontSize: font.xs, color: colors.textLight, textAlign: 'center',
+    paddingVertical: spacing.sm, fontStyle: 'italic',
+  },
+  list: { paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: 20 },
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    height: 56, borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.xs,
+    borderWidth: 1,
+  },
+  rowDragging: {
+    borderColor: colors.primary,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+  },
+  rowLabel: { flex: 1, fontSize: font.sm, fontWeight: '600' },
+  handle: { fontSize: 20, color: colors.textLight, letterSpacing: 1 },
+  footer: {
+    padding: spacing.md, paddingTop: spacing.sm,
+    borderTopWidth: 1,
+  },
+  saveBtn: {
+    backgroundColor: colors.primary, borderRadius: radius.md,
+    padding: 15, alignItems: 'center',
+  },
+  saveBtnText: { color: '#fff', fontSize: font.lg, fontWeight: '700' },
 })
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
