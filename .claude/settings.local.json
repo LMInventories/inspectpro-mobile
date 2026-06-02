@@ -8,7 +8,9 @@
       "PowerShell(& \"node_modules\\\\.bin\\\\tsc\" --noEmit 2>&1 | Select-Object -First 80)",
       "Bash(./node_modules/.bin/tsc --noEmit)",
       "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\inspectpro-mobile\\\\src\" -Recurse -Name)",
-      "Bash(Select-String -Pattern \"\\(photo|gallery|room|image\\)\" -SimpleMatch)"
+      "Bash(Select-String -Pattern \"\\(photo|gallery|room|image\\)\" -SimpleMatch)",
+      "Bash(Get-ChildItem -Recurse -Path C:\\\\Projects\\\\inspectpro-mobile\\\\src -Filter \"*.ts*\")",
+      "Bash(Select-Object -ExpandProperty FullName)"
     ]
   }
 }

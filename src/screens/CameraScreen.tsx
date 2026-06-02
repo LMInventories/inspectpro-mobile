@@ -260,9 +260,12 @@ export default function CameraScreen() {
   // Subtle flash blink on capture
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
+    // Stop any in-progress flash from a rapid prior shot, then reset
+    captureFlash.stopAnimation()
+    captureFlash.setValue(0)
     Animated.sequence([
-      Animated.timing(captureFlash, { toValue: 0.35, duration: 3,   useNativeDriver: true }),
-      Animated.timing(captureFlash, { toValue: 0,    duration: 10,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0.45, duration: 25,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0,    duration: 180, useNativeDriver: true }),
     ]).start()
   }
 

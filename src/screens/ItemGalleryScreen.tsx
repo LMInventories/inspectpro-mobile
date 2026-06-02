@@ -263,10 +263,13 @@ export default function ItemGalleryScreen() {
       }
       const sections: any[] = tmplData.sections || []
       const rd = localInsp?.report_data ? JSON.parse(localInsp.report_data) : {}
+      const roomNames: Record<string, string> = rd['_roomNames'] || {}
+      const hiddenRooms: string[] = rd['_hiddenRooms'] || []
 
       const rooms: RoomOption[] = []
       for (const sec of sections) {
         const secKey = String(sec.id)
+        if (hiddenRooms.includes(secKey)) continue
         const tmplItems: ItemOption[] = (sec.items || []).map((it: any) => ({
           key:  String(it.id),
           name: it.name || it.label || '',
@@ -283,7 +286,19 @@ export default function ItemGalleryScreen() {
           seen.add(it.key)
           return true
         })
-        rooms.push({ key: secKey, name: sec.name || sec.label || secKey, items })
+        rooms.push({ key: secKey, name: roomNames[secKey] || sec.name || sec.label || secKey, items })
+      }
+      // Include custom rooms added during inspection
+      const customRooms: { key: string; name: string }[] = rd['_customRooms'] || []
+      for (const cr of customRooms) {
+        if (hiddenRooms.includes(cr.key)) continue
+        const extraItems: ItemOption[] = (rd[cr.key]?._extra || []).map((e: any) => ({
+          key:  String(e._eid),
+          name: e.name || e.label || '(unnamed)',
+        }))
+        const deletedIds = new Set<string>((rd[cr.key]?._deleted || []).map(String))
+        const items: ItemOption[] = extraItems.filter(it => !deletedIds.has(it.key))
+        rooms.push({ key: cr.key, name: roomNames[cr.key] ?? cr.name ?? 'Room', items })
       }
 
       setAllRooms(rooms)

@@ -22,8 +22,8 @@ type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 
 type ReviewSub  = { label: string; cond: string }
-type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[] }
-type ReviewRoom  = { name: string; items: ReviewItem[] }
+type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[]; photos: string[] }
+type ReviewRoom  = { name: string; overviewPhotos: string[]; items: ReviewItem[] }
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
 async function openMap(address: string) {
@@ -216,7 +216,8 @@ export default function PropertyOverviewScreen() {
         const cond     = getCond(itemData)
         const desc     = !isCheckOut ? (itemData?.description || '') : ''
         const subs     = buildSubs(itemData)
-        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !subs.length, subs })
+        const photos: string[] = itemData?._photos || []
+        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !subs.length, subs, photos })
       }
       for (const extra of (rd[key]?._extra || [])) {
         if (!extra._eid || deleted.has(String(extra._eid))) continue
@@ -224,9 +225,11 @@ export default function PropertyOverviewScreen() {
         const cond     = getCond(merged)
         const desc     = !isCheckOut ? (merged.description || '') : ''
         const subs     = buildSubs(merged)
-        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs })
+        const photos: string[] = merged?._photos || []
+        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos })
       }
-      if (items.length > 0) roomMap.set(key, { name: displayName, items })
+      const overviewPhotos: string[] = rd[key]?._overview?._photos || []
+      if (items.length > 0) roomMap.set(key, { name: displayName, overviewPhotos, items })
     }
 
     // Custom rooms
@@ -241,9 +244,11 @@ export default function PropertyOverviewScreen() {
         const cond   = getCond(merged)
         const desc   = !isCheckOut ? (merged.description || '') : ''
         const subs   = buildSubs(merged)
-        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs })
+        const photos: string[] = merged?._photos || []
+        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos })
       }
-      if (items.length > 0) roomMap.set(cr.key, { name: roomNames[cr.key] ?? cr.name ?? 'Room', items })
+      const overviewPhotos: string[] = rd[cr.key]?._overview?._photos || []
+      if (items.length > 0) roomMap.set(cr.key, { name: roomNames[cr.key] ?? cr.name ?? 'Room', overviewPhotos, items })
     }
 
     // Apply user-defined room order (_roomOrder mirrors RoomSelectionScreen drag order).
@@ -629,7 +634,16 @@ export default function PropertyOverviewScreen() {
             ) : (
               reviewRooms.map((room, ri) => (
                 <View key={ri} style={rvStyles.roomBlock}>
-                  <Text style={rvStyles.roomName}>{room.name}</Text>
+                  <View style={rvStyles.roomHeader}>
+                    <Text style={rvStyles.roomName}>{room.name}</Text>
+                    {room.overviewPhotos.length > 0 && (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={rvStyles.photoStrip} contentContainerStyle={rvStyles.photoStripContent}>
+                        {room.overviewPhotos.map((uri, pi) => (
+                          <Image key={pi} source={{ uri }} style={rvStyles.photoThumb} />
+                        ))}
+                      </ScrollView>
+                    )}
+                  </View>
                   {room.items.map((item, ii) => (
                     <View
                       key={ii}
@@ -667,6 +681,13 @@ export default function PropertyOverviewScreen() {
                             )}
                           </>
                       }
+                      {item.photos.length > 0 && (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={rvStyles.photoStrip} contentContainerStyle={rvStyles.photoStripContent}>
+                          {item.photos.map((uri, pi) => (
+                            <Image key={pi} source={{ uri }} style={rvStyles.photoThumb} />
+                          ))}
+                        </ScrollView>
+                      )}
                     </View>
                   ))}
                 </View>
@@ -971,6 +992,9 @@ const rvStyles = StyleSheet.create({
     borderColor: colors.border,
     overflow: 'hidden',
   },
+  roomHeader: {
+    backgroundColor: colors.muted,
+  },
   roomName: {
     fontSize: font.xs,
     fontWeight: '700',
@@ -979,7 +1003,20 @@ const rvStyles = StyleSheet.create({
     letterSpacing: 0.6,
     paddingVertical: 7,
     paddingHorizontal: spacing.md,
-    backgroundColor: colors.muted,
+  },
+  photoStrip: {
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  photoStripContent: {
+    paddingHorizontal: spacing.md,
+    gap: 4,
+  },
+  photoThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.sm,
+    backgroundColor: colors.border,
   },
   itemRow: {
     paddingVertical: spacing.sm,
