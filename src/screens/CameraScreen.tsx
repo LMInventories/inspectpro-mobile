@@ -23,13 +23,12 @@
  *   runs async so the next shot can start without waiting for I/O.
  */
 
-import React, { useRef, useState, useCallback, useEffect } from 'react'
+import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
   Dimensions,
   Animated,
@@ -226,9 +225,16 @@ export default function CameraScreen() {
   const [flash, setFlash]                     = useState<FlashMode>('off')
   const [zoom, setZoom]                       = useState(1)
   const [activeZoomLabel, setActiveZoomLabel] = useState('1×')
-  const [isCapturing, setIsCapturing]         = useState(false)
   // Last captured photo — shown as thumbnail next to shutter button
   const [lastPhotoUri, setLastPhotoUri]       = useState<string | null>(null)
+
+  // Shutter button opacity — dims on press and fades back, no state re-render needed
+  const shutterOpacity = useRef(new Animated.Value(1)).current
+  function dimShutter() {
+    shutterOpacity.stopAnimation()
+    shutterOpacity.setValue(0.3)
+    Animated.timing(shutterOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start()
+  }
 
   // ── Focus state ────────────────────────────────────────────────────────────
   const [focusMode, setFocusMode]   = useState<FocusMode>('auto')
@@ -253,8 +259,7 @@ export default function CameraScreen() {
     FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {})
   }, [inspectionId])
 
-  // Ref-based capture guard — avoids a state re-render between shots which
-  // was adding visible latency. isCapturing state is kept only for the UI.
+  // Ref-based capture guard — prevents double-fire without a state re-render.
   const capturingRef = useRef(false)
 
   // Subtle flash blink on capture
@@ -310,7 +315,7 @@ export default function CameraScreen() {
   // ── Lens / zoom buttons ────────────────────────────────────────────────────
   interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
 
-  function buildZoomButtons(): LensButton[] {
+  const zoomButtons = useMemo((): LensButton[] => {
     if (!backDevice) return [{ label: '1×', zoom: 1, lens: 'main' }]
     const neutral = backDevice.neutralZoom
     const max     = backDevice.maxZoom
@@ -329,8 +334,7 @@ export default function CameraScreen() {
     if (neutral * 2 <= max) buttons.push({ label: '2×', zoom: neutral * 2, lens: 'main' })
     if (neutral * 5 <= max) buttons.push({ label: '5×', zoom: neutral * 5, lens: 'main' })
     return buttons
-  }
-  const zoomButtons = buildZoomButtons()
+  }, [backDevice, hasUltraWide, hasSeparateUltraWide, ultraWideDevice])
 
   // ── Pinch gesture ─────────────────────────────────────────────────────────
   const baseZoom = useRef(1)
@@ -362,10 +366,12 @@ export default function CameraScreen() {
   const handleCapture = useCallback(async () => {
     if (!cameraRef.current || capturingRef.current || !device || !photoDirRef.current) return
     capturingRef.current = true
-    setIsCapturing(true)
+
+    // Ideas 1 + 2: immediate feedback on press — no state update, no re-render
+    triggerFlash()
+    dimShutter()
+
     try {
-      // Cast to any: skipMetadata is valid in VisionCamera v4 at runtime but
-      // missing from the bundled type declarations in some patch versions.
       const photo = await cameraRef.current.takePhoto({
         flash,
         enableShutterSound: false,
@@ -376,12 +382,14 @@ export default function CameraScreen() {
         ? photo.path
         : `file://${photo.path}`
 
-      // Release gate BEFORE file I/O — next shot can start immediately
+      // Release gate — next shot can start immediately
       capturingRef.current = false
-      setIsCapturing(false)
-      triggerFlash()
 
-      // File copy + handoff + gallery save run asynchronously
+      // Idea 3: thumbnail visible right away from the temp path
+      setLastPhotoUri(srcUri)
+
+      // File copy + handoff + gallery save run asynchronously;
+      // swap thumbnail to permanent path once copy is done
       const dest = `${photoDirRef.current}${Date.now()}.jpg`
       FileSystem.copyAsync({ from: srcUri, to: dest })
         .then(() => {
@@ -402,7 +410,6 @@ export default function CameraScreen() {
         err?.message ?? 'Could not save the photo. Please try again.'
       )
       capturingRef.current = false
-      setIsCapturing(false)
     }
   }, [device, flash])
 
@@ -561,16 +568,14 @@ export default function CameraScreen() {
                 </Animated.View>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.shutter, isCapturing && styles.shutterDisabled]}
-                onPressIn={handleCapture}
-                disabled={isCapturing}
-              >
-                {isCapturing
-                  ? <ActivityIndicator color="#1e3a8a" />
-                  : <View style={styles.shutterInner} />
-                }
-              </TouchableOpacity>
+              <Animated.View style={{ opacity: shutterOpacity }}>
+                <TouchableOpacity
+                  style={styles.shutter}
+                  onPressIn={handleCapture}
+                >
+                  <View style={styles.shutterInner} />
+                </TouchableOpacity>
+              </Animated.View>
 
               {/* Last-photo thumbnail — tap to open ItemGallery */}
               <TouchableOpacity

@@ -10,7 +10,8 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\inspectpro-mobile\\\\src\" -Recurse -Name)",
       "Bash(Select-String -Pattern \"\\(photo|gallery|room|image\\)\" -SimpleMatch)",
       "Bash(Get-ChildItem -Recurse -Path C:\\\\Projects\\\\inspectpro-mobile\\\\src -Filter \"*.ts*\")",
-      "Bash(Select-Object -ExpandProperty FullName)"
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(node *)"
     ]
   }
 }

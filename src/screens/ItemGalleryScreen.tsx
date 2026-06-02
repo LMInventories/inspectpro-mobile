@@ -505,7 +505,7 @@ export default function ItemGalleryScreen() {
       ) : (
         <FlatList
           data={photos}
-          keyExtractor={(_, i) => String(i)}
+          keyExtractor={(uri) => uri}
           numColumns={4}
           contentContainerStyle={[styles.grid, selecting && { paddingBottom: 96 }]}
           columnWrapperStyle={styles.row}
@@ -718,27 +718,30 @@ export default function ItemGalleryScreen() {
           setFlatScrollEnabled(true)
         }}
       >
+        {/* GestureHandlerRootView must live inside the Modal — Modals render
+            outside the component tree so they don't inherit the outer root. */}
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={lbS.screen}>
           {/* Swipeable photo strip — fills screen, sits behind all overlays */}
           <FlatList
             ref={lightboxFlatRef}
             data={photos}
-            keyExtractor={(_, i) => String(i)}
+            keyExtractor={(uri) => uri}
             horizontal
             pagingEnabled
             showsHorizontalScrollIndicator={false}
             scrollEnabled={flatScrollEnabled}
             style={StyleSheet.absoluteFill}
             renderItem={({ item: uri }) => (
-              <View style={{ width: SW, height: SH, justifyContent: 'center', alignItems: 'center' }}>
-                <GestureDetector gesture={zoomGesture}>
+              <GestureDetector gesture={zoomGesture}>
+                <View style={{ width: SW, height: SH, justifyContent: 'center', alignItems: 'center' }}>
                   <Animated.Image
                     source={{ uri }}
                     style={[lbS.image, { transform: [{ scale: lightboxScale }] }]}
                     resizeMode="contain"
                   />
-                </GestureDetector>
-              </View>
+                </View>
+              </GestureDetector>
             )}
             onMomentumScrollEnd={(e) => {
               const newIndex = Math.round(e.nativeEvent.contentOffset.x / SW)
@@ -806,6 +809,7 @@ export default function ItemGalleryScreen() {
             </>
           )}
         </View>
+        </GestureHandlerRootView>
       </Modal>
 
       {/* Auto-fading AI reassign toast — no interaction required */}

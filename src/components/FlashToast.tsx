@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react'
-import { Animated, StyleSheet, Text } from 'react-native'
+import { Animated, StyleSheet, Text, useWindowDimensions } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useToastStore } from '../stores/toastStore'
 
@@ -18,6 +18,7 @@ export default function FlashToast() {
   const seenId   = useRef<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const insets   = useSafeAreaInsets()
+  useWindowDimensions() // re-render on rotation so insets and position stay current
 
   useEffect(() => {
     if (!toast || toast.id === seenId.current) return
@@ -49,7 +50,13 @@ export default function FlashToast() {
     <Animated.View
       style={[
         styles.container,
-        { top: insets.top + 8, opacity, backgroundColor: BG[toast.type] ?? BG.success },
+        {
+          top:   insets.top   + 8,
+          left:  insets.left  + 16,
+          right: insets.right + 16,
+          opacity,
+          backgroundColor: BG[toast.type] ?? BG.success,
+        },
       ]}
       pointerEvents="none"
     >
@@ -61,8 +68,6 @@ export default function FlashToast() {
 const styles = StyleSheet.create({
   container: {
     position:     'absolute',
-    left:         16,
-    right:        16,
     zIndex:       9999,
     borderRadius: 10,
     paddingHorizontal: 16,

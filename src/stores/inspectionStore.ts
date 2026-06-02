@@ -44,8 +44,6 @@ export const useInspectionStore = create<InspectionStore>((set, get) => ({
     if (activeInspection?.id === inspectionId) {
       set({ activeInspection: { ...activeInspection, report_data: json } })
     }
-    const inspections = getLocalInspections()
-    set({ inspections })
   },
 
   updateSectionInReport: (inspectionId, sectionKey, sectionData) => {

@@ -626,7 +626,7 @@ export default function PropertyOverviewScreen() {
         <View style={[rvStyles.screen, { paddingTop: insets.top }]}>
           <View style={rvStyles.header}>
             <Text style={rvStyles.title}>Review Report</Text>
-            <Text style={rvStyles.subtitle}>Check all items before finalising. Red items are unfilled.</Text>
+            <Text style={rvStyles.subtitle}>Check all items and photos before finalising. Highlighted items are unfilled.</Text>
           </View>
           <ScrollView style={rvStyles.scroll} contentContainerStyle={rvStyles.scrollContent}>
             {reviewRooms.length === 0 ? (
