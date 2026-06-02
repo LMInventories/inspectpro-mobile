@@ -23,7 +23,7 @@ type Nav   = StackNavigationProp<RootStackParamList, 'ItemGallery'>
 type Route = RouteProp<RootStackParamList, 'ItemGallery'>
 
 const { width: SW, height: SH } = Dimensions.get('window')
-const THUMB = (SW - spacing.md * 2 - spacing.sm * 2) / 3
+const THUMB = (SW - spacing.md * 2 - spacing.sm * 3) / 4
 
 interface RoomOption { key: string; name: string; items: ItemOption[] }
 interface ItemOption { key: string; name: string }
@@ -53,9 +53,11 @@ export default function ItemGalleryScreen() {
 
   // Reassign modal
   const [showReassign, setShowReassign]     = useState(false)
-  const [currentRoomItems, setCurrentRoomItems] = useState<ItemOption[]>([])
+  const [allRooms, setAllRooms]             = useState<RoomOption[]>([])
+  const [targetRoom, setTargetRoom]         = useState<RoomOption | null>(null)
   const [targetItem, setTargetItem]         = useState<ItemOption | null>(null)
   const [roomsLoading, setRoomsLoading]     = useState(false)
+  const [roomPickerOpen, setRoomPickerOpen] = useState(false)
   const [itemPickerOpen, setItemPickerOpen] = useState(false)
 
   // AI reassign
@@ -244,12 +246,13 @@ export default function ItemGalleryScreen() {
   async function openReassign() {
     setRoomsLoading(true)
     setShowReassign(true)
+    setRoomPickerOpen(false)
+    setItemPickerOpen(false)
     try {
       if (!activeInspection?.template_id) {
         Alert.alert('No template', 'This inspection has no template assigned.')
         setShowReassign(false); return
       }
-      // Use cached template (embedded at download time) — fallback to live API
       let tmplData: any = null
       const localInsp = await getLocalInspection(inspectionId)
       if (localInsp?.template) {
@@ -259,38 +262,41 @@ export default function ItemGalleryScreen() {
         tmplData = tmplRes.data
       }
       const sections: any[] = tmplData.sections || []
-      // Template items for this room
-      const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
-      const tmplItems: ItemOption[] = (thisSection?.items || []).map((it: any) => ({
-        key:  String(it.id),
-        name: it.name || it.label || '',
-      }))
-      // Extra items added during inspection (custom rooms and mid-inspection additions)
-      // Reuse the same localInsp fetched above — no second DB call needed
       const rd = localInsp?.report_data ? JSON.parse(localInsp.report_data) : {}
-      const extraItems: ItemOption[] = (rd[sectionKey]?._extra || []).map((e: any) => ({
-        key:  String(e._eid),
-        name: e.name || e.label || '(unnamed)',
-      }))
-      // Filter out deleted items
-      const deletedIds = new Set<string>((rd[sectionKey]?._deleted || []).map(String))
-      // Merge — template items first, then extras; deduplicate by key; exclude deleted
-      const seen = new Set<string>()
-      const items: ItemOption[] = [...tmplItems, ...extraItems].filter(it => {
-        if (seen.has(it.key)) return false
-        if (deletedIds.has(it.key)) return false
-        seen.add(it.key)
-        return true
-      })
-      setCurrentRoomItems(items)
-      setTargetItem(items[0] || null)
-    } catch { Alert.alert('Error', 'Could not load room items.'); setShowReassign(false) }
+
+      const rooms: RoomOption[] = []
+      for (const sec of sections) {
+        const secKey = String(sec.id)
+        const tmplItems: ItemOption[] = (sec.items || []).map((it: any) => ({
+          key:  String(it.id),
+          name: it.name || it.label || '',
+        }))
+        const extraItems: ItemOption[] = (rd[secKey]?._extra || []).map((e: any) => ({
+          key:  String(e._eid),
+          name: e.name || e.label || '(unnamed)',
+        }))
+        const deletedIds = new Set<string>((rd[secKey]?._deleted || []).map(String))
+        const seen = new Set<string>()
+        const items: ItemOption[] = [...tmplItems, ...extraItems].filter(it => {
+          if (seen.has(it.key)) return false
+          if (deletedIds.has(it.key)) return false
+          seen.add(it.key)
+          return true
+        })
+        rooms.push({ key: secKey, name: sec.name || sec.label || secKey, items })
+      }
+
+      setAllRooms(rooms)
+      const currentRoom = rooms.find(r => r.key === sectionKey) || rooms[0] || null
+      setTargetRoom(currentRoom)
+      setTargetItem(currentRoom?.items[0] || null)
+    } catch { Alert.alert('Error', 'Could not load rooms.'); setShowReassign(false) }
     finally { setRoomsLoading(false) }
   }
 
   async function confirmReassign() {
-    if (!targetItem) return
-    if (targetItem.key === itemKey) {
+    if (!targetItem || !targetRoom) return
+    if (targetRoom.key === sectionKey && targetItem.key === itemKey) {
       Alert.alert('Same item', 'Photos are already assigned here.'); return
     }
     const rd = JSON.parse(activeInspection?.report_data || '{}')
@@ -299,16 +305,20 @@ export default function ItemGalleryScreen() {
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey][itemKey]) rd[sectionKey][itemKey] = {}
     rd[sectionKey][itemKey]._photos = getPhotos().filter(u => !selected.has(u))
-    // Add to target item (same room)
-    if (!rd[sectionKey][targetItem.key]) rd[sectionKey][targetItem.key] = {}
-    rd[sectionKey][targetItem.key]._photos = [
-      ...(rd[sectionKey][targetItem.key]._photos || []),
+    // Add to target item (may be a different room)
+    if (!rd[targetRoom.key]) rd[targetRoom.key] = {}
+    if (!rd[targetRoom.key][targetItem.key]) rd[targetRoom.key][targetItem.key] = {}
+    rd[targetRoom.key][targetItem.key]._photos = [
+      ...(rd[targetRoom.key][targetItem.key]._photos || []),
       ...photosToMove,
     ]
     await setReportData(inspectionId, rd)
     setShowReassign(false)
     exitSelect()
-    showAutoToast(`${photosToMove.length} photo${photosToMove.length !== 1 ? 's' : ''} moved to ${targetItem.name}`)
+    const dest = targetRoom.key !== sectionKey
+      ? `${targetRoom.name} › ${targetItem.name}`
+      : targetItem.name
+    showAutoToast(`${photosToMove.length} photo${photosToMove.length !== 1 ? 's' : ''} moved to ${dest}`)
   }
 
   // ── AI Reassign ────────────────────────────────────────────────────────────
@@ -481,7 +491,7 @@ export default function ItemGalleryScreen() {
         <FlatList
           data={photos}
           keyExtractor={(_, i) => String(i)}
-          numColumns={3}
+          numColumns={4}
           contentContainerStyle={[styles.grid, selecting && { paddingBottom: 96 }]}
           columnWrapperStyle={styles.row}
           renderItem={({ item: uri, index }) => (
@@ -522,15 +532,6 @@ export default function ItemGalleryScreen() {
             <Text style={styles.barBtnText}>Reassign</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.barBtn, styles.barBtnAccent, (!selected.size || aiLoading) && styles.barBtnDisabled]}
-            onPress={selected.size > 0 && !aiLoading ? handleAiReassign : undefined}
-          >
-            {aiLoading
-              ? <ActivityIndicator color="#fff" size="small" />
-              : <Text style={styles.barBtnText}>✦ AI</Text>
-            }
-          </TouchableOpacity>
-          <TouchableOpacity
             style={[styles.barBtn, styles.barBtnDanger, !selected.size && styles.barBtnDisabled]}
             onPress={selected.size > 0 ? handleDeleteSelected : undefined}
           >
@@ -560,30 +561,55 @@ export default function ItemGalleryScreen() {
             <ScrollView contentContainerStyle={mStyles.body} keyboardShouldPersistTaps="handled">
               <Text style={mStyles.desc}>
                 Moving <Text style={mStyles.bold}>{selected.size}</Text> photo{selected.size !== 1 ? 's' : ''} from{' '}
-                <Text style={mStyles.bold}>{itemName}</Text> to another item in this room
+                <Text style={mStyles.bold}>{itemName}</Text> in <Text style={mStyles.bold}>{sectionName}</Text>
               </Text>
 
-              {/* Room — locked to current, shown as info only */}
+              {/* Room picker */}
               <Text style={mStyles.label}>Room</Text>
-              <View style={mStyles.lockedRoom}>
-                <Text style={mStyles.lockedRoomText}>{sectionName}</Text>
-                <Text style={mStyles.lockedRoomBadge}>Current room</Text>
-              </View>
+              <TouchableOpacity
+                style={[mStyles.picker, roomPickerOpen && mStyles.pickerOpen]}
+                onPress={() => { setRoomPickerOpen(v => !v); setItemPickerOpen(false) }}
+              >
+                <Text style={mStyles.pickerVal}>{targetRoom?.name || 'Select room…'}</Text>
+                <Text style={mStyles.chevron}>{roomPickerOpen ? '▲' : '▼'}</Text>
+              </TouchableOpacity>
+              {roomPickerOpen && (
+                <View style={mStyles.dropdown}>
+                  {allRooms.length === 0
+                    ? <Text style={mStyles.emptyOpts}>No rooms found</Text>
+                    : allRooms.map(room => (
+                        <TouchableOpacity key={room.key}
+                          style={[mStyles.option, targetRoom?.key === room.key && mStyles.optionActive]}
+                          onPress={() => {
+                            setTargetRoom(room)
+                            setTargetItem(room.items[0] || null)
+                            setRoomPickerOpen(false)
+                          }}
+                        >
+                          <Text style={[mStyles.optionText, targetRoom?.key === room.key && mStyles.optionTextActive]}>
+                            {room.name}
+                          </Text>
+                          {targetRoom?.key === room.key && <Text style={mStyles.tick}>✓</Text>}
+                        </TouchableOpacity>
+                      ))
+                  }
+                </View>
+              )}
 
               {/* Item picker */}
               <Text style={[mStyles.label, { marginTop: spacing.md }]}>Item</Text>
               <TouchableOpacity
                 style={[mStyles.picker, itemPickerOpen && mStyles.pickerOpen]}
-                onPress={() => setItemPickerOpen(v => !v)}
+                onPress={() => { setItemPickerOpen(v => !v); setRoomPickerOpen(false) }}
               >
                 <Text style={mStyles.pickerVal}>{targetItem?.name || 'Select item…'}</Text>
                 <Text style={mStyles.chevron}>{itemPickerOpen ? '▲' : '▼'}</Text>
               </TouchableOpacity>
               {itemPickerOpen && (
                 <View style={mStyles.dropdown}>
-                  {currentRoomItems.length === 0
+                  {(targetRoom?.items || []).length === 0
                     ? <Text style={mStyles.emptyOpts}>No items in this room</Text>
-                    : currentRoomItems.map(item => (
+                    : (targetRoom?.items || []).map(item => (
                         <TouchableOpacity key={item.key}
                           style={[mStyles.option, targetItem?.key === item.key && mStyles.optionActive]}
                           onPress={() => { setTargetItem(item); setItemPickerOpen(false) }}
