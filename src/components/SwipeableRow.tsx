@@ -8,16 +8,17 @@ interface Action {
   label: string
   bg: string
   onPress: () => void
-  wide?: boolean  // spans full grid width — use for destructive/bottom actions
+  wide?: boolean  // grid mode only — spans full row width (use for destructive actions)
 }
 
 interface Props {
   children: React.ReactNode
   actions: Action[]
   disabled?: boolean
+  layout?: 'grid' | 'row'  // grid = 2-col wrap (default), row = horizontal single line
 }
 
-export default function SwipeableRow({ children, actions, disabled }: Props) {
+export default function SwipeableRow({ children, actions, disabled, layout = 'grid' }: Props) {
   const swipeRef = useRef<Swipeable>(null)
 
   function close() {
@@ -29,6 +30,25 @@ export default function SwipeableRow({ children, actions, disabled }: Props) {
     _side: 'left' | 'right'
   ) {
     if (!actions.length) return null
+
+    if (layout === 'row') {
+      return (
+        <View style={styles.rowContainer}>
+          {actions.map((action, i) => (
+            <TouchableOpacity
+              key={i}
+              style={[styles.rowBtn, { backgroundColor: action.bg }]}
+              onPress={() => { close(); action.onPress() }}
+            >
+              <Text style={styles.btnIcon}>{action.icon}</Text>
+              <Text style={styles.btnLabel}>{action.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )
+    }
+
+    // Default: 2-column wrapping grid
     return (
       <View style={styles.grid}>
         {actions.map((action, i) => (
@@ -66,7 +86,7 @@ const GAP   = 2
 const PAD   = 2
 
 const styles = StyleSheet.create({
-  // 2-column wrapping grid — centred vertically inside the swipe panel
+  // ── Grid layout (2-column wrap) ──────────────────────────────────────────
   grid: {
     flexDirection:  'row',
     flexWrap:       'wrap',
@@ -85,8 +105,26 @@ const styles = StyleSheet.create({
     gap:            3,
   },
   btnWide: {
-    width: BTN_W * 2 + GAP,  // spans both columns
+    width: BTN_W * 2 + GAP,
   },
+
+  // ── Row layout (horizontal single line) ──────────────────────────────────
+  rowContainer: {
+    flexDirection: 'row',
+    alignItems:    'stretch',
+    gap:           2,
+    padding:       2,
+  },
+  rowBtn: {
+    width:          62,
+    minHeight:      44,
+    alignItems:     'center',
+    justifyContent: 'center',
+    borderRadius:   radius.md,
+    gap:            3,
+  },
+
+  // ── Shared ────────────────────────────────────────────────────────────────
   btnIcon:  { fontSize: 18 },
   btnLabel: { fontSize: 9, fontWeight: '700', color: colors.text, letterSpacing: 0.2 },
 })

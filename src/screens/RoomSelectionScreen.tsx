@@ -56,6 +56,16 @@ export default function RoomSelectionScreen() {
   const [targetRoomId, setTargetRoomId] = useState('')
   const [targetName, setTargetName]     = useState('')
 
+  // Room rearrange modal
+  const [roomRearrangeModal, setRoomRearrangeModal] = useState(false)
+  const [roomRearrangeList, setRoomRearrangeList]   = useState<any[]>([])
+  const rrDragFromRef  = useRef<number | null>(null)
+  const rrDragToRef    = useRef<number | null>(null)
+  const [rrDragFrom, setRrDragFrom] = useState<number | null>(null)
+  const [rrDragTo,   setRrDragTo]   = useState<number | null>(null)
+  const rrDragYAnim = useRef(new Animated.Value(0)).current
+  const ROOM_ROW_H  = 56
+
   // Add room modal state
   const [presets, setPresets]             = useState<any[]>([])
   const [presetsLoading, setPresetsLoading] = useState(false)
@@ -282,11 +292,85 @@ export default function RoomSelectionScreen() {
     })
   }
 
+  // ── Room rearrange modal ───────────────────────────────────────────────────
+  function openRoomRearrangeModal() {
+    setRoomRearrangeList(buildOrderedRooms())
+    rrDragYAnim.setValue(0)
+    setRrDragFrom(null)
+    setRrDragTo(null)
+    setRoomRearrangeModal(true)
+  }
+
+  function getRoomRearrangeShift(idx: number, from: number, to: number): number {
+    if (from < to)      { if (idx > from && idx <= to) return -ROOM_ROW_H }
+    else if (from > to) { if (idx >= to && idx < from) return  ROOM_ROW_H }
+    return 0
+  }
+
+  function makeRoomRearrangeGesture(idx: number) {
+    return Gesture.Pan()
+      .runOnJS(true)
+      .activateAfterLongPress(350)
+      .onStart(() => {
+        rrDragFromRef.current = idx
+        rrDragToRef.current   = idx
+        rrDragYAnim.setValue(0)
+        setRrDragFrom(idx)
+        setRrDragTo(idx)
+      })
+      .onUpdate(e => {
+        rrDragYAnim.setValue(e.translationY)
+        const newTo = Math.max(0, Math.min(
+          roomRearrangeList.length - 1,
+          Math.round(idx + e.translationY / ROOM_ROW_H)
+        ))
+        if (newTo !== rrDragToRef.current) {
+          rrDragToRef.current = newTo
+          setRrDragTo(newTo)
+        }
+      })
+      .onEnd(() => {
+        const from = rrDragFromRef.current
+        const to   = rrDragToRef.current
+        rrDragYAnim.setValue(0)
+        rrDragFromRef.current = null
+        rrDragToRef.current   = null
+        setRrDragFrom(null)
+        setRrDragTo(null)
+        if (from !== null && to !== null && from !== to) {
+          setRoomRearrangeList(prev => {
+            const next = [...prev]
+            const [moved] = next.splice(from, 1)
+            next.splice(to, 0, moved)
+            return next
+          })
+        }
+      })
+      .onFinalize(() => {
+        rrDragYAnim.setValue(0)
+        rrDragFromRef.current = null
+        rrDragToRef.current   = null
+        setRrDragFrom(null)
+        setRrDragTo(null)
+      })
+  }
+
+  async function saveRoomRearrange() {
+    const keys = roomRearrangeList.map((r: any) => r.key)
+    const fresh = await getLocalInspection(inspectionId)
+    const freshRd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    freshRd['_roomOrder'] = keys
+    await setReportData(inspectionId, freshRd)
+    await loadInspection(inspectionId)
+    setRoomRearrangeModal(false)
+  }
+
   function roomActions(key: string, name: string) {
     return [
-      { icon: '✏️', label: 'Rename', bg: colors.primaryLight, onPress: () => openRename(key, name) },
-      { icon: '⧉',  label: 'Copy',   bg: '#e0f2fe',            onPress: () => handleDuplicateRoom(key, name) },
-      { icon: '🗑',  label: 'Delete', bg: colors.dangerLight,   onPress: () => deleteRoomConfirmed(key, name) },
+      { icon: '⇅',  label: 'Rearrange', bg: '#f5f3ff',          onPress: () => openRoomRearrangeModal() },
+      { icon: '✏️', label: 'Rename',    bg: colors.primaryLight, onPress: () => openRename(key, name) },
+      { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => handleDuplicateRoom(key, name) },
+      { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteRoomConfirmed(key, name) },
     ]
   }
 
@@ -638,7 +722,7 @@ export default function RoomSelectionScreen() {
           )}
 
           {(templateSections.length > 0 || customRooms.length > 0) && (
-            <Text style={styles.swipeHint}>Swipe for options · Drag  ≡  to reorder</Text>
+            <Text style={styles.swipeHint}>← Swipe left or right for options →</Text>
           )}
 
           {/* All rooms — template + custom — in user-defined order.
@@ -667,6 +751,7 @@ export default function RoomSelectionScreen() {
                 <SwipeableRow
                   actions={roomActions(room.key, room.name)}
                   disabled={dragFrom !== null}
+                  layout="row"
                 >
                   <View style={[styles.row, isDragging && styles.rowDragging]}>
                     <TouchableOpacity
@@ -676,11 +761,6 @@ export default function RoomSelectionScreen() {
                     >
                       <Text style={styles.rowName}>{room.name}</Text>
                     </TouchableOpacity>
-                    <GestureDetector gesture={makeDragGesture(idx)}>
-                      <View style={styles.dragHandle} hitSlop={{ top: 10, bottom: 10, left: 10, right: 4 }}>
-                        <Text style={styles.dragHandleIcon}>≡</Text>
-                      </View>
-                    </GestureDetector>
                   </View>
                 </SwipeableRow>
               </Animated.View>
@@ -717,10 +797,102 @@ export default function RoomSelectionScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* ── Rearrange rooms modal ─────────────────────────────────────────── */}
+      <Modal visible={roomRearrangeModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setRoomRearrangeModal(false)}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={[rrStyles.screen, { paddingTop: insets.top }]}>
+          <View style={rrStyles.header}>
+            <TouchableOpacity onPress={() => setRoomRearrangeModal(false)}>
+              <Text style={rrStyles.cancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={rrStyles.title}>Rearrange Rooms</Text>
+            <TouchableOpacity onPress={saveRoomRearrange}>
+              <Text style={rrStyles.save}>Save</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={rrStyles.hint}>Hold any room and drag to reorder</Text>
+          <ScrollView
+            scrollEnabled={rrDragFrom === null}
+            contentContainerStyle={rrStyles.list}
+          >
+            {roomRearrangeList.map((room: any, idx: number) => {
+              const isDragging = rrDragFrom === idx
+              const shift = (!isDragging && rrDragFrom !== null && rrDragTo !== null)
+                ? getRoomRearrangeShift(idx, rrDragFrom, rrDragTo)
+                : 0
+              return (
+                <Animated.View
+                  key={room.key}
+                  style={isDragging
+                    ? { transform: [{ translateY: rrDragYAnim }], zIndex: 10, elevation: 6 }
+                    : shift !== 0 ? { transform: [{ translateY: shift }] } : {}
+                  }
+                >
+                  <GestureDetector gesture={makeRoomRearrangeGesture(idx)}>
+                    <View style={[rrStyles.row, isDragging && rrStyles.rowDragging]}>
+                      <Text style={rrStyles.rowLabel} numberOfLines={1}>{room.name}</Text>
+                      <Text style={rrStyles.handle}>≡</Text>
+                    </View>
+                  </GestureDetector>
+                </Animated.View>
+              )
+            })}
+          </ScrollView>
+          <View style={[rrStyles.footer, { paddingBottom: insets.bottom + 8 }]}>
+            <TouchableOpacity style={rrStyles.saveBtn} onPress={saveRoomRearrange}>
+              <Text style={rrStyles.saveBtnText}>Save Order</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        </GestureHandlerRootView>
+      </Modal>
     </GestureHandlerRootView>
   )
 }
 
+const rrStyles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.md, paddingVertical: 14,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  cancel: { fontSize: font.md, fontWeight: '500', color: colors.textMid },
+  title:  { fontSize: font.md, fontWeight: '700', color: colors.text },
+  save:   { fontSize: font.md, fontWeight: '700', color: colors.primary },
+  hint: {
+    fontSize: font.xs, color: colors.textLight, textAlign: 'center',
+    paddingVertical: spacing.sm, fontStyle: 'italic',
+  },
+  list: { paddingHorizontal: spacing.md, paddingTop: spacing.xs, paddingBottom: 20 },
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    height: 56, borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.xs,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  rowDragging: {
+    borderColor: colors.primary,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18, shadowRadius: 8, elevation: 8,
+  },
+  rowLabel: { flex: 1, fontSize: font.sm, fontWeight: '600', color: colors.text },
+  handle: { fontSize: 20, color: colors.textLight, letterSpacing: 1 },
+  footer: {
+    padding: spacing.md, paddingTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1, borderTopColor: colors.border,
+  },
+  saveBtn: {
+    backgroundColor: colors.primary, borderRadius: radius.md,
+    padding: 15, alignItems: 'center',
+  },
+  saveBtnText: { color: '#fff', fontSize: font.lg, fontWeight: '700' },
+})
 const mStyles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
   box: { backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.lg, width: '100%' },
