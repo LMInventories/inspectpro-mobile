@@ -9,6 +9,7 @@ import {
   GestureHandlerRootView,
   GestureDetector,
   Gesture,
+  NativeViewGestureHandler,
 } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
@@ -1552,19 +1553,6 @@ export default function RoomInspectionScreen() {
 
     return (
       <View style={styles.photoBlock}>
-        {/* Check In reference photos — read-only, only on check-out inspections */}
-        {isCheckOut_ && srcPhotos.length > 0 && (
-          <View style={styles.sourcePhotoBlock}>
-            <Text style={styles.sourcePhotoLabel}>📋 Check In</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
-              {srcPhotos.map((uri: string, idx: number) => (
-                <TouchableOpacity key={idx} onPress={() => setCiLightbox({ photos: srcPhotos, index: idx })} activeOpacity={0.8}>
-                  <Image source={{ uri }} style={[styles.photoThumb, styles.sourcePhotoThumb]} />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        )}
         {/* Top row: label + icon buttons */}
         <View style={styles.photosHeader}>
           <Text style={[styles.fieldLabel, dm.textLight]}>
@@ -1581,21 +1569,23 @@ export default function RoomInspectionScreen() {
         </View>
         {/* Thumbnail strip */}
         {count > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
-            {photos.map((uri: string, idx: number) => (
-              <TouchableOpacity key={idx}
-                onPress={() => navigation.navigate('ItemGallery', {
-                  inspectionId, sectionKey, sectionName, itemKey: String(item.id),
-                  itemName: item.label || item.name, itemPosition,
-                })}
-                onLongPress={() => Alert.alert('Remove photo?', '', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Remove', style: 'destructive', onPress: () => removePhoto(item.id, idx) },
-                ])}>
-                <Image source={{ uri }} style={styles.photoThumb} />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <NativeViewGestureHandler disallowInterruption>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoStrip}>
+              {photos.map((uri: string, idx: number) => (
+                <TouchableOpacity key={idx}
+                  onPress={() => navigation.navigate('ItemGallery', {
+                    inspectionId, sectionKey, sectionName, itemKey: String(item.id),
+                    itemName: item.label || item.name, itemPosition,
+                  })}
+                  onLongPress={() => Alert.alert('Remove photo?', '', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Remove', style: 'destructive', onPress: () => removePhoto(item.id, idx) },
+                  ])}>
+                  <Image source={{ uri }} style={styles.photoThumb} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </NativeViewGestureHandler>
         )}
       </View>
     )
@@ -1643,18 +1633,20 @@ export default function RoomInspectionScreen() {
           <Text style={styles.ciPhotosChevron}>{expanded ? '▴' : '▾'}</Text>
         </TouchableOpacity>
         {expanded && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.ciPhotosScroll}
-            contentContainerStyle={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8 }}
-          >
-            {photos.map((uri, idx) => (
-              <TouchableOpacity key={idx} onPress={() => setCiLightbox({ photos, index: idx })} activeOpacity={0.8}>
-                <Image source={{ uri }} style={styles.ciPhotoThumb} resizeMode="cover" />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <NativeViewGestureHandler disallowInterruption>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.ciPhotosScroll}
+              contentContainerStyle={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8 }}
+            >
+              {photos.map((uri, idx) => (
+                <TouchableOpacity key={idx} onPress={() => setCiLightbox({ photos, index: idx })} activeOpacity={0.8}>
+                  <Image source={{ uri }} style={styles.ciPhotoThumb} resizeMode="cover" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </NativeViewGestureHandler>
         )}
       </View>
     )
