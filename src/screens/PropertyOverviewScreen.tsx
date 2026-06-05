@@ -10,7 +10,7 @@ import * as ImagePicker from 'expo-image-picker'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode } from '../services/database'
+import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption } from '../services/database'
 import { api } from '../services/api'
 import { syncSingleInspection, SyncProgress } from '../services/syncService'
 import { useAuthStore } from '../stores/authStore'
@@ -531,6 +531,55 @@ export default function PropertyOverviewScreen() {
           })()}
         </View>
 
+        {/* Camera Options */}
+        <View style={[styles.section, dm.surface, dm.border]}>
+          <Text style={[styles.sectionTitle, dm.textLight]}>Camera Options</Text>
+          <Text style={styles.modeHint}>
+            Choose how photos are captured during this inspection.
+          </Text>
+          {(
+            [
+              {
+                key: 'perItem',
+                label: '📷 Per Item',
+                sub: 'Camera button beside each item — photos assigned manually',
+              },
+              {
+                key: 'floating',
+                label: '✨ Floating with Preview',
+                sub: 'Live preview overlaid on the room — photos auto-assign to the active item',
+                warn: 'Landscape mode only',
+              },
+            ] as const
+          ).map(opt => {
+            const current = (inspection as any).camera_option ?? 'perItem'
+            const active  = current === opt.key
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[modeStyles.row, active && modeStyles.rowActive]}
+                onPress={() => {
+                  updateLocalCameraOption(inspectionId, opt.key)
+                  loadInspection(inspectionId)
+                }}
+              >
+                <View style={modeStyles.radio}>
+                  {active && <View style={modeStyles.radioDot} />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[modeStyles.label, active && modeStyles.labelActive]}>{opt.label}</Text>
+                  <Text style={modeStyles.sub}>{opt.sub}</Text>
+                  {'warn' in opt && (
+                    <View style={camOptStyles.warnPill}>
+                      <Text style={camOptStyles.warnText}>{opt.warn}</Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+
         <View style={[styles.section, dm.surface, dm.border]}>
           <Text style={[styles.sectionTitle, dm.textLight]}>Property Details</Text>
           <DetailRow label="Address"   value={inspection.property_address || '—'} />
@@ -915,6 +964,25 @@ const ipStyles = StyleSheet.create({
     borderRadius: 3,
   },
   barUpload: { backgroundColor: colors.accent },
+})
+
+const camOptStyles = StyleSheet.create({
+  warnPill: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    backgroundColor: 'rgba(234,179,8,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(234,179,8,0.4)',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  warnText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#92400e',
+    letterSpacing: 0.3,
+  },
 })
 
 // ── Signature modal styles ────────────────────────────────────────────────────

@@ -70,7 +70,14 @@ interface Props {
   items: RoomDictationItem[]
   onTranscribed: (filled: Record<string, Record<string, any>>) => void
   showAiButton?: boolean
+  // Landscape sidebar support
+  isLandscape?: boolean
+  showCameraToggle?: boolean
+  cameraVisible?: boolean
+  onCameraToggle?: () => void
 }
+
+export const DICTATION_SIDEBAR_W = 88
 
 type Mode = 'idle' | 'recording' | 'paused' | 'transcribing'
 
@@ -87,6 +94,10 @@ export default function RoomDictationRecorder({
   items,
   onTranscribed,
   showAiButton = true,
+  isLandscape = false,
+  showCameraToggle = false,
+  cameraVisible = true,
+  onCameraToggle,
 }: Props) {
   const insets   = useSafeAreaInsets()
   const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
@@ -411,101 +422,86 @@ export default function RoomDictationRecorder({
     return ''
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-  return (
-    <View style={[bar.wrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+  // ── Shared button nodes ────────────────────────────────────────────────────
+  const clipsButton = (
+    <TouchableOpacity
+      style={[bar.clipsBtn, !hasClips && bar.clipsBtnEmpty]}
+      onPress={() => hasClips && setModalVisible(true)}
+      disabled={!hasClips || isTranscribing}
+      activeOpacity={0.7}
+    >
+      <MaterialCommunityIcons
+        name="waveform"
+        size={22}
+        color={hasClips ? '#a5b4fc' : 'rgba(255,255,255,0.2)'}
+      />
+      <Text style={[bar.clipsCount, !hasClips && bar.clipsDimmed]}>
+        {clips.length}
+      </Text>
+      <Text style={[bar.clipsLabel, !hasClips && bar.clipsDimmed]}>
+        {clips.length === 1 ? 'clip' : 'clips'}
+      </Text>
+    </TouchableOpacity>
+  )
 
-      {/* ── Three-column row ─────────────────────────────────────────── */}
-      <View style={bar.row}>
-
-        {/* LEFT: Clip count badge */}
-        <TouchableOpacity
-          style={[bar.clipsBtn, !hasClips && bar.clipsBtnEmpty]}
-          onPress={() => hasClips && setModalVisible(true)}
-          disabled={!hasClips || isTranscribing}
-          activeOpacity={0.7}
-        >
-          <MaterialCommunityIcons
-            name="waveform"
-            size={22}
-            color={hasClips ? '#a5b4fc' : 'rgba(255,255,255,0.2)'}
-          />
-          <Text style={[bar.clipsCount, !hasClips && bar.clipsDimmed]}>
-            {clips.length}
-          </Text>
-          <Text style={[bar.clipsLabel, !hasClips && bar.clipsDimmed]}>
-            {clips.length === 1 ? 'clip' : 'clips'}
-          </Text>
+  const recordButton = (
+    <Animated.View style={{ transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
+      {isTranscribing ? (
+        <View style={[bar.recBtn, bar.recBtnTranscribing]}>
+          <ActivityIndicator color={FG} size="large" />
+        </View>
+      ) : isRecording ? (
+        <TouchableOpacity style={[bar.recBtn, bar.recBtnLive]} onPress={handlePause}>
+          <View style={bar.pauseIcon}>
+            <View style={bar.pauseBar} />
+            <View style={bar.pauseBar} />
+          </View>
         </TouchableOpacity>
-
-        {/* CENTRE: Record / Pause / Transcribing button */}
-        <View style={bar.centreSection}>
-          <Animated.View style={{ transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
-            {isTranscribing ? (
-              <View style={[bar.recBtn, bar.recBtnTranscribing]}>
-                <ActivityIndicator color={FG} size="large" />
-              </View>
-            ) : isRecording ? (
-              <TouchableOpacity style={[bar.recBtn, bar.recBtnLive]} onPress={handlePause}>
-                <View style={bar.pauseIcon}>
-                  <View style={bar.pauseBar} />
-                  <View style={bar.pauseBar} />
-                </View>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={bar.recBtn}
-                onPress={handleRecord}
-                disabled={isTranscribing}
-              >
-                <View style={bar.recDot} />
-              </TouchableOpacity>
-            )}
-          </Animated.View>
-          <Text style={bar.recLabel}>
-            {isTranscribing ? 'Transcribing…'
-              : isRecording  ? fmt(elapsed * 1000)
-              : isPaused     ? 'Resume'
-              : 'Record'}
-          </Text>
-        </View>
-
-        {/* RIGHT: AI Transcribe button (or spacer if human mode) + ? help */}
-        <View style={{ alignItems: 'center', gap: 6 }}>
-          {showAiButton ? (
-            <TouchableOpacity
-              style={[
-                bar.aiBtn,
-                (!hasClips || isRecording || isTranscribing) && bar.disabled,
-                queuedOffline && bar.aiBtnQueued,
-              ]}
-              onPress={handleTranscribe}
-              disabled={!hasClips || isRecording || isTranscribing}
-              activeOpacity={0.7}
-            >
-              <Text style={bar.aiBtnIcon}>{queuedOffline ? '⏳' : '✨'}</Text>
-              <Text style={bar.aiBtnLabel}>{queuedOffline ? 'Queued' : 'Transcribe'}</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={bar.aiBtn} />
-          )}
-          <TouchableOpacity style={bar.helpBtn} onPress={() => setHelpVisible(true)}>
-            <Text style={bar.helpBtnText}>?</Text>
-          </TouchableOpacity>
-        </View>
-
-      </View>
-
-      {/* Status / hint */}
-      <Text style={bar.status} numberOfLines={2}>{statusText()}</Text>
-
-      {/* Clear button — only shown when paused with clips */}
-      {isPaused && hasClips && !isTranscribing && (
-        <TouchableOpacity style={bar.clearBtn} onPress={handleClear}>
-          <Text style={bar.clearBtnText}>Clear all clips</Text>
+      ) : (
+        <TouchableOpacity style={bar.recBtn} onPress={handleRecord} disabled={isTranscribing}>
+          <View style={bar.recDot} />
         </TouchableOpacity>
       )}
+    </Animated.View>
+  )
 
+  const aiButton = showAiButton ? (
+    <TouchableOpacity
+      style={[
+        bar.aiBtn,
+        (!hasClips || isRecording || isTranscribing) && bar.disabled,
+        queuedOffline && bar.aiBtnQueued,
+      ]}
+      onPress={handleTranscribe}
+      disabled={!hasClips || isRecording || isTranscribing}
+      activeOpacity={0.7}
+    >
+      <Text style={bar.aiBtnIcon}>{queuedOffline ? '⏳' : '✨'}</Text>
+      <Text style={bar.aiBtnLabel}>{queuedOffline ? 'Queued' : 'Transcr'}</Text>
+    </TouchableOpacity>
+  ) : (
+    <View style={bar.aiBtn} />
+  )
+
+  const helpButton = (
+    <TouchableOpacity style={bar.helpBtn} onPress={() => setHelpVisible(true)}>
+      <Text style={bar.helpBtnText}>?</Text>
+    </TouchableOpacity>
+  )
+
+  const cameraToggleButton = showCameraToggle ? (
+    <TouchableOpacity
+      style={[bar.helpBtn, cameraVisible && bar.cameraToggleActive]}
+      onPress={onCameraToggle}
+      activeOpacity={0.7}
+    >
+      <Text style={[bar.helpBtnText, cameraVisible && bar.cameraToggleActiveText]}>📷</Text>
+    </TouchableOpacity>
+  ) : null
+
+  // Modals are shared between portrait and landscape renders
+  const sharedModals = (
+    <>
       {/* ── Recordings playback modal ─────────────────────────────── */}
       <Modal
         visible={modalVisible}
@@ -516,8 +512,6 @@ export default function RoomDictationRecorder({
         <GestureHandlerRootView style={{ flex: 1 }}>
           <Pressable style={modal.overlay} onPress={() => setModalVisible(false)}>
             <Pressable style={modal.sheet} onPress={e => e.stopPropagation()}>
-
-              {/* Header */}
               <View style={modal.header}>
                 <Text style={modal.title}>
                   {sectionName} — {clips.length} clip{clips.length !== 1 ? 's' : ''} · {fmt(totalMs)}
@@ -526,9 +520,7 @@ export default function RoomDictationRecorder({
                   <Text style={modal.closeBtnText}>✕</Text>
                 </TouchableOpacity>
               </View>
-
               <Text style={modal.hint}>Swipe a clip to delete it</Text>
-
               <ScrollView style={modal.list} showsVerticalScrollIndicator={false}>
                 {clips.map((clip, i) => (
                   <SwipeableRow
@@ -549,12 +541,10 @@ export default function RoomDictationRecorder({
                           {playingUri === clip.uri ? '⏸' : '▶'}
                         </Text>
                       </TouchableOpacity>
-
                       <View style={modal.clipInfo}>
                         <Text style={modal.clipName}>Clip {i + 1}</Text>
                         <Text style={modal.clipDuration}>{fmt(clip.durationMs)}</Text>
                       </View>
-
                       {playingUri === clip.uri && (
                         <ActivityIndicator size="small" color={colors.accent} />
                       )}
@@ -562,7 +552,6 @@ export default function RoomDictationRecorder({
                   </SwipeableRow>
                 ))}
               </ScrollView>
-
             </Pressable>
           </Pressable>
         </GestureHandlerRootView>
@@ -580,8 +569,6 @@ export default function RoomDictationRecorder({
           onPress={() => { setHelpTopic(null); setHelpVisible(false) }}
         >
           <Pressable style={helpModal.sheet} onPress={e => e.stopPropagation()}>
-
-            {/* ── Header ─────────────────────────────────────────── */}
             <View style={helpModal.header}>
               {helpTopic ? (
                 <TouchableOpacity onPress={() => setHelpTopic(null)} style={helpModal.backBtn}>
@@ -602,10 +589,7 @@ export default function RoomDictationRecorder({
                 <Text style={helpModal.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
-
-            {/* ── Menu or Detail ─────────────────────────────────── */}
             {!helpTopic ? (
-              /* MENU */
               <ScrollView style={helpModal.scroll} showsVerticalScrollIndicator={false}>
                 {HELP_TOPICS.map((topic, i) => (
                   <TouchableOpacity
@@ -620,7 +604,6 @@ export default function RoomDictationRecorder({
                 ))}
               </ScrollView>
             ) : (
-              /* DETAIL */
               <ScrollView style={helpModal.scroll} showsVerticalScrollIndicator={false}>
                 <View style={{ paddingBottom: 24 }}>
                   {HELP_CONTENT[helpTopic]?.map((row, i) => (
@@ -629,10 +612,86 @@ export default function RoomDictationRecorder({
                 </View>
               </ScrollView>
             )}
-
           </Pressable>
         </Pressable>
       </Modal>
+    </>
+  )
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  if (isLandscape) {
+    return (
+      <>
+        <View style={[sidebar.wrap, { paddingBottom: Math.max(insets.bottom, 8), paddingRight: Math.max(insets.right, 0) }]}>
+
+          {/* TOP: Clips */}
+          <View style={sidebar.clipsSection}>
+            {clipsButton}
+          </View>
+
+          {/* MIDDLE: Record */}
+          <View style={sidebar.recSection}>
+            {recordButton}
+            <Text style={bar.recLabel}>
+              {isTranscribing ? 'Trans…'
+                : isRecording  ? fmt(elapsed * 1000)
+                : isPaused     ? 'Resume'
+                : 'Record'}
+            </Text>
+          </View>
+
+          {/* BOTTOM: AI + Help + Camera toggle */}
+          <View style={sidebar.bottomSection}>
+            {aiButton}
+            {helpButton}
+            {cameraToggleButton}
+          </View>
+
+        </View>
+        {sharedModals}
+      </>
+    )
+  }
+
+  return (
+    <View style={[bar.wrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+
+      {/* ── Three-column row ─────────────────────────────────────────── */}
+      <View style={bar.row}>
+
+        {/* LEFT: Clip count badge */}
+        {clipsButton}
+
+        {/* CENTRE: Record / Pause / Transcribing button */}
+        <View style={bar.centreSection}>
+          {recordButton}
+          <Text style={bar.recLabel}>
+            {isTranscribing ? 'Transcribing…'
+              : isRecording  ? fmt(elapsed * 1000)
+              : isPaused     ? 'Resume'
+              : 'Record'}
+          </Text>
+        </View>
+
+        {/* RIGHT: AI Transcribe button (or spacer if human mode) + ? help */}
+        <View style={{ alignItems: 'center', gap: 6 }}>
+          {aiButton}
+          {helpButton}
+        </View>
+
+      </View>
+
+      {/* Status / hint */}
+      <Text style={bar.status} numberOfLines={2}>{statusText()}</Text>
+
+      {/* Clear button — only shown when paused with clips */}
+      {isPaused && hasClips && !isTranscribing && (
+        <TouchableOpacity style={bar.clearBtn} onPress={handleClear}>
+          <Text style={bar.clearBtnText}>Clear all clips</Text>
+        </TouchableOpacity>
+      )}
+
+      {sharedModals}
 
     </View>
   )
@@ -706,11 +765,11 @@ const bar = StyleSheet.create({
 
   // RIGHT: AI button
   aiBtn: {
-    width: 68,
+    width: 64,
     alignItems: 'center',
     gap: 4,
     paddingVertical: 8,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     borderRadius: radius.md,
     backgroundColor: 'rgba(99,102,241,0.25)',
     borderWidth: 1,
@@ -723,12 +782,19 @@ const bar = StyleSheet.create({
 
   // ? help button
   helpBtn: {
-    width: 24, height: 24, borderRadius: 12,
+    width: 28, height: 28, borderRadius: 14,
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center', justifyContent: 'center',
   },
   helpBtnText: { fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: '700', lineHeight: 16 },
+
+  // Camera toggle (landscape sidebar)
+  cameraToggleActive: {
+    backgroundColor: 'rgba(14,165,233,0.25)',
+    borderColor: 'rgba(14,165,233,0.6)',
+  },
+  cameraToggleActiveText: { opacity: 1 },
 
   // Status + clear
   status: {
@@ -750,6 +816,37 @@ const bar = StyleSheet.create({
     marginBottom: 4,
   },
   clearBtnText: { fontSize: font.xs, color: '#f87171', fontWeight: '600' },
+})
+
+const sidebar = StyleSheet.create({
+  wrap: {
+    width: DICTATION_SIDEBAR_W,
+    backgroundColor: BG,
+    borderLeftWidth: 1,
+    borderLeftColor: 'rgba(255,255,255,0.08)',
+    flexDirection: 'column',
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingHorizontal: 6,
+  },
+  clipsSection: {
+    alignItems: 'center',
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+    width: '100%',
+  },
+  recSection: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  bottomSection: {
+    alignItems: 'center',
+    gap: 8,
+    paddingBottom: 8,
+  },
 })
 
 const modal = StyleSheet.create({

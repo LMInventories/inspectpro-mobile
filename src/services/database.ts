@@ -49,6 +49,8 @@ export function initDatabase(): void {
   // Idempotency key: a UUID sent with every sync request so the server can safely
   // deduplicate retries without double-applying changes.
   try { db.runSync('ALTER TABLE inspections ADD COLUMN idempotency_key TEXT') } catch {}
+  // Per-inspection camera option: 'perItem' (default) | 'floating'
+  try { db.runSync('ALTER TABLE inspections ADD COLUMN camera_option TEXT') } catch {}
 }
 
 export function saveInspection(inspection: any): void {
@@ -75,8 +77,8 @@ export function getLocalInspections(): any[] {
   const rows = db.getAllSync<{
     data: string; report_data: string | null; source_report_data: string | null;
     local_status: string; synced: number; is_finalised: number; typist_mode: string | null;
-    server_updated_at: string | null; idempotency_key: string | null;
-  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode, server_updated_at, idempotency_key FROM inspections ORDER BY downloaded_at DESC')
+    camera_option: string | null; server_updated_at: string | null; idempotency_key: string | null;
+  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode, camera_option, server_updated_at, idempotency_key FROM inspections ORDER BY downloaded_at DESC')
   return rows.map(r => {
     const base = JSON.parse(r.data)
     return {
@@ -88,6 +90,7 @@ export function getLocalInspections(): any[] {
       is_finalised:       r.is_finalised === 1,
       typist_mode:        r.typist_mode ?? base.typist_mode ?? null,
       local_typist_override: r.typist_mode ?? null,
+      camera_option:      r.camera_option ?? null,
       server_updated_at:  r.server_updated_at,
       idempotency_key:    r.idempotency_key,
     }
@@ -98,8 +101,8 @@ export function getLocalInspection(id: number): any | null {
   const r = db.getFirstSync<{
     data: string; report_data: string | null; source_report_data: string | null;
     local_status: string; synced: number; is_finalised: number; typist_mode: string | null;
-    server_updated_at: string | null; idempotency_key: string | null;
-  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode, server_updated_at, idempotency_key FROM inspections WHERE id = ?', [id])
+    camera_option: string | null; server_updated_at: string | null; idempotency_key: string | null;
+  }>('SELECT data, report_data, source_report_data, local_status, synced, is_finalised, typist_mode, camera_option, server_updated_at, idempotency_key FROM inspections WHERE id = ?', [id])
   if (!r) return null
   const base = JSON.parse(r.data)
   return {
@@ -111,6 +114,7 @@ export function getLocalInspection(id: number): any | null {
     is_finalised:       r.is_finalised === 1,
     typist_mode:        r.typist_mode ?? base.typist_mode ?? null,
     local_typist_override: r.typist_mode ?? null,
+    camera_option:      r.camera_option ?? null,
     server_updated_at:  r.server_updated_at,
     idempotency_key:    r.idempotency_key,
   }
@@ -181,6 +185,13 @@ export function updateLocalTypistMode(inspectionId: number, mode: string | null)
   db.runSync(
     'UPDATE inspections SET typist_mode = ?, synced = 0, updated_at = ? WHERE id = ?',
     [mode, new Date().toISOString(), inspectionId]
+  )
+}
+
+export function updateLocalCameraOption(inspectionId: number, option: string | null): void {
+  db.runSync(
+    'UPDATE inspections SET camera_option = ?, updated_at = ? WHERE id = ?',
+    [option, new Date().toISOString(), inspectionId]
   )
 }
 

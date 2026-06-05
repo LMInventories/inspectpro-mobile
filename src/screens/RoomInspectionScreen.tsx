@@ -24,6 +24,7 @@ import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection } fro
 import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
+import FloatingCameraPreview from '../components/FloatingCameraPreview'
 import Header from '../components/Header'
 import { colors, useColors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
@@ -102,6 +103,15 @@ export default function RoomInspectionScreen() {
   // the vertical space available when the keyboard is showing.
   const { width: winWidth, height: winHeight } = useWindowDimensions()
   const isLandscape = winWidth > winHeight
+
+  // Camera option for this inspection — 'perItem' (default) | 'floating'
+  const cameraOption = (activeInspection as any)?.camera_option ?? 'perItem'
+  const showFloatingCamera = cameraOption === 'floating' && isLandscape
+
+  // Floating camera: which item photos should be assigned to (last interacted)
+  const [activeItemId, setActiveItemId] = useState<string | null>(null)
+  // Defaults visible; hides when clerk taps toggle — resets naturally on room remount
+  const [cameraPreviewVisible, setCameraPreviewVisible] = useState(true)
 
   // Y-position cache for each item card, populated via onLayout.
   // Used by handleTextFocus to scroll the focused item into view.
@@ -255,6 +265,7 @@ export default function RoomInspectionScreen() {
   }
 
   function handleTextFocus(itemId: string) {
+    setActiveItemId(itemId)
     const y = itemLayoutsRef.current.get(itemId)
     if (y === undefined) return
     const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
@@ -542,6 +553,22 @@ export default function RoomInspectionScreen() {
     setReportData(inspectionId, rd)
   }
 
+  async function handleFloatingCapture(fileUri: string) {
+    const itemId   = activeItemId
+    const itemName = itemId
+      ? (items.find((it: any) => String(it.id) === String(itemId))?.label ||
+         items.find((it: any) => String(it.id) === String(itemId))?.name ||
+         'item')
+      : null
+    if (itemId) {
+      await addPhotoUri(itemId, fileUri)
+      useToastStore.getState().showToast(`Photo assigned to ${itemName}`, 'success')
+    } else {
+      await addOverviewPhotoUri(fileUri)
+      useToastStore.getState().showToast('Photo assigned to Room Overview', 'success')
+    }
+  }
+
   async function addPhotoUri(itemId: string, fileUri: string) {
     // MUST await — getLocalInspection is async; without await fresh is a Promise,
     // fresh?.report_data is undefined, and every capture overwrites the array with
@@ -647,6 +674,7 @@ export default function RoomInspectionScreen() {
   }
 
   function handleTakePhoto(itemId: string, itemName: string) {
+    setActiveItemId(itemId)
     cameraTargetRef.current = { type: 'item', itemId }
     setCameraTarget((uri) => {
       cameraTargetRef.current = null
@@ -660,6 +688,7 @@ export default function RoomInspectionScreen() {
   }
 
   async function handlePickPhoto(itemId: string) {
+    setActiveItemId(itemId)
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Photo library access is needed.'); return }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -2172,10 +2201,16 @@ export default function RoomInspectionScreen() {
     </>
   )
 
+  const hasDictationRecorder = (typistMode_ === 'ai_room' || typistMode_ === 'human')
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={[styles.screen, dm.bg, { paddingTop: insets.top }]}>
+      {/* Outer: row in landscape so sidebar sits beside content; column in portrait */}
+      <View style={[styles.screen, dm.bg, { paddingTop: insets.top, flexDirection: isLandscape ? 'row' : 'column' }]}>
+
+        {/* Main content area — flex:1 so it doesn't squeeze when sidebar is present */}
+        <View style={{ flex: 1 }}>
         {/* Portrait: header fixed above scroll. Landscape: header scrolls with content
             so the keyboard doesn't eat the fixed header space on small screens. */}
         {!isLandscape && headerBlock}
@@ -2189,8 +2224,7 @@ export default function RoomInspectionScreen() {
             scrollEventThrottle={16}
             contentContainerStyle={[
               styles.scroll,
-              sectionType_ === 'room' &&
-              (typistMode_ === 'ai_room' || typistMode_ === 'human') &&
+              sectionType_ === 'room' && hasDictationRecorder && !isLandscape &&
               { paddingBottom: 140 },
             ]}
             keyboardShouldPersistTaps="handled"
@@ -2264,8 +2298,9 @@ export default function RoomInspectionScreen() {
           </ScrollView>
         )}
 
-        {/* Room dictation recorder — fixed at bottom for ai_room and human modes */}
-        {/* Room dictation recorder — room sections */}
+        </View>{/* end main content area */}
+
+        {/* Room dictation recorder — fixed at bottom (portrait) or right sidebar (landscape) */}
         {sectionType_ === 'room' && (typistMode_ === 'ai_room' || typistMode_ === 'human') && (
           <RoomDictationRecorder
             inspectionId={inspectionId}
@@ -2279,13 +2314,16 @@ export default function RoomInspectionScreen() {
               hasCondition:   it.hasCondition !== false,
               hasDescription: it.hasDescription !== false,
               isTranscribed:  !!getField(it.id, '_transcribed'),
-              // Check-out: include existing sub-items so the AI can route dictation to the right _sid
               subs: isCheckOut_
                 ? getSubs(it.id).map((s: any) => ({ _sid: s._sid, description: s.description || '' }))
                 : undefined,
             }))}
             onTranscribed={handleRoomTranscribed}
             showAiButton={typistMode_ === 'ai_room'}
+            isLandscape={isLandscape}
+            showCameraToggle={showFloatingCamera}
+            cameraVisible={cameraPreviewVisible}
+            onCameraToggle={() => setCameraPreviewVisible(v => !v)}
           />
         )}
 
@@ -2302,6 +2340,15 @@ export default function RoomInspectionScreen() {
             }))}
             onTranscribed={handleFixedRoomTranscribed}
             showAiButton={typistMode_ === 'ai_room'}
+            isLandscape={isLandscape}
+          />
+        )}
+
+        {/* Floating camera preview — landscape + floating option only */}
+        {showFloatingCamera && cameraPreviewVisible && (
+          <FloatingCameraPreview
+            inspectionId={inspectionId}
+            onCapture={handleFloatingCapture}
           />
         )}
 
