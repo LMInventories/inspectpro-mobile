@@ -31,12 +31,7 @@ const SHUTTER_SIZE = 62
 // Vertical gap between preview top and shutter bottom
 const SHUTTER_GAP = 8
 
-// Desired zoom presets — filtered at runtime to what the device supports
-const DESIRED_ZOOMS = [0.5, 1, 2]
-
-function fmtZoom(z: number): string {
-  return z < 1 ? `${z.toFixed(1)}×` : `${Math.round(z)}×`
-}
+interface ZoomPreset { zoom: number; label: string }
 
 interface Props {
   inspectionId: number
@@ -51,25 +46,31 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
   const cameraRef = useRef<Camera>(null)
   const capturingRef = useRef(false)
 
-  // Zoom cycling — presets clamped to device min/max
-  const zoomPresets = useMemo(() => {
-    if (!device) return [1]
-    return DESIRED_ZOOMS
-      .filter(z => z >= device.minZoom && z <= device.maxZoom)
-      // always include at least minZoom and 1 so there's something to show
-      .concat(device.minZoom < 1 ? [] : [])
-      .filter((z, i, arr) => arr.indexOf(z) === i)
-      .sort((a, b) => a - b)
+  // Build zoom presets anchored to device.neutralZoom so "1×" is always the
+  // native focal length regardless of how VisionCamera scales the value.
+  // Wide angle uses device.minZoom directly (not a hardcoded 0.5) so it's
+  // always reachable and always accurate.
+  const zoomPresets = useMemo((): ZoomPreset[] => {
+    if (!device) return [{ zoom: 1, label: '1×' }]
+    const neutral = device.neutralZoom
+    const min     = device.minZoom
+    const max     = device.maxZoom
+    const presets: ZoomPreset[] = []
+    if (min < neutral * 0.85) presets.push({ zoom: min, label: '0.6×' })
+    presets.push({ zoom: neutral, label: '1×' })
+    if (neutral * 2 <= max) presets.push({ zoom: neutral * 2, label: '2×' })
+    return presets
   }, [device?.id])
 
-  const [zoomIdx, setZoomIdx] = useState(() => {
-    // Default to 1× if available, else the first (widest) preset
-    const idx = DESIRED_ZOOMS.indexOf(1)
-    return idx >= 0 ? idx : 0
-  })
+  const [zoomIdx, setZoomIdx] = useState(0)
 
-  const safeIdx = Math.min(zoomIdx, zoomPresets.length - 1)
-  const zoom    = zoomPresets[safeIdx]
+  // Reset to 1× whenever the device changes (covers initial mount too)
+  useEffect(() => {
+    const idx = zoomPresets.findIndex(p => p.label === '1×')
+    setZoomIdx(idx >= 0 ? idx : 0)
+  }, [device?.id])
+
+  const currentPreset = zoomPresets[Math.min(zoomIdx, zoomPresets.length - 1)]
 
   function cycleZoom() {
     setZoomIdx(i => (i + 1) % zoomPresets.length)
@@ -164,7 +165,7 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
           isActive={isFocused}
           photo
           outputOrientation="device"
-          zoom={zoom}
+          zoom={currentPreset.zoom}
         />
         {/* Capture flash overlay */}
         <Animated.View
@@ -173,7 +174,7 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
         />
         {/* Zoom level badge — bottom-left corner */}
         <View style={styles.zoomBadge}>
-          <Text style={styles.zoomBadgeText}>{fmtZoom(zoom)}</Text>
+          <Text style={styles.zoomBadgeText}>{currentPreset.label}</Text>
         </View>
       </TouchableOpacity>
     </View>

@@ -246,16 +246,16 @@ export default function RoomDictationRecorder({
       playerRef.current = null
       setPlayingUri(null)
     }
-    setClips(prev => {
-      const removed = prev.find(c => c.uri === uri)
-      if (removed) {
-        setTotalMs(t => t - removed.durationMs)
-        if (removed.id !== undefined) {
-          deleteAudioRecording(removed.id, uri).catch(() => {})
-        }
-      }
-      return prev.filter(c => c.uri !== uri)
-    })
+    const clip = clips.find(c => c.uri === uri)
+    if (!clip) return
+    if (clip.id !== undefined) deleteAudioRecording(clip.id, uri).catch(() => {})
+    const remaining = clips.filter(c => c.uri !== uri)
+    setClips(remaining)
+    setTotalMs(remaining.reduce((sum, c) => sum + c.durationMs, 0))
+    if (remaining.length === 0) {
+      setMode('idle')
+      setModalVisible(false)
+    }
   }
 
   // ── Clear all ─────────────────────────────────────────────────────────────
@@ -465,7 +465,7 @@ export default function RoomDictationRecorder({
     </Animated.View>
   )
 
-  const aiButton = showAiButton ? (
+  const aiButtonShared = (withLabel: boolean) => !showAiButton ? <View style={bar.aiBtn} /> : (
     <TouchableOpacity
       style={[
         bar.aiBtn,
@@ -477,11 +477,13 @@ export default function RoomDictationRecorder({
       activeOpacity={0.7}
     >
       <Text style={bar.aiBtnIcon}>{queuedOffline ? '⏳' : '✨'}</Text>
-      <Text style={bar.aiBtnLabel}>{queuedOffline ? 'Queued' : 'Transcr'}</Text>
+      {withLabel && (
+        <Text style={bar.aiBtnLabel}>{queuedOffline ? 'Queued' : 'Transcr'}</Text>
+      )}
     </TouchableOpacity>
-  ) : (
-    <View style={bar.aiBtn} />
   )
+  const aiButton          = aiButtonShared(true)   // portrait — label visible
+  const aiButtonLandscape = aiButtonShared(false)  // sidebar — icon only, no label
 
   const helpButton = (
     <TouchableOpacity style={bar.helpBtn} onPress={() => setHelpVisible(true)}>
@@ -640,7 +642,7 @@ export default function RoomDictationRecorder({
 
           {/* BOTTOM: AI + Help + Camera toggle */}
           <View style={sidebar.bottomSection}>
-            {aiButton}
+            {aiButtonLandscape}
             {helpButton}
             {cameraToggleButton}
           </View>
