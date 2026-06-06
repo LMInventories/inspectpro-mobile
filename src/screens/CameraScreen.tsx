@@ -166,7 +166,16 @@ export default function CameraScreen() {
 
   // Re-fetch device list when camera permission is granted or screen gains focus
   useEffect(() => {
-    try { setAllDevices(Camera.getAvailableCameraDevices()) } catch {}
+    try {
+      const devs = Camera.getAvailableCameraDevices()
+      setAllDevices(devs)
+      // DIAGNOSTIC — remove once ultra-wide is working
+      devs.forEach(d => console.log(
+        `[CAM] id=${d.id} pos=${d.position} name=${d.name}\n` +
+        `      physical=${JSON.stringify(d.physicalDevices)}\n` +
+        `      zoom min=${d.minZoom} neutral=${d.neutralZoom} max=${d.maxZoom}`
+      ))
+    } catch {}
   }, [hasPermission])
 
   useFocusEffect(useCallback(() => {
