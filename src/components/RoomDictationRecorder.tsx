@@ -68,7 +68,7 @@ interface Props {
   sectionType?: string   // 'room' (default) or fixed section type
   isDamageReport?: boolean
   items: RoomDictationItem[]
-  onTranscribed: (filled: Record<string, Record<string, any>>) => void
+  onTranscribed: (filled: Record<string, Record<string, any>>) => Promise<void>
   showAiButton?: boolean
   // Landscape sidebar support
   isLandscape?: boolean
@@ -386,12 +386,22 @@ export default function RoomDictationRecorder({
         return
       }
 
-      onTranscribed(filled)
+      // Snapshot URIs before clearing — needed for file deletion after await
+      const clipsToDelete = clips.map(c => c.uri)
+
+      await onTranscribed(filled)
+
       setQueuedOffline(false)
       setClips([])
       setTotalMs(0)
       setElapsed(0)
       setMode('idle')
+
+      // Delete audio files from disk now that transcription is confirmed written to DB.
+      // SQLite records are kept so the export feature can still reference them.
+      clipsToDelete.forEach(uri => {
+        FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+      })
     } catch (err: any) {
       console.error('[RoomDictation] transcribe error:', err)
       Alert.alert('AI Error', err.response?.data?.error || err.message || 'Transcription failed')

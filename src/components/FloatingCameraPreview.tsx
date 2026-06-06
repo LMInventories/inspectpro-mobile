@@ -8,14 +8,17 @@
  *   - Shutter button: vertically aligned with the Record button in the sidebar
  *   - Preview: below the shutter, at the bottom-right of the content area
  *
- * Tap the preview to cycle zoom: 0.5× (wide) → 1× → 2× → 0.5× …
- * Presets are filtered to device capabilities so only valid levels appear.
+ * Tap the preview to cycle zoom: 0.6× (ultra-wide) → 1× → 2× → …
+ * Device selection mirrors CameraScreen: Camera.getAvailableCameraDevices() is used
+ * rather than useCameraDevice('back') so that separate ultra-wide physical cameras
+ * are discoverable and switchable.
  */
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
 import {
   View, TouchableOpacity, StyleSheet, Text, Animated,
 } from 'react-native'
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
+import { Camera, useCameraPermission } from 'react-native-vision-camera'
+import type { CameraDevice } from 'react-native-vision-camera'
 import * as FileSystem from 'expo-file-system/legacy'
 import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -31,7 +34,12 @@ const SHUTTER_SIZE = 62
 // Vertical gap between preview top and shutter bottom
 const SHUTTER_GAP = 8
 
-interface ZoomPreset { zoom: number; label: string }
+interface ZoomPreset {
+  zoom: number
+  label: string
+  // true = this preset requires switching to the ultraWideDevice
+  useUltraWide: boolean
+}
 
 interface Props {
   inspectionId: number
@@ -42,41 +50,105 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
   const isFocused = useIsFocused()
   const insets    = useSafeAreaInsets()
   const { hasPermission, requestPermission } = useCameraPermission()
-  const device = useCameraDevice('back')
-  const cameraRef = useRef<Camera>(null)
+  const cameraRef    = useRef<Camera>(null)
   const capturingRef = useRef(false)
+  // Bump to force Camera remount when switching between physical devices
+  const [cameraKey, setCameraKey] = useState(0)
 
-  // Build zoom presets anchored to device.neutralZoom so "1×" is always the
-  // native focal length regardless of how VisionCamera scales the value.
-  // Wide angle uses device.minZoom directly (not a hardcoded 0.5) so it's
-  // always reachable and always accurate.
+  // ── Device discovery — same approach as CameraScreen ──────────────────────
+  // useCameraDevice('back') returns one "best" logical device and may omit the
+  // ultra-wide entirely. Camera.getAvailableCameraDevices() returns ALL physical
+  // devices so we can find and switch to a separate ultra-wide camera.
+  const [allDevices, setAllDevices] = useState<CameraDevice[]>(() => {
+    try { return Camera.getAvailableCameraDevices() } catch { return [] }
+  })
+
+  useEffect(() => {
+    try { setAllDevices(Camera.getAvailableCameraDevices()) } catch {}
+  }, [hasPermission])
+
+  const backDevices: CameraDevice[] = allDevices.filter(d => d.position === 'back')
+
+  // Main back camera: prefers the device whose physicalDevices includes
+  // 'wide-angle-camera' but is not exclusively ultra-wide.
+  const mainDevice: CameraDevice | undefined =
+    backDevices.find(d =>
+      d.physicalDevices?.includes('wide-angle-camera') &&
+      !(d.physicalDevices ?? []).every(p => p === 'ultra-wide-angle-camera')
+    ) ?? backDevices[0]
+
+  // Ultra-wide device: a back-facing device that explicitly includes
+  // 'ultra-wide-angle-camera'. Do NOT match 'wide-angle-camera' alone.
+  const ultraWideDevice: CameraDevice | undefined = backDevices.find(d =>
+    (d.physicalDevices ?? []).some(
+      p => p === 'ultra-wide-angle-camera' || p.toLowerCase().includes('ultra')
+    )
+  )
+
+  // Is ultra-wide a separate device, or reachable via zoom on the main device?
+  const hasSeparateUltraWide =
+    !!ultraWideDevice && !!mainDevice && ultraWideDevice.id !== mainDevice.id
+  const hasZoomUltraWide =
+    !!mainDevice && mainDevice.minZoom < mainDevice.neutralZoom * 0.85
+
+  // ── Zoom presets ───────────────────────────────────────────────────────────
   const zoomPresets = useMemo((): ZoomPreset[] => {
-    if (!device) return [{ zoom: 1, label: '1×' }]
-    const neutral = device.neutralZoom
-    const min     = device.minZoom
-    const max     = device.maxZoom
+    if (!mainDevice) return [{ zoom: 1, label: '1×', useUltraWide: false }]
     const presets: ZoomPreset[] = []
-    if (min < neutral * 0.85) presets.push({ zoom: min, label: '0.6×' })
-    presets.push({ zoom: neutral, label: '1×' })
-    if (neutral * 2 <= max) presets.push({ zoom: neutral * 2, label: '2×' })
+
+    if (hasSeparateUltraWide || hasZoomUltraWide) {
+      presets.push({
+        // For a separate device, zoom to its neutral (= 1× on that camera).
+        // For zoom-based, use mainDevice.minZoom directly.
+        zoom:         hasSeparateUltraWide
+                        ? (ultraWideDevice?.neutralZoom ?? 1)
+                        : mainDevice.minZoom,
+        label:        '0.6×',
+        useUltraWide: true,
+      })
+    }
+
+    presets.push({ zoom: mainDevice.neutralZoom, label: '1×', useUltraWide: false })
+
+    if (mainDevice.neutralZoom * 2 <= mainDevice.maxZoom) {
+      presets.push({ zoom: mainDevice.neutralZoom * 2, label: '2×', useUltraWide: false })
+    }
+
     return presets
-  }, [device?.id])
+  }, [mainDevice?.id, ultraWideDevice?.id, hasSeparateUltraWide, hasZoomUltraWide])
 
   const [zoomIdx, setZoomIdx] = useState(0)
 
-  // Reset to 1× whenever the device changes (covers initial mount too)
+  // Reset to 1× whenever the main device changes (covers initial mount too)
   useEffect(() => {
     const idx = zoomPresets.findIndex(p => p.label === '1×')
     setZoomIdx(idx >= 0 ? idx : 0)
-  }, [device?.id])
+  }, [mainDevice?.id])
 
   const currentPreset = zoomPresets[Math.min(zoomIdx, zoomPresets.length - 1)]
 
+  // Which physical device to render
+  const activeDevice: CameraDevice | undefined =
+    currentPreset.useUltraWide && hasSeparateUltraWide ? ultraWideDevice : mainDevice
+
+  // Zoom value to pass — for a separate UW device we always pass its neutral zoom
+  const activeZoom =
+    currentPreset.useUltraWide && hasSeparateUltraWide
+      ? (ultraWideDevice?.neutralZoom ?? 1)
+      : currentPreset.zoom
+
   function cycleZoom() {
-    setZoomIdx(i => (i + 1) % zoomPresets.length)
+    const nextIdx    = (zoomIdx + 1) % zoomPresets.length
+    const nextPreset = zoomPresets[nextIdx]
+    // Switching between separate physical devices requires a Camera remount
+    const switchingDevice =
+      (nextPreset.useUltraWide && hasSeparateUltraWide) !==
+      (currentPreset.useUltraWide && hasSeparateUltraWide)
+    if (switchingDevice) setCameraKey(k => k + 1)
+    setZoomIdx(nextIdx)
   }
 
-  // White flash on capture — same approach as CameraScreen
+  // ── Visual feedback ────────────────────────────────────────────────────────
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
     captureFlash.stopAnimation()
@@ -87,7 +159,6 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
     ]).start()
   }
 
-  // Shutter opacity feedback
   const shutterOpacity = useRef(new Animated.Value(1)).current
   function dimShutter() {
     shutterOpacity.stopAnimation()
@@ -104,7 +175,7 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
   }, [inspectionId])
 
   const handleCapture = useCallback(async () => {
-    if (!cameraRef.current || capturingRef.current || !device || !photoDirRef.current) return
+    if (!cameraRef.current || capturingRef.current || !activeDevice || !photoDirRef.current) return
     capturingRef.current = true
     triggerFlash()
     dimShutter()
@@ -126,7 +197,7 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
       console.error('[FloatingCamera] capture error', err)
       capturingRef.current = false
     }
-  }, [device, onCapture])
+  }, [activeDevice, onCapture])
 
   // Request permission if missing
   useEffect(() => {
@@ -135,10 +206,12 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 
   const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0)
 
-  if (!hasPermission || !device) {
+  if (!hasPermission || !activeDevice) {
     return (
       <View style={[styles.noPermWrap, { right: rightOffset }]}>
-        <Text style={styles.noPermText}>{!hasPermission ? '📷 No camera permission' : '📷 Camera unavailable'}</Text>
+        <Text style={styles.noPermText}>
+          {!hasPermission ? '📷 No camera permission' : '📷 Camera unavailable'}
+        </Text>
       </View>
     )
   }
@@ -159,13 +232,14 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
         activeOpacity={0.85}
       >
         <Camera
+          key={cameraKey}
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
-          device={device}
+          device={activeDevice}
           isActive={isFocused}
           photo
           outputOrientation="device"
-          zoom={currentPreset.zoom}
+          zoom={activeZoom}
         />
         {/* Capture flash overlay */}
         <Animated.View
@@ -182,7 +256,6 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 }
 
 const styles = StyleSheet.create({
-  // Outer container — right is applied inline to include insets.right
   container: {
     position: 'absolute',
     bottom: 0,
@@ -191,7 +264,6 @@ const styles = StyleSheet.create({
     height: SHUTTER_SIZE + SHUTTER_GAP + PREVIEW_H,
   },
 
-  // Shutter button — same size as Record (62x62), centered over preview
   shutterWrap: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -221,7 +293,6 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
   },
 
-  // Live preview box
   preview: {
     width: PREVIEW_W,
     height: PREVIEW_H,
@@ -237,7 +308,6 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
 
-  // Zoom level badge — bottom-left of preview
   zoomBadge: {
     position: 'absolute',
     bottom: 6,
