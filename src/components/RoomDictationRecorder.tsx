@@ -622,7 +622,11 @@ export default function RoomDictationRecorder({
   if (isLandscape) {
     return (
       <>
-        <View style={[sidebar.wrap, { paddingBottom: Math.max(insets.bottom, 8), paddingRight: Math.max(insets.right, 0) }]}>
+        <View style={[sidebar.wrap, {
+          paddingBottom: Math.max(insets.bottom, 8),
+          paddingRight: Math.max(insets.right, 0),
+          width: DICTATION_SIDEBAR_W + Math.max(insets.right, 0),
+        }]}>
 
           {/* TOP: Clips */}
           <View style={sidebar.clipsSection}>
@@ -632,12 +636,6 @@ export default function RoomDictationRecorder({
           {/* MIDDLE: Record */}
           <View style={sidebar.recSection}>
             {recordButton}
-            <Text style={bar.recLabel}>
-              {isTranscribing ? 'Trans…'
-                : isRecording  ? fmt(elapsed * 1000)
-                : isPaused     ? 'Resume'
-                : 'Record'}
-            </Text>
           </View>
 
           {/* BOTTOM: AI + Help + Camera toggle */}
@@ -665,12 +663,6 @@ export default function RoomDictationRecorder({
         {/* CENTRE: Record / Pause / Transcribing button */}
         <View style={bar.centreSection}>
           {recordButton}
-          <Text style={bar.recLabel}>
-            {isTranscribing ? 'Transcribing…'
-              : isRecording  ? fmt(elapsed * 1000)
-              : isPaused     ? 'Resume'
-              : 'Record'}
-          </Text>
         </View>
 
         {/* RIGHT: AI Transcribe button (or spacer if human mode) + ? help */}

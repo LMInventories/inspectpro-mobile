@@ -108,14 +108,12 @@ export default function RoomInspectionScreen() {
   const cameraOption = (activeInspection as any)?.camera_option ?? 'perItem'
   const showFloatingCamera = cameraOption === 'floating' && isLandscape
 
-  // Floating camera: which item photos should be assigned to (last interacted)
-  const [activeItemId, setActiveItemId] = useState<string | null>(null)
   // Defaults visible; hides when clerk taps toggle — resets naturally on room remount
   const [cameraPreviewVisible, setCameraPreviewVisible] = useState(true)
 
-  // Y-position cache for each item card, populated via onLayout.
-  // Used by handleTextFocus to scroll the focused item into view.
+  // Y-position + height cache for each item card, populated via onLayout.
   const itemLayoutsRef = useRef<Map<string, number>>(new Map())
+  const itemHeightsRef = useRef<Map<string, number>>(new Map())
 
   // ── Item drag-to-reorder ───────────────────────────────────────────────────
   // Approximate row height used to compute target drop index during drag.
@@ -265,7 +263,6 @@ export default function RoomInspectionScreen() {
   }
 
   function handleTextFocus(itemId: string) {
-    setActiveItemId(itemId)
     const y = itemLayoutsRef.current.get(itemId)
     if (y === undefined) return
     const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
@@ -553,8 +550,23 @@ export default function RoomInspectionScreen() {
     setReportData(inspectionId, rd)
   }
 
+  function getMajorityItemId(): string | null {
+    const scrollY    = itemScrollOffsetRef.current
+    const visibleTop = scrollY
+    const visibleBot = scrollY + winHeight
+    let bestId: string | null = null
+    let bestOverlap = 0
+    for (const [id, y] of itemLayoutsRef.current) {
+      const h       = itemHeightsRef.current.get(id) ?? 150
+      const overlap = Math.max(0, Math.min(visibleBot, y + h) - Math.max(visibleTop, y))
+      const ratio   = h > 0 ? overlap / h : 0
+      if (ratio > bestOverlap) { bestOverlap = ratio; bestId = id }
+    }
+    return bestId
+  }
+
   async function handleFloatingCapture(fileUri: string) {
-    const itemId   = activeItemId
+    const itemId   = getMajorityItemId()
     const itemName = itemId
       ? (items.find((it: any) => String(it.id) === String(itemId))?.label ||
          items.find((it: any) => String(it.id) === String(itemId))?.name ||
@@ -674,7 +686,6 @@ export default function RoomInspectionScreen() {
   }
 
   function handleTakePhoto(itemId: string, itemName: string) {
-    setActiveItemId(itemId)
     cameraTargetRef.current = { type: 'item', itemId }
     setCameraTarget((uri) => {
       cameraTargetRef.current = null
@@ -688,7 +699,6 @@ export default function RoomInspectionScreen() {
   }
 
   async function handlePickPhoto(itemId: string) {
-    setActiveItemId(itemId)
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Photo library access is needed.'); return }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -1704,7 +1714,10 @@ export default function RoomInspectionScreen() {
     return (
       <Animated.View
         key={item.id}
-        onLayout={(e) => { itemLayoutsRef.current.set(item.id, e.nativeEvent.layout.y) }}
+        onLayout={(e) => {
+          itemLayoutsRef.current.set(item.id, e.nativeEvent.layout.y)
+          itemHeightsRef.current.set(item.id, e.nativeEvent.layout.height)
+        }}
         style={
           isDragging
             ? { transform: [{ translateY: itemDragYAnim }], zIndex: 20, elevation: 8 }

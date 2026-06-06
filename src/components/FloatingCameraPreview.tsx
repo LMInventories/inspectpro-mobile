@@ -18,6 +18,7 @@ import {
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import * as FileSystem from 'expo-file-system/legacy'
 import { useIsFocused } from '@react-navigation/native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
 
 // Preview dimensions — landscape proportion to match the room orientation
@@ -37,6 +38,7 @@ interface Props {
 
 export default function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const isFocused = useIsFocused()
+  const insets    = useSafeAreaInsets()
   const { hasPermission, requestPermission } = useCameraPermission()
   const device = useCameraDevice('back')
   const cameraRef = useRef<Camera>(null)
@@ -99,16 +101,18 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
     if (!hasPermission) requestPermission()
   }, [hasPermission])
 
+  const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0)
+
   if (!hasPermission || !device) {
     return (
-      <View style={styles.noPermWrap}>
+      <View style={[styles.noPermWrap, { right: rightOffset }]}>
         <Text style={styles.noPermText}>{!hasPermission ? '📷 No camera permission' : '📷 Camera unavailable'}</Text>
       </View>
     )
   }
 
   return (
-    <View style={styles.container} pointerEvents="box-none">
+    <View style={[styles.container, { right: rightOffset }]} pointerEvents="box-none">
       {/* Shutter button — aligns vertically with sidebar Record button */}
       <Animated.View style={[styles.shutterWrap, { opacity: shutterOpacity }]}>
         <TouchableOpacity style={styles.shutter} onPressIn={handleCapture} activeOpacity={1}>
@@ -137,14 +141,12 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 }
 
 const styles = StyleSheet.create({
-  // Outer container — positioned by the parent (RoomInspectionScreen)
+  // Outer container — right is applied inline to include insets.right
   container: {
     position: 'absolute',
     bottom: 0,
-    right: DICTATION_SIDEBAR_W,
     width: PREVIEW_W,
     alignItems: 'center',
-    // Total height: shutter + gap + preview
     height: SHUTTER_SIZE + SHUTTER_GAP + PREVIEW_H,
   },
 
@@ -197,7 +199,6 @@ const styles = StyleSheet.create({
   noPermWrap: {
     position: 'absolute',
     bottom: 0,
-    right: DICTATION_SIDEBAR_W,
     width: PREVIEW_W,
     height: SHUTTER_SIZE + SHUTTER_GAP + PREVIEW_H,
     alignItems: 'center',
