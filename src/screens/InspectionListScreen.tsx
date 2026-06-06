@@ -14,6 +14,7 @@ import StatusBadge from '../components/StatusBadge'
 import LocalBadge from '../components/LocalBadge'
 import CreateInspectionModal from '../components/CreateInspectionModal'
 import CreatePropertyModal from '../components/CreatePropertyModal'
+import AccountModal from '../components/AccountModal'
 import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'InspectionList'>
@@ -21,7 +22,7 @@ type Nav = StackNavigationProp<RootStackParamList, 'InspectionList'>
 export default function InspectionListScreen() {
   const navigation = useNavigation<Nav>()
   const insets = useSafeAreaInsets()
-  const { user, logout } = useAuthStore()
+  const { user } = useAuthStore()
   const { inspections, loadInspections, removeInspection } = useInspectionStore()
   const [refreshing, setRefreshing] = useState(false)
 
@@ -30,6 +31,7 @@ export default function InspectionListScreen() {
   const [fabOpen,         setFabOpen]         = useState(false)
   const [showCreateInsp,  setShowCreateInsp]  = useState(false)
   const [showCreateProp,  setShowCreateProp]  = useState(false)
+  const [showAccount,     setShowAccount]     = useState(false)
 
   useFocusEffect(useCallback(() => { loadInspections() }, []))
 
@@ -47,13 +49,6 @@ export default function InspectionListScreen() {
     setRefreshing(true)
     await loadInspections()
     setRefreshing(false)
-  }
-
-  function handleLogout() {
-    Alert.alert('Log Out', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log Out', style: 'destructive', onPress: () => logout() },
-    ])
   }
 
   function confirmRemove(item: any) {
@@ -177,8 +172,8 @@ export default function InspectionListScreen() {
           <TouchableOpacity style={styles.syncBtn} onPress={() => navigation.navigate('Sync')}>
             <Text style={styles.syncBtnText}>⇅ Sync</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.logoutBtn, dm.muted]} onPress={handleLogout}>
-            <Text style={[styles.logoutText, dm.textMid]}>⏻</Text>
+          <TouchableOpacity style={styles.avatarBtn} onPress={() => setShowAccount(true)}>
+            <Text style={styles.avatarText}>{user?.name?.charAt(0).toUpperCase() || '?'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -270,6 +265,8 @@ export default function InspectionListScreen() {
           onCreated={handlePropertyCreated}
         />
       )}
+
+      <AccountModal visible={showAccount} onClose={() => setShowAccount(false)} />
     </View>
   )
 }
@@ -284,8 +281,8 @@ const styles = StyleSheet.create({
   fetchBtnText: { color: '#fff', fontSize: font.sm, fontWeight: '600' },
   syncBtn: { backgroundColor: colors.accent, paddingHorizontal: spacing.sm, paddingVertical: 7, borderRadius: radius.sm },
   syncBtnText: { color: '#fff', fontSize: font.sm, fontWeight: '600' },
-  logoutBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.muted, alignItems: 'center', justifyContent: 'center' },
-  logoutText: { fontSize: font.md, color: colors.textMid },
+  avatarBtn:  { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: font.sm, fontWeight: '700', color: '#fff' },
   list: { padding: spacing.md, gap: spacing.md },
   card: { backgroundColor: colors.surface, borderRadius: radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
   cardSynced: { opacity: 0.6 },

@@ -7,7 +7,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImagePicker from 'expo-image-picker'
-
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption } from '../services/database'
@@ -601,7 +600,6 @@ export default function PropertyOverviewScreen() {
             <Text style={styles.notesText}>{inspection.internal_notes}</Text>
           </View>
         ) : null}
-
 
       </ScrollView>
 

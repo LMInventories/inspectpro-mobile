@@ -15,7 +15,11 @@
       "Bash(Get-ChildItem -Recurse -Filter \"*.tsx\" -Path src/screens)",
       "Bash(Select-Object FullName)",
       "PowerShell(.\\\\node_modules\\\\.bin\\\\tsc --noEmit 2>&1 | Select-Object -First 60)",
-      "PowerShell(npx --no-install tsc --noEmit 2>&1 | Select-Object -First 60)"
+      "PowerShell(npx --no-install tsc --noEmit 2>&1 | Select-Object -First 60)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\inspectpro-mobile\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(npx expo *)",
+      "Bash(npm install *)"
     ]
   }
 }

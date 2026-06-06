@@ -124,6 +124,9 @@ export const api = {
   forgotPassword: (email: string) =>
     http.post('/api/auth/forgot-password', { email }),
 
+  changePassword: (data: { current_password: string; new_password: string }) =>
+    http.post('/api/auth/change-password', data),
+
   getCurrentUser: () =>
     http.get('/api/auth/me'),
 
