@@ -102,6 +102,20 @@ export default function RoomInspectionScreen() {
   // Landscape detection — header scrolls with content in landscape to maximise
   // the vertical space available when the keyboard is showing.
   const { width: winWidth, height: winHeight } = useWindowDimensions()
+
+  // Keyboard height — tracked via listeners so we can manually add paddingBottom
+  // to the ScrollView, ensuring the focused field is always scrollable above the
+  // keyboard regardless of device keyboard settings or KeyboardAvoidingView quirks.
+  const [keyboardHeight, setKeyboardHeight] = useState(0)
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height)
+    })
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0)
+    })
+    return () => { showSub.remove(); hideSub.remove() }
+  }, [])
   const isLandscape = winWidth > winHeight
 
   // Camera option for this inspection — 'perItem' (default) | 'floating'
@@ -114,6 +128,10 @@ export default function RoomInspectionScreen() {
   // Y-position + height cache for each item card, populated via onLayout.
   const itemLayoutsRef = useRef<Map<string, number>>(new Map())
   const itemHeightsRef = useRef<Map<string, number>>(new Map())
+
+  // Overview section layout — so the floating camera can assign to Room Overview
+  // when it is the majority-visible section (not just a fallback when no items show).
+  const overviewLayoutRef = useRef<{ y: number; h: number } | null>(null)
 
   // ── Item drag-to-reorder ───────────────────────────────────────────────────
   // Approximate row height used to compute target drop index during drag.
@@ -265,11 +283,13 @@ export default function RoomInspectionScreen() {
   function handleTextFocus(itemId: string) {
     const y = itemLayoutsRef.current.get(itemId)
     if (y === undefined) return
-    const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
+    // Scroll the item to near the top of the visible area so the keyboard cannot
+    // overlap it regardless of keyboard height or adjustment mode.
+    const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 40), animated: true })
 
     if (Platform.OS === 'android') {
-      // On Android, wait for the keyboard to be fully visible before scrolling so
-      // KeyboardAvoidingView has finished resizing the content area.
+      // Wait for keyboard to finish appearing before scrolling so the content
+      // area has been resized (or padded) and the scroll target is correct.
       let done = false
       const sub = Keyboard.addListener('keyboardDidShow', () => {
         if (done) return
@@ -277,15 +297,16 @@ export default function RoomInspectionScreen() {
         sub.remove()
         doScroll()
       })
-      // Fallback: keyboard may already be visible (switching between inputs)
+      // Fallback if keyboard is already visible (switching between inputs)
       setTimeout(() => {
         if (done) return
         done = true
         sub.remove()
         doScroll()
-      }, 350)
+      }, 400)
     } else {
-      setTimeout(doScroll, 120)
+      // iOS: keyboard animation is ~250 ms; scroll after it finishes
+      setTimeout(doScroll, 260)
     }
   }
 
@@ -556,12 +577,24 @@ export default function RoomInspectionScreen() {
     const visibleBot = scrollY + winHeight
     let bestId: string | null = null
     let bestOverlap = 0
+
+    // Check each room item
     for (const [id, y] of itemLayoutsRef.current) {
       const h       = itemHeightsRef.current.get(id) ?? 150
       const overlap = Math.max(0, Math.min(visibleBot, y + h) - Math.max(visibleTop, y))
       const ratio   = h > 0 ? overlap / h : 0
       if (ratio > bestOverlap) { bestOverlap = ratio; bestId = id }
     }
+
+    // Also check the overview block — if it is more visible than any item, assign
+    // to overview (return null so handleFloatingCapture routes to addOverviewPhotoUri).
+    if (overviewLayoutRef.current) {
+      const { y: ovy, h: ovh } = overviewLayoutRef.current
+      const ovOverlap = Math.max(0, Math.min(visibleBot, ovy + ovh) - Math.max(visibleTop, ovy))
+      const ovRatio   = ovh > 0 ? ovOverlap / ovh : 0
+      if (ovRatio > bestOverlap) return null
+    }
+
     return bestId
   }
 
@@ -897,14 +930,16 @@ export default function RoomInspectionScreen() {
   // Called by RoomDictationRecorder when AI returns filled fields.
   // filled = { itemId: { description?, condition?, _subs?: [{description, condition}] } }
   // _subs is created when the AI detects multiple distinct elements within one item chapter.
-  // Phrases that mean the item is not present — triggers auto-deletion
+  // Phrases that mean the item is not present — triggers auto-deletion.
+  // Only matches when the phrase IS essentially the entire content (exact match),
+  // so embedded uses like "serial number not seen" are left as dictation.
   const NONE_SEEN_PHRASES = [
-    'none seen', 'not applicable', 'not present', 'none present',
+    'delete item', 'none seen', 'not applicable', 'not present', 'none present',
     'not found', 'n/a', 'none', 'not seen',
   ]
   function isNoneSeen(fields: Record<string, any>): boolean {
-    const text = [fields.description, fields.condition].join(' ').toLowerCase().trim()
-    return NONE_SEEN_PHRASES.some(p => text === p || text.startsWith(p + ' ') || text.endsWith(' ' + p))
+    const text = [fields.description, fields.condition].filter(Boolean).join(' ').toLowerCase().trim()
+    return NONE_SEEN_PHRASES.some(p => text === p)
   }
 
   async function handleRoomTranscribed(filled: Record<string, Record<string, any>>) {
@@ -2237,8 +2272,15 @@ export default function RoomInspectionScreen() {
             scrollEventThrottle={16}
             contentContainerStyle={[
               styles.scroll,
-              sectionType_ === 'room' && hasDictationRecorder && !isLandscape &&
-              { paddingBottom: 140 },
+              {
+                // Base padding for the dictation bar in portrait; always grow
+                // by keyboardHeight so the focused field can reach the top of
+                // the visible area on any device, regardless of keyboard mode.
+                paddingBottom: Math.max(
+                  sectionType_ === 'room' && hasDictationRecorder && !isLandscape ? 140 : 20,
+                  keyboardHeight + 32,
+                ),
+              },
             ]}
             keyboardShouldPersistTaps="handled"
           >
@@ -2247,7 +2289,12 @@ export default function RoomInspectionScreen() {
             {sectionType_ === 'room' && (() => {
               const ovPhotos = getOverviewPhotos()
               return (
-                <View style={styles.overviewBlock}>
+                <View
+                  style={styles.overviewBlock}
+                  onLayout={(e) => {
+                    overviewLayoutRef.current = { y: e.nativeEvent.layout.y, h: e.nativeEvent.layout.height }
+                  }}
+                >
                   <View style={styles.overviewHeader}>
                     <View>
                       <Text style={styles.overviewTitle}>Room Overview</Text>

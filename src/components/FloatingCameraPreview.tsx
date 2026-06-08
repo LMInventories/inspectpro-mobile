@@ -25,8 +25,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
 
 // Preview dimensions — landscape proportion to match the room orientation
-const PREVIEW_W = 176
-const PREVIEW_H = 132
+const PREVIEW_W = 308
+const PREVIEW_H = 231
 
 // Shutter button — same diameter as the Record button in the sidebar (62px)
 const SHUTTER_SIZE = 62

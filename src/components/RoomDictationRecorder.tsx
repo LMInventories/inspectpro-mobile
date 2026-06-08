@@ -28,6 +28,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Animated,
   Modal, ScrollView, Pressable, AppState,
+  useWindowDimensions,
 } from 'react-native'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
@@ -100,6 +101,10 @@ export default function RoomDictationRecorder({
   onCameraToggle,
 }: Props) {
   const insets   = useSafeAreaInsets()
+  const { width: _winW, height: _winH } = useWindowDimensions()
+  // Derive orientation from own measurement — more reliable than waiting for the
+  // parent prop to propagate after a rotation, which can lag on some devices.
+  const effectiveLandscape = _winW > _winH
   const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
 
   const [mode, setMode]           = useState<Mode>('idle')
@@ -386,8 +391,8 @@ export default function RoomDictationRecorder({
         return
       }
 
-      // Snapshot URIs before clearing — needed for file deletion after await
-      const clipsToDelete = clips.map(c => c.uri)
+      // Snapshot clips before clearing — needed for deletion after the async await
+      const clipsToDelete = [...clips]
 
       await onTranscribed(filled)
 
@@ -397,10 +402,16 @@ export default function RoomDictationRecorder({
       setElapsed(0)
       setMode('idle')
 
-      // Delete audio files from disk now that transcription is confirmed written to DB.
-      // SQLite records are kept so the export feature can still reference them.
-      clipsToDelete.forEach(uri => {
-        FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+      // Delete both SQLite records and files now that transcription is confirmed.
+      // Deleting the DB rows prevents them from being restored into recorder state
+      // on remount (e.g. after an orientation change), which would cause stale clips
+      // to be re-transcribed and re-add text to already-filled fields.
+      clipsToDelete.forEach(clip => {
+        if (clip.id !== undefined) {
+          deleteAudioRecording(clip.id, clip.uri).catch(() => {})
+        } else {
+          FileSystem.deleteAsync(clip.uri, { idempotent: true }).catch(() => {})
+        }
       })
     } catch (err: any) {
       console.error('[RoomDictation] transcribe error:', err)
@@ -631,7 +642,7 @@ export default function RoomDictationRecorder({
   )
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  if (isLandscape) {
+  if (effectiveLandscape) {
     return (
       <>
         <View style={[sidebar.wrap, {
@@ -963,22 +974,22 @@ const HELP_CONTENT: Record<string, { cmd: string; note: string }[]> = {
       note: 'As many components as you like — the condition at the end applies to all of them.' },
   ],
   subs: [
-    { cmd: 'Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall.',
-      note: 'Say "sub-item" to explicitly close the current element and start a new one. The AI fills each separately.' },
-    { cmd: 'Door and frame. White UPVC door, chrome handle. In good order. Sub-item. White painted frame, chrome hinges. Light scuffing to base.',
-      note: '"Sub-item" separates the door from the frame — each gets its own description and condition.' },
-    { cmd: 'Sub-item. Sub-item.',
-      note: 'Use "sub-item" as many times as needed. Each one opens a new entry beneath the main item.' },
+    { cmd: 'Walls. White emulsion. In good order. Add sub item. Light scuffing to base of wall.',
+      note: 'Say "add sub item" (or "add sub-item", "sub-item" — any variation) to close the current element and start a new one. The AI fills each separately.' },
+    { cmd: 'Door and frame. White UPVC door, chrome handle. In good order. Add sub item. White painted frame, chrome hinges. Light scuffing to base.',
+      note: '"Add sub item" separates the door from the frame — each gets its own description and condition.' },
+    { cmd: 'Add sub item. Add sub item.',
+      note: 'Use "add sub item" as many times as needed. Each one opens a new entry beneath the main item.' },
     { cmd: 'Automatic detection',
-      note: 'If you don\'t say "sub-item", the AI will still try to detect separate elements when it sees a new descriptive term start after a condition closes — but using "sub-item" is more reliable.' },
+      note: 'If you don\'t say "add sub item", the AI will still try to detect separate elements when it sees a new descriptive term start after a condition closes — but using "add sub item" is more reliable.' },
   ],
   skip: [
-    { cmd: 'Smoke alarm … Not applicable',
-      note: 'By Room: say "[item name] Not Applicable" and the AI will mark that item for removal from the report.' },
-    { cmd: 'Not applicable (Instant mode)',
-      note: 'Instant mode: start a per-item recording with just "Not applicable" — the item is already known and will be deleted.' },
-    { cmd: 'None seen / Not present / None',
-      note: 'Phrases like "none seen", "not present", "none", and "N/A" in the filled text are also detected as a deletion signal.' },
+    { cmd: 'Windows & Frames … not seen',
+      note: 'By Room: say "[item name] not seen", "[item name] not applicable", or "[item name] delete item" immediately after the item name to remove it from the report.' },
+    { cmd: 'Not applicable / Not seen / Delete item (Instant mode)',
+      note: 'Instant mode: start a per-item recording with just the deletion phrase — the item is already known and will be deleted.' },
+    { cmd: 'Important: embedded use is kept as dictation',
+      note: '"BOSCH black glass hob, model and serial number not seen" is written as-is — the deletion only fires when the phrase immediately follows the item title with nothing else.' },
     { cmd: 'Items can also be deleted manually',
       note: 'Swipe left on any item in the room list to delete it without dictating.' },
   ],

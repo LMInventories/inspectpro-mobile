@@ -73,6 +73,7 @@ export default function SwipeableRow({ children, actions, disabled, layout = 'gr
       friction={2}
       leftThreshold={40}
       rightThreshold={40}
+      failOffsetY={[-8, 8]}
       renderLeftActions={(p) => renderActions(p, 'left')}
       renderRightActions={(p) => renderActions(p, 'right')}
     >
