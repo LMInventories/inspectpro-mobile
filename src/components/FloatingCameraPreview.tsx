@@ -4,18 +4,15 @@
  * Live camera preview + shutter button, rendered as an absolute overlay in
  * landscape mode when the clerk chooses "Floating with Preview" camera option.
  *
- * Layout (relative to the right edge of the main content area):
- *   - Shutter button: vertically aligned with the Record button in the sidebar
- *   - Preview: below the shutter, at the bottom-right of the content area
+ * Layout: preview on the left, shutter button vertically centred to its right.
+ * The whole widget is draggable — long-press-move or move-threshold drag repositions it.
  *
  * Tap the preview to cycle zoom: 0.6× (ultra-wide) → 1× → 2× → …
- * Device selection mirrors CameraScreen: Camera.getAvailableCameraDevices() is used
- * rather than useCameraDevice('back') so that separate ultra-wide physical cameras
- * are discoverable and switchable.
  */
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
 import {
   View, TouchableOpacity, StyleSheet, Text, Animated,
+  PanResponder, useWindowDimensions,
 } from 'react-native'
 import { Camera, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
@@ -24,20 +21,23 @@ import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
 
-// Preview dimensions — landscape proportion to match the room orientation
-const PREVIEW_W = 308
-const PREVIEW_H = 231
+// Preview dimensions — 50% larger than before
+const PREVIEW_W = 462
+const PREVIEW_H = 347
 
-// Shutter button — same diameter as the Record button in the sidebar (62px)
+// Shutter button — same diameter as the Record button in the sidebar (62 px)
 const SHUTTER_SIZE = 62
 
-// Vertical gap between preview top and shutter bottom
-const SHUTTER_GAP = 8
+// Horizontal gap between preview right edge and shutter centre area
+const SHUTTER_MARGIN = 14
+
+// Total container size (row: preview + gap + shutter)
+const CONTAINER_W = PREVIEW_W + SHUTTER_MARGIN + SHUTTER_SIZE
+const CONTAINER_H = PREVIEW_H
 
 interface ZoomPreset {
   zoom: number
   label: string
-  // true = this preset requires switching to the ultraWideDevice
   useUltraWide: boolean
 }
 
@@ -47,18 +47,23 @@ interface Props {
 }
 
 export default function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
-  const isFocused = useIsFocused()
-  const insets    = useSafeAreaInsets()
+  const { width: screenW, height: screenH } = useWindowDimensions()
+  const isFocused    = useIsFocused()
+  const insets       = useSafeAreaInsets()
   const { hasPermission, requestPermission } = useCameraPermission()
   const cameraRef    = useRef<Camera>(null)
   const capturingRef = useRef(false)
-  // Bump to force Camera remount when switching between physical devices
   const [cameraKey, setCameraKey] = useState(0)
 
-  // ── Device discovery — same approach as CameraScreen ──────────────────────
-  // useCameraDevice('back') returns one "best" logical device and may omit the
-  // ultra-wide entirely. Camera.getAvailableCameraDevices() returns ALL physical
-  // devices so we can find and switch to a separate ultra-wide camera.
+  // Keep screen dims in refs so PanResponder closures always see current values
+  const screenWRef = useRef(screenW)
+  const screenHRef = useRef(screenH)
+  useEffect(() => {
+    screenWRef.current = screenW
+    screenHRef.current = screenH
+  }, [screenW, screenH])
+
+  // ── Device discovery ───────────────────────────────────────────────────────
   const [allDevices, setAllDevices] = useState<CameraDevice[]>(() => {
     try { return Camera.getAvailableCameraDevices() } catch { return [] }
   })
@@ -69,23 +74,18 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 
   const backDevices: CameraDevice[] = allDevices.filter(d => d.position === 'back')
 
-  // Main back camera: prefers the device whose physicalDevices includes
-  // 'wide-angle-camera' but is not exclusively ultra-wide.
   const mainDevice: CameraDevice | undefined =
     backDevices.find(d =>
       d.physicalDevices?.includes('wide-angle-camera') &&
       !(d.physicalDevices ?? []).every(p => p === 'ultra-wide-angle-camera')
     ) ?? backDevices[0]
 
-  // Ultra-wide device: a back-facing device that explicitly includes
-  // 'ultra-wide-angle-camera'. Do NOT match 'wide-angle-camera' alone.
   const ultraWideDevice: CameraDevice | undefined = backDevices.find(d =>
     (d.physicalDevices ?? []).some(
       p => p === 'ultra-wide-angle-camera' || p.toLowerCase().includes('ultra')
     )
   )
 
-  // Is ultra-wide a separate device, or reachable via zoom on the main device?
   const hasSeparateUltraWide =
     !!ultraWideDevice && !!mainDevice && ultraWideDevice.id !== mainDevice.id
   const hasZoomUltraWide =
@@ -98,8 +98,6 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 
     if (hasSeparateUltraWide || hasZoomUltraWide) {
       presets.push({
-        // For a separate device, zoom to its neutral (= 1× on that camera).
-        // For zoom-based, use mainDevice.minZoom directly.
         zoom:         hasSeparateUltraWide
                         ? (ultraWideDevice?.neutralZoom ?? 1)
                         : mainDevice.minZoom,
@@ -119,7 +117,6 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 
   const [zoomIdx, setZoomIdx] = useState(0)
 
-  // Reset to 1× whenever the main device changes (covers initial mount too)
   useEffect(() => {
     const idx = zoomPresets.findIndex(p => p.label === '1×')
     setZoomIdx(idx >= 0 ? idx : 0)
@@ -127,11 +124,9 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
 
   const currentPreset = zoomPresets[Math.min(zoomIdx, zoomPresets.length - 1)]
 
-  // Which physical device to render
   const activeDevice: CameraDevice | undefined =
     currentPreset.useUltraWide && hasSeparateUltraWide ? ultraWideDevice : mainDevice
 
-  // Zoom value to pass — for a separate UW device we always pass its neutral zoom
   const activeZoom =
     currentPreset.useUltraWide && hasSeparateUltraWide
       ? (ultraWideDevice?.neutralZoom ?? 1)
@@ -140,7 +135,6 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
   function cycleZoom() {
     const nextIdx    = (zoomIdx + 1) % zoomPresets.length
     const nextPreset = zoomPresets[nextIdx]
-    // Switching between separate physical devices requires a Camera remount
     const switchingDevice =
       (nextPreset.useUltraWide && hasSeparateUltraWide) !==
       (currentPreset.useUltraWide && hasSeparateUltraWide)
@@ -149,7 +143,9 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
   }
 
   // ── Visual feedback ────────────────────────────────────────────────────────
-  const captureFlash = useRef(new Animated.Value(0)).current
+  const captureFlash   = useRef(new Animated.Value(0)).current
+  const shutterOpacity = useRef(new Animated.Value(1)).current
+
   function triggerFlash() {
     captureFlash.stopAnimation()
     captureFlash.setValue(0)
@@ -159,14 +155,13 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
     ]).start()
   }
 
-  const shutterOpacity = useRef(new Animated.Value(1)).current
   function dimShutter() {
     shutterOpacity.stopAnimation()
     shutterOpacity.setValue(0.35)
     Animated.timing(shutterOpacity, { toValue: 1, duration: 350, useNativeDriver: true }).start()
   }
 
-  // Pre-create photo directory on mount
+  // ── Photo directory ────────────────────────────────────────────────────────
   const photoDirRef = useRef('')
   useEffect(() => {
     const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
@@ -199,38 +194,78 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
     }
   }, [activeDevice, onCapture])
 
-  // Request permission if missing
   useEffect(() => {
     if (!hasPermission) requestPermission()
   }, [hasPermission])
 
+  // ── Drag / position ────────────────────────────────────────────────────────
   const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0)
 
+  // Initialise at bottom-right, just left of the dictation sidebar
+  const position = useRef(new Animated.ValueXY({
+    x: screenW - CONTAINER_W - rightOffset,
+    y: screenH - CONTAINER_H - Math.max(insets.bottom, 16),
+  })).current
+
+  const panResponder = useRef(
+    PanResponder.create({
+      // Don't steal taps — only activate on clear move
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8,
+      onMoveShouldSetPanResponderCapture: (_, g) =>
+        Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8,
+      onPanResponderGrant: () => {
+        position.setOffset({
+          x: (position.x as any)._value,
+          y: (position.y as any)._value,
+        })
+        position.setValue({ x: 0, y: 0 })
+      },
+      onPanResponderMove: Animated.event(
+        [null, { dx: position.x, dy: position.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: () => {
+        position.flattenOffset()
+        // Clamp so the widget stays fully on-screen
+        const rawX = (position.x as any)._value
+        const rawY = (position.y as any)._value
+        const cX = Math.max(0, Math.min(rawX, screenWRef.current - CONTAINER_W))
+        const cY = Math.max(0, Math.min(rawY, screenHRef.current - CONTAINER_H))
+        if (cX !== rawX || cY !== rawY) {
+          Animated.spring(position, {
+            toValue: { x: cX, y: cY },
+            useNativeDriver: false,
+            bounciness: 4,
+          }).start()
+        }
+      },
+    })
+  ).current
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   if (!hasPermission || !activeDevice) {
     return (
-      <View style={[styles.noPermWrap, { right: rightOffset }]}>
+      <Animated.View
+        style={[styles.noPerm, { transform: position.getTranslateTransform() }]}
+        {...panResponder.panHandlers}
+      >
         <Text style={styles.noPermText}>
           {!hasPermission ? '📷 No camera permission' : '📷 Camera unavailable'}
         </Text>
-      </View>
+      </Animated.View>
     )
   }
 
   return (
-    <View style={[styles.container, { right: rightOffset }]} pointerEvents="box-none">
-      {/* Shutter button — aligns vertically with sidebar Record button */}
-      <Animated.View style={[styles.shutterWrap, { opacity: shutterOpacity }]}>
-        <TouchableOpacity style={styles.shutter} onPressIn={handleCapture} activeOpacity={1}>
-          <View style={styles.shutterInner} />
-        </TouchableOpacity>
-      </Animated.View>
-
+    <Animated.View
+      style={[styles.container, { transform: position.getTranslateTransform() }]}
+      {...panResponder.panHandlers}
+    >
       {/* Live preview — tap to cycle zoom */}
-      <TouchableOpacity
-        style={styles.preview}
-        onPress={cycleZoom}
-        activeOpacity={0.85}
-      >
+      <TouchableOpacity style={styles.preview} onPress={cycleZoom} activeOpacity={0.85}>
         <Camera
           key={cameraKey}
           ref={cameraRef}
@@ -241,33 +276,57 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
           outputOrientation="device"
           zoom={activeZoom}
         />
-        {/* Capture flash overlay */}
         <Animated.View
           pointerEvents="none"
           style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
         />
-        {/* Zoom level badge — bottom-left corner */}
         <View style={styles.zoomBadge}>
           <Text style={styles.zoomBadgeText}>{currentPreset.label}</Text>
         </View>
       </TouchableOpacity>
-    </View>
+
+      {/* Shutter — right of preview, vertically centred */}
+      <View style={styles.shutterArea}>
+        <Animated.View style={{ opacity: shutterOpacity }}>
+          <TouchableOpacity style={styles.shutter} onPressIn={handleCapture} activeOpacity={1}>
+            <View style={styles.shutterInner} />
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+    </Animated.View>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    bottom: 0,
-    width: PREVIEW_W,
+    top: 0,
+    left: 0,
+    width: CONTAINER_W,
+    height: CONTAINER_H,
+    flexDirection: 'row',
     alignItems: 'center',
-    height: SHUTTER_SIZE + SHUTTER_GAP + PREVIEW_H,
   },
 
-  shutterWrap: {
+  preview: {
+    width: PREVIEW_W,
+    height: PREVIEW_H,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.25)',
+    backgroundColor: '#000',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+
+  shutterArea: {
+    width: SHUTTER_SIZE + SHUTTER_MARGIN,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: SHUTTER_GAP,
   },
   shutter: {
     width: SHUTTER_SIZE,
@@ -293,21 +352,6 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
   },
 
-  preview: {
-    width: PREVIEW_W,
-    height: PREVIEW_H,
-    borderRadius: 10,
-    overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.25)',
-    backgroundColor: '#000',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-
   zoomBadge: {
     position: 'absolute',
     bottom: 6,
@@ -324,11 +368,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  noPermWrap: {
+  noPerm: {
     position: 'absolute',
-    bottom: 0,
-    width: PREVIEW_W,
-    height: SHUTTER_SIZE + SHUTTER_GAP + PREVIEW_H,
+    top: 0,
+    left: 0,
+    width: CONTAINER_W,
+    height: CONTAINER_H,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.7)',
