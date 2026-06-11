@@ -186,6 +186,8 @@ export default function RoomInspectionScreen() {
   const [sourceReportData, setSourceReportData] = useState<Record<string, any> | null>(null)
   // Tracks which items have the CI photos accordion open
   const [ciPhotosExpanded, setCiPhotosExpanded] = useState<Record<string, boolean>>({})
+  // Tracks expanded state for the room overview CI photos dropdown
+  const [ciOverviewExpanded, setCiOverviewExpanded] = useState(false)
 
   // ── Check-In photo lightbox (read-only) ────────────────────────────────────
   const [ciLightbox, setCiLightbox]               = useState<{ photos: string[]; index: number } | null>(null)
@@ -2338,6 +2340,40 @@ export default function RoomInspectionScreen() {
                       ))}
                     </ScrollView>
                   )}
+                  {isCheckOut_ && (() => {
+                    const ciOvPhotos = getSourcePhotos('_overview')
+                    if (ciOvPhotos.length === 0) return null
+                    return (
+                      <View style={styles.ciPhotosBlock}>
+                        <TouchableOpacity
+                          style={styles.ciPhotosHeader}
+                          onPress={() => setCiOverviewExpanded(v => !v)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.ciPhotosHeaderText}>
+                            📷  Check-In Photos ({ciOvPhotos.length})
+                          </Text>
+                          <Text style={styles.ciPhotosChevron}>{ciOverviewExpanded ? '▴' : '▾'}</Text>
+                        </TouchableOpacity>
+                        {ciOverviewExpanded && (
+                          <NativeViewGestureHandler disallowInterruption>
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              style={styles.ciPhotosScroll}
+                              contentContainerStyle={{ gap: 8, paddingHorizontal: 12, paddingVertical: 8 }}
+                            >
+                              {ciOvPhotos.map((uri, idx) => (
+                                <TouchableOpacity key={idx} onPress={() => setCiLightbox({ photos: ciOvPhotos, index: idx })} activeOpacity={0.8}>
+                                  <Image source={{ uri }} style={styles.ciPhotoThumb} resizeMode="cover" />
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          </NativeViewGestureHandler>
+                        )}
+                      </View>
+                    )
+                  })()}
                 </View>
               )
             })()}
