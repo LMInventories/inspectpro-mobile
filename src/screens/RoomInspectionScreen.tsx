@@ -2473,7 +2473,7 @@ export default function RoomInspectionScreen() {
                       <GestureDetector gesture={ciZoomGesture}>
                         <Animated.Image
                           source={{ uri }}
-                          style={[ciLbStyles.image, { transform: [{ scale: ciScale }] }]}
+                          style={{ width: winWidth, height: winHeight, transform: [{ scale: ciScale }] }}
                           resizeMode="contain"
                         />
                       </GestureDetector>

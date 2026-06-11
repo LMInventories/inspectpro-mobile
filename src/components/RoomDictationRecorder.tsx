@@ -503,7 +503,7 @@ export default function RoomDictationRecorder({
       )}
     </TouchableOpacity>
   )
-  const aiButton          = aiButtonShared(true)   // portrait — label visible
+  const aiButton          = aiButtonShared(false)  // portrait — icon only, no label
   const aiButtonLandscape = aiButtonShared(false)  // sidebar — icon only, no label
 
   const helpButton = (

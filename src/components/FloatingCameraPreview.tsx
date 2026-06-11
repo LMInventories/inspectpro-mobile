@@ -199,7 +199,7 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
   }, [hasPermission])
 
   // ── Drag / position ────────────────────────────────────────────────────────
-  const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0)
+  const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0) + 12
 
   // Initialise at bottom-right, just left of the dictation sidebar
   const position = useRef(new Animated.ValueXY({
