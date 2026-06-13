@@ -19,7 +19,9 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\inspectpro-mobile\" -Directory)",
       "Bash(Select-Object Name)",
       "Bash(npx expo *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(xargs grep -l \"copy room\\\\|copyRoom\\\\|CopyRoom\")",
+      "Bash(\\\\.ts\")"
     ]
   }
 }

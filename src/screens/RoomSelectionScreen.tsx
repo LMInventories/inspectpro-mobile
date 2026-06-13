@@ -56,6 +56,13 @@ export default function RoomSelectionScreen() {
   const [targetRoomId, setTargetRoomId] = useState('')
   const [targetName, setTargetName]     = useState('')
 
+  // Copy room modal
+  const [copyRoomModal, setCopyRoomModal]   = useState(false)
+  const [copyRoomKey,   setCopyRoomKey]     = useState('')
+  const [copyRoomName,  setCopyRoomName]    = useState('')
+  const [copyDescs,     setCopyDescs]       = useState(true)
+  const [copyConds,     setCopyConds]       = useState(true)
+
   // Room rearrange modal
   const [roomRearrangeModal, setRoomRearrangeModal] = useState(false)
   const [roomRearrangeList, setRoomRearrangeList]   = useState<any[]>([])
@@ -269,15 +276,29 @@ export default function RoomSelectionScreen() {
     ])
   }
 
-  async function handleDuplicateRoom(key: string, name: string) {
+  async function handleDuplicateRoom(key: string, name: string, options: { descriptions: boolean; conditions: boolean }) {
     const newKey = `custom_${Date.now()}`
     const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    rd[newKey] = JSON.parse(JSON.stringify(rd[key] || {}))
+    const roomCopy = JSON.parse(JSON.stringify(rd[key] || {}))
+    if (!options.descriptions || !options.conditions) {
+      for (const itemKey of Object.keys(roomCopy)) {
+        if (itemKey.startsWith('_')) continue
+        if (!options.descriptions) delete roomCopy[itemKey].description
+        if (!options.conditions)   delete roomCopy[itemKey].condition
+        const subs: any[] = roomCopy[itemKey]._subs || []
+        for (const sub of subs) {
+          if (!options.descriptions) delete sub.description
+          if (!options.conditions)   delete sub.condition
+        }
+      }
+    }
+    rd[newKey] = roomCopy
     if (!rd['_customRooms']) rd['_customRooms'] = []
     rd['_customRooms'].push({ key: newKey, name: `${name} (Copy)` })
     await setReportData(inspectionId, rd)
     await loadInspection(inspectionId)
+    setCopyRoomModal(false)
   }
 
   function openRename(key: string, name: string) {
@@ -369,7 +390,7 @@ export default function RoomSelectionScreen() {
     return [
       { icon: '⇅',  label: 'Rearrange', bg: '#f5f3ff',          onPress: () => openRoomRearrangeModal() },
       { icon: '✏️', label: 'Rename',    bg: colors.primaryLight, onPress: () => openRename(key, name) },
-      { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => handleDuplicateRoom(key, name) },
+      { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => { setCopyRoomKey(key); setCopyRoomName(name); setCopyDescs(true); setCopyConds(true); setCopyRoomModal(true) } },
       { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteRoomConfirmed(key, name) },
     ]
   }
@@ -847,6 +868,59 @@ export default function RoomSelectionScreen() {
         </View>
         </GestureHandlerRootView>
       </Modal>
+      {/* Copy room modal */}
+      <Modal visible={copyRoomModal} transparent animationType="fade">
+        <View style={mStyles.overlay}>
+          <View style={mStyles.box}>
+            <Text style={mStyles.title}>Copy Room</Text>
+            <Text style={mStyles.subtitle}>"{copyRoomName}" — choose what to include</Text>
+
+            <TouchableOpacity
+              style={copyStyles.checkRow}
+              onPress={() => setCopyDescs(v => !v)}
+              activeOpacity={0.7}
+            >
+              <View style={[copyStyles.checkbox, copyDescs && copyStyles.checkboxOn]}>
+                {copyDescs && <Text style={copyStyles.checkmark}>✓</Text>}
+              </View>
+              <View style={copyStyles.checkLabel}>
+                <Text style={copyStyles.checkTitle}>Copy descriptions</Text>
+                <Text style={copyStyles.checkSub}>Existing text in each item's description field</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={copyStyles.checkRow}
+              onPress={() => setCopyConds(v => !v)}
+              activeOpacity={0.7}
+            >
+              <View style={[copyStyles.checkbox, copyConds && copyStyles.checkboxOn]}>
+                {copyConds && <Text style={copyStyles.checkmark}>✓</Text>}
+              </View>
+              <View style={copyStyles.checkLabel}>
+                <Text style={copyStyles.checkTitle}>Copy conditions</Text>
+                <Text style={copyStyles.checkSub}>Existing text in each item's condition field</Text>
+              </View>
+            </TouchableOpacity>
+
+            <View style={mStyles.actions}>
+              <TouchableOpacity
+                style={mStyles.cancelBtn}
+                onPress={() => setCopyRoomModal(false)}
+              >
+                <Text style={mStyles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={mStyles.confirm}
+                onPress={() => handleDuplicateRoom(copyRoomKey, copyRoomName, { descriptions: copyDescs, conditions: copyConds })}
+              >
+                <Text style={mStyles.confirmText}>Copy Room</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </GestureHandlerRootView>
   )
 }
@@ -929,6 +1003,22 @@ const mStyles = StyleSheet.create({
   backBtnText: { color: colors.text, fontWeight: '700', fontSize: font.sm },
   emptyPresets: { backgroundColor: colors.muted, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md },
   emptyPresetsText: { fontSize: font.sm, color: colors.textMid, lineHeight: 20 },
+})
+
+const copyStyles = StyleSheet.create({
+  checkRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0,
+  },
+  checkboxOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  checkmark: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  checkLabel: { flex: 1 },
+  checkTitle: { fontSize: font.md, fontWeight: '600', color: colors.text },
+  checkSub: { fontSize: font.xs, color: colors.textMid, marginTop: 2 },
 })
 
 const styles = StyleSheet.create({

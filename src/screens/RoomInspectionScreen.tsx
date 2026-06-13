@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
-  KeyboardAvoidingView, Keyboard, Platform, Animated, Dimensions, useWindowDimensions,
+  Keyboard, Platform, Animated, Dimensions, useWindowDimensions,
   FlatList,
 } from 'react-native'
 import {
@@ -968,10 +968,19 @@ export default function RoomInspectionScreen() {
 
     for (const [itemId, fields] of Object.entries(filled)) {
       // Explicit delete — clerk said "[item] Not Applicable" (AI sets _delete: true)
-      // Also catches auto-detection via isNoneSeen for legacy compatibility
+      // Also catches auto-detection via isNoneSeen for legacy compatibility.
+      // Handle inline within rd so the single setReportData at the end captures
+      // deletions alongside any other fills — avoids a second write overwriting _deleted.
       if ((fields as any)._delete === true || isNoneSeen(fields)) {
-        await deleteItemImmediate(itemId)
+        setItems(prev => prev.filter(i => i.id !== itemId))
+        if (rd[sectionKey][String(itemId)]) delete rd[sectionKey][String(itemId)]
+        if (rd[sectionKey]['_extra']) {
+          rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
+        }
+        if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
+        if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
         deletedItems.push(itemId)
+        changed = true
         continue
       }
 
@@ -1054,8 +1063,8 @@ export default function RoomInspectionScreen() {
     if (subItemsCreated > 0) parts.push(`${subItemsCreated} sub-item${subItemsCreated !== 1 ? 's' : ''} created`)
     if (deletedItems.length > 0) parts.push(`${deletedItems.length} removed (none seen)`)
 
-    if (changed || deletedItems.length > 0) {
-      if (changed) setReportData(inspectionId, rd)
+    if (changed) {
+      setReportData(inspectionId, rd)
       useToastStore.getState().showToast(`✨ ${parts.join(' · ')} in ${sectionName}.`)
     } else {
       useToastStore.getState().showToast('Already filled — existing content preserved.', 'info')
@@ -2391,7 +2400,7 @@ export default function RoomInspectionScreen() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <View style={{ flex: 1 }}>
       {/* Outer: row in landscape so sidebar sits beside content; column in portrait */}
       <View style={[styles.screen, dm.bg, { paddingTop: insets.top, flexDirection: isLandscape ? 'row' : 'column' }]}>
 
@@ -2978,7 +2987,7 @@ export default function RoomInspectionScreen() {
           </GestureHandlerRootView>
         </Modal>
       </View>
-    </KeyboardAvoidingView>
+    </View>
     </GestureHandlerRootView>
   )
 }
