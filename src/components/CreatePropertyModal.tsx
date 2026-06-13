@@ -29,7 +29,10 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
 
   // Form values
   const [clientId,        setClientId]        = useState<number | null>(null)
-  const [address,         setAddress]         = useState('')
+  const [addressLine1,    setAddressLine1]    = useState('')
+  const [addressLine2,    setAddressLine2]    = useState('')
+  const [city,            setCity]            = useState('')
+  const [postcode,        setPostcode]        = useState('')
   const [propertyType,    setPropertyType]    = useState('')
   const [bedrooms,        setBedrooms]        = useState('')
   const [bathrooms,       setBathrooms]       = useState('')
@@ -59,7 +62,9 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
   }, [visible])
 
   function resetForm() {
-    setClientId(null); setAddress(''); setPropertyType(''); setBedrooms(''); setBathrooms('')
+    setClientId(null)
+    setAddressLine1(''); setAddressLine2(''); setCity(''); setPostcode('')
+    setPropertyType(''); setBedrooms(''); setBathrooms('')
     setFurnished(''); setDetachmentType(''); setElevation('')
     setParking(false); setGarden(false); setElevator(false)
     setMeterElec(''); setMeterGas(''); setMeterHeat(''); setMeterWater('')
@@ -81,14 +86,18 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
   const selectedClient = clients.find(c => c.id === clientId)
 
   async function handleSubmit() {
-    if (!clientId)         { setError('Please select a client'); return }
-    if (!address.trim())   { setError('Address is required'); return }
+    if (!clientId)              { setError('Please select a client'); return }
+    if (!addressLine1.trim())   { setError('Address Line 1 is required'); return }
+    if (!postcode.trim())       { setError('Postcode is required'); return }
+
+    const address = [addressLine1, addressLine2, city, postcode]
+      .map(s => s.trim()).filter(Boolean).join(', ')
 
     setSubmitting(true); setError('')
     try {
       await api.createProperty({
         client_id:         clientId,
-        address:           address.trim(),
+        address,
         property_type:     propertyType     || null,
         bedrooms:          bedrooms !== ''  ? Number(bedrooms)   : null,
         bathrooms:         bathrooms !== '' ? Number(bathrooms)  : null,
@@ -154,14 +163,50 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
               </TouchableOpacity>
 
               {/* Address */}
-              <Text style={styles.label}>Address <Text style={styles.req}>*</Text></Text>
+              <Text style={styles.label}>Address Line 1 <Text style={styles.req}>*</Text></Text>
               <TextInput
                 style={styles.input}
-                placeholder="Full property address"
+                placeholder="Street address"
                 placeholderTextColor={colors.textLight}
-                value={address}
-                onChangeText={setAddress}
+                value={addressLine1}
+                onChangeText={setAddressLine1}
+                autoCapitalize="words"
               />
+
+              <Text style={styles.label}>Address Line 2</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Flat, apartment, unit… (optional)"
+                placeholderTextColor={colors.textLight}
+                value={addressLine2}
+                onChangeText={setAddressLine2}
+                autoCapitalize="words"
+              />
+
+              <View style={styles.row}>
+                <View style={styles.cityCol}>
+                  <Text style={styles.label}>City / Town</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="City"
+                    placeholderTextColor={colors.textLight}
+                    value={city}
+                    onChangeText={setCity}
+                    autoCapitalize="words"
+                  />
+                </View>
+                <View style={styles.postcodeCol}>
+                  <Text style={styles.label}>Postcode <Text style={styles.req}>*</Text></Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="SW1A 1AA"
+                    placeholderTextColor={colors.textLight}
+                    value={postcode}
+                    onChangeText={t => setPostcode(t.toUpperCase())}
+                    autoCapitalize="characters"
+                  />
+                </View>
+              </View>
 
               {/* Property type */}
               <Text style={styles.label}>Property Type</Text>
@@ -364,6 +409,8 @@ const styles = StyleSheet.create({
   chevron:      { fontSize: 20, color: colors.textLight, marginLeft: spacing.xs },
   row:          { flexDirection: 'row', gap: spacing.sm },
   halfCol:      { flex: 1 },
+  cityCol:      { flex: 3 },
+  postcodeCol:  { flex: 2 },
   toggleRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   toggleChip:   { paddingHorizontal: spacing.sm, paddingVertical: 8, borderRadius: radius.sm, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
   toggleChipActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },

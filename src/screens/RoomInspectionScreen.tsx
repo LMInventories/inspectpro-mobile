@@ -20,7 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
-import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection } from '../services/database'
+import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, updateTranscription } from '../services/database'
 import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
@@ -174,6 +174,9 @@ export default function RoomInspectionScreen() {
   // presses multiple item buttons in quick succession.
   const transcriptionQueueRef = useRef<Array<() => Promise<void>>>([])
   const transcriptionRunningRef = useRef(false)
+
+  // AI Condition Summary
+  const [aiCondSumLoading, setAiCondSumLoading] = useState(false)
 
   // Cleanliness dropdown state
   const [cleanlinessOpen, setCleanlinessOpen]   = useState(false)
@@ -810,6 +813,14 @@ export default function RoomInspectionScreen() {
 
       const result = response.data
 
+      // Persist the raw Whisper transcript to the SQLite recording row so it
+      // syncs to the server and becomes available for the web app's Export Transcription.
+      if (result.transcript) {
+        const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, itemId)
+        const match = recs.find((r: any) => r.file_uri === uri)
+        if (match?.id) updateTranscription(match.id, result.transcript)
+      }
+
       // Read fresh from DB *after* the API call so any edits the user made while
       // waiting for the AI response are preserved — not overwritten by a stale read
       // taken before the network request started.
@@ -1051,6 +1062,123 @@ export default function RoomInspectionScreen() {
     }
   }
 
+  // ── AI Condition Summary ─────────────────────────────────────────────────
+  // Reads all filled room data from the inspection, sends it to the backend,
+  // and fills each condition_summary item with concise line-by-line observations.
+  async function handleAiConditionSummary() {
+    if (aiCondSumLoading) return
+
+    const fresh    = await getLocalInspection(inspectionId)
+    const rd       = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const template = fresh?.template
+
+    if (!template?.sections?.length) {
+      Alert.alert('No room data', 'Complete some rooms before generating a condition summary.')
+      return
+    }
+
+    const roomNames: Record<string, string>              = rd._roomNames   || {}
+    const customRooms: Array<{ key: string; name: string }> = rd._customRooms || []
+
+    // Build sections array from template structure + filled report_data
+    const sections: Array<{ name: string; items: any[] }> = []
+
+    for (const sec of template.sections) {
+      const secKey   = String(sec.id)
+      const secData  = rd[secKey] || {}
+      const secName  = roomNames[secKey] || sec.name || `Room ${secKey}`
+      const secItems: any[] = []
+
+      for (const item of (sec.items || [])) {
+        const itemData = secData[String(item.id)] || {}
+        if (!itemData.description && !itemData.condition) continue
+        secItems.push({
+          name:        item.name || '',
+          description: itemData.description || '',
+          condition:   itemData.condition   || '',
+          subs: (itemData._subs || []).map((s: any) => ({
+            description: s.description || '',
+            condition:   s.condition   || '',
+          })),
+        })
+      }
+
+      // Extra (user-added) items stored in _extra
+      for (const extra of (secData._extra || [])) {
+        const eData = secData[extra._eid] || {}
+        if (!eData.description && !eData.condition) continue
+        secItems.push({
+          name:        extra.name || '',
+          description: eData.description || '',
+          condition:   eData.condition   || '',
+          subs: (eData._subs || []).map((s: any) => ({
+            description: s.description || '',
+            condition:   s.condition   || '',
+          })),
+        })
+      }
+
+      if (secItems.length > 0) sections.push({ name: secName, items: secItems })
+    }
+
+    // Custom rooms
+    for (const cr of customRooms) {
+      const crData  = rd[cr.key] || {}
+      const crName  = roomNames[cr.key] || cr.name
+      const crItems: any[] = []
+      for (const [itemId, rawData] of Object.entries(crData)) {
+        if (itemId.startsWith('_')) continue
+        const d = rawData as any
+        if (!d.description && !d.condition) continue
+        crItems.push({
+          name:        d._name || itemId,
+          description: d.description || '',
+          condition:   d.condition   || '',
+          subs: (d._subs || []).map((s: any) => ({
+            description: s.description || '',
+            condition:   s.condition   || '',
+          })),
+        })
+      }
+      if (crItems.length > 0) sections.push({ name: crName, items: crItems })
+    }
+
+    if (sections.length === 0) {
+      Alert.alert('No room data', 'Complete some rooms before generating a condition summary.')
+      return
+    }
+
+    setAiCondSumLoading(true)
+    try {
+      const summaryItems = items.map(it => ({ id: String(it.id), name: it.name || '' }))
+      const res = await api.generateConditionSummary({ inspectionId, sections, summaryItems })
+      const filled: Record<string, { condition: string }> = res.data.filled || {}
+
+      const nonEmpty = Object.entries(filled).filter(([, v]) => v.condition?.trim())
+      if (nonEmpty.length === 0) {
+        useToastStore.getState().showToast('No notable issues found — property looks good!', 'info')
+        return
+      }
+
+      // Write directly to report_data, overwriting any existing condition values
+      const freshNow = await getLocalInspection(inspectionId)
+      const rdNow    = freshNow?.report_data ? JSON.parse(freshNow.report_data) : {}
+      if (!rdNow[sectionKey]) rdNow[sectionKey] = {}
+
+      for (const [itemId, fields] of nonEmpty) {
+        if (!rdNow[sectionKey][itemId]) rdNow[sectionKey][itemId] = {}
+        rdNow[sectionKey][itemId].condition = fields.condition
+      }
+
+      setReportData(inspectionId, rdNow)
+      useToastStore.getState().showToast(`✨ Condition summary filled for ${nonEmpty.length} item${nonEmpty.length !== 1 ? 's' : ''}.`)
+    } catch (err: any) {
+      Alert.alert('AI Error', err.response?.data?.error || err.message || 'Failed to generate summary')
+    } finally {
+      setAiCondSumLoading(false)
+    }
+  }
+
   // Fixed section dictation callback — field names vary by section type
   async function handleFixedRoomTranscribed(filled: Record<string, Record<string, any>>) {
     // Same fresh-read pattern as handleRoomTranscribed — dictation is async.
@@ -1115,6 +1243,14 @@ export default function RoomInspectionScreen() {
         isDamageReport: isDamageReport_,
       })
       const result = response.data
+
+      // Persist the raw Whisper transcript to the SQLite recording row.
+      if (result.transcript) {
+        const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, sid)
+        const match = recs.find((r: any) => r.file_uri === uri)
+        if (match?.id) updateTranscription(match.id, result.transcript)
+      }
+
       const fresh = await getLocalInspection(inspectionId)
       const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
       const subs: any[] = rd[sectionKey]?.[String(parentItemId)]?._subs || []
@@ -2378,6 +2514,28 @@ export default function RoomInspectionScreen() {
               )
             })()}
 
+            {/* ── AI Condition Summary button — condition_summary sections only ── */}
+            {sectionType_ === 'condition_summary' && (
+              <TouchableOpacity
+                style={[styles.aiCondSumBtn, aiCondSumLoading && styles.aiCondSumBtnBusy]}
+                onPress={handleAiConditionSummary}
+                disabled={aiCondSumLoading}
+                activeOpacity={0.75}
+              >
+                {aiCondSumLoading ? (
+                  <>
+                    <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={styles.aiCondSumBtnText}>Generating summary…</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.aiCondSumBtnIcon}>✨</Text>
+                    <Text style={styles.aiCondSumBtnText}>AI Condition Summary</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+
                         {items.length > 0 && (
               <Text style={styles.swipeHint}>← Swipe left or right for options →</Text>
             )}
@@ -2986,6 +3144,10 @@ const styles = StyleSheet.create({
   aiProcessingText: { fontSize: font.xs, color: '#3730a3', fontWeight: '600' },
   addItemBtn: { borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', borderRadius: radius.md, padding: spacing.sm, alignItems: 'center', marginTop: spacing.xs },
   addItemText: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
+  aiCondSumBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 13, paddingHorizontal: spacing.md, marginHorizontal: spacing.md, marginTop: spacing.md, marginBottom: spacing.xs },
+  aiCondSumBtnBusy: { backgroundColor: colors.borderDark },
+  aiCondSumBtnIcon: { fontSize: 16 },
+  aiCondSumBtnText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
   emptyNote: { backgroundColor: colors.muted, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md },
   subsContainer: { marginTop: spacing.sm },
   subsDivider: { height: 1, backgroundColor: colors.border, marginBottom: spacing.sm, borderStyle: 'dashed' },

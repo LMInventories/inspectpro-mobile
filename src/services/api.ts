@@ -183,6 +183,22 @@ export const api = {
   classifyPhoto: (data: { imageBase64: string; mimeType: string; roomContext: string; inspectionId?: string | number }) =>
     httpAi.post('/api/transcribe/classify-photo', data),
 
+  // AI Condition Summary — synthesises notable issues from filled room data
+  generateConditionSummary: (data: {
+    inspectionId: number
+    sections: Array<{
+      name: string
+      items: Array<{
+        name: string
+        description: string
+        condition: string
+        subs?: Array<{ description: string; condition: string }>
+      }>
+    }>
+    summaryItems: Array<{ id: string; name: string }>
+  }) =>
+    httpAi.post('/api/transcribe/condition-summary', data),
+
   checkAiStatus: () =>
     http.get('/api/ai/status'),
 
