@@ -21,7 +21,8 @@
       "Bash(npx expo *)",
       "Bash(npm install *)",
       "Bash(xargs grep -l \"copy room\\\\|copyRoom\\\\|CopyRoom\")",
-      "Bash(\\\\.ts\")"
+      "Bash(\\\\.ts\")",
+      "PowerShell(cd C:\\\\Projects\\\\inspectpro-mobile; npx tsc --noEmit --skipLibCheck 2>&1 | Where-Object { $_ -match \"RoomSelection\" } | Select-Object -First 15)"
     ]
   }
 }

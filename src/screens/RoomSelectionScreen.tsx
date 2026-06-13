@@ -277,23 +277,67 @@ export default function RoomSelectionScreen() {
   }
 
   async function handleDuplicateRoom(key: string, name: string, options: { descriptions: boolean; conditions: boolean }) {
-    const newKey = `custom_${Date.now()}`
-    const fresh = await getLocalInspection(inspectionId)
-    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    const roomCopy = JSON.parse(JSON.stringify(rd[key] || {}))
-    if (!options.descriptions || !options.conditions) {
-      for (const itemKey of Object.keys(roomCopy)) {
-        if (itemKey.startsWith('_')) continue
-        if (!options.descriptions) delete roomCopy[itemKey].description
-        if (!options.conditions)   delete roomCopy[itemKey].condition
-        const subs: any[] = roomCopy[itemKey]._subs || []
-        for (const sub of subs) {
-          if (!options.descriptions) delete sub.description
-          if (!options.conditions)   delete sub.condition
-        }
+    const newKey  = `custom_${Date.now()}`
+    const fresh   = await getLocalInspection(inspectionId)
+    const rd      = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const sourceRd: any = rd[key] || {}
+
+    const deletedIds: string[]            = sourceRd._deleted || []
+    const sourceExtras: any[]             = sourceRd._extra   || []
+
+    // If this is a template room, its items live in the template, not in report_data.
+    // Find the matching template section so we can enumerate those items.
+    const tmplSection = templateSections.find((s: any) => String(s.id) === key)
+    const templateItems: Array<{ id: string; name: string }> = tmplSection
+      ? (tmplSection.items || [])
+          .filter((item: any) => !deletedIds.includes(String(item.id)))
+          .map((item: any) => ({ id: String(item.id), name: item.name || '' }))
+      : []
+
+    const newRoomData: any = {}
+    const newExtras: Array<{ _eid: string; name: string }> = []
+
+    let counter = 0
+    const uid = () => `${Date.now()}_${(counter++).toString().padStart(3, '0')}`
+
+    // Convert each template item into a _extra entry in the new room
+    for (const ti of templateItems) {
+      const newEid = `extra_${uid()}`
+      const src    = sourceRd[ti.id] || {}
+      newExtras.push({ _eid: newEid, name: ti.name })
+      const copy: any = {}
+      if (options.descriptions && src.description) copy.description = src.description
+      if (options.conditions   && src.condition)   copy.condition   = src.condition
+      if (src._subs?.length) {
+        copy._subs = src._subs.map((sub: any) => ({
+          _sid:        `sub_${uid()}`,
+          description: options.descriptions ? (sub.description || '') : '',
+          condition:   options.conditions   ? (sub.condition   || '') : '',
+        }))
       }
+      newRoomData[newEid] = copy
     }
-    rd[newKey] = roomCopy
+
+    // Copy any custom extra items added to the source room
+    for (const extra of sourceExtras) {
+      const newEid = `extra_${uid()}`
+      const src    = sourceRd[extra._eid] || {}
+      newExtras.push({ _eid: newEid, name: extra.name || '' })
+      const copy: any = {}
+      if (options.descriptions && src.description) copy.description = src.description
+      if (options.conditions   && src.condition)   copy.condition   = src.condition
+      if (src._subs?.length) {
+        copy._subs = src._subs.map((sub: any) => ({
+          _sid:        `sub_${uid()}`,
+          description: options.descriptions ? (sub.description || '') : '',
+          condition:   options.conditions   ? (sub.condition   || '') : '',
+        }))
+      }
+      newRoomData[newEid] = copy
+    }
+
+    newRoomData._extra = newExtras
+    rd[newKey] = newRoomData
     if (!rd['_customRooms']) rd['_customRooms'] = []
     rd['_customRooms'].push({ key: newKey, name: `${name} (Copy)` })
     await setReportData(inspectionId, rd)
