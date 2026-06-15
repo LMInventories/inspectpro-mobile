@@ -196,6 +196,13 @@ export const api = {
       }>
     }>
     summaryItems: Array<{ id: string; name: string }>
+    propertyDetails?: {
+      property_type?: string | null
+      bedrooms?: number | null
+      bathrooms?: number | null
+      furnished?: string | null
+      address?: string | null
+    }
   }) =>
     httpAi.post('/api/transcribe/condition-summary', data),
 

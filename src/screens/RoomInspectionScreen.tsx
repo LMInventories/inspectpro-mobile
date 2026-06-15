@@ -1160,7 +1160,15 @@ export default function RoomInspectionScreen() {
     setAiCondSumLoading(true)
     try {
       const summaryItems = items.map(it => ({ id: String(it.id), name: it.name || '' }))
-      const res = await api.generateConditionSummary({ inspectionId, sections, summaryItems })
+      const prop = fresh?.property || {}
+      const propertyDetails = {
+        property_type: prop.property_type ?? null,
+        bedrooms:      prop.bedrooms      ?? null,
+        bathrooms:     prop.bathrooms     ?? null,
+        furnished:     prop.furnished     ?? null,
+        address:       fresh?.property_address ?? null,
+      }
+      const res = await api.generateConditionSummary({ inspectionId, sections, summaryItems, propertyDetails })
       const filled: Record<string, { condition: string }> = res.data.filled || {}
 
       const nonEmpty = Object.entries(filled).filter(([, v]) => v.condition?.trim())
