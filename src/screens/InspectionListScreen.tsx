@@ -266,7 +266,11 @@ export default function InspectionListScreen() {
         />
       )}
 
-      <AccountModal visible={showAccount} onClose={() => setShowAccount(false)} />
+      <AccountModal
+        visible={showAccount}
+        onClose={() => setShowAccount(false)}
+        onOpenAdmin={() => { setShowAccount(false); navigation.navigate('AdminPanel') }}
+      />
     </View>
   )
 }

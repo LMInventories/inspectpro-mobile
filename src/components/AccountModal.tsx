@@ -16,9 +16,10 @@ import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 interface Props {
   visible: boolean
   onClose: () => void
+  onOpenAdmin?: () => void
 }
 
-export default function AccountModal({ visible, onClose }: Props) {
+export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
   const insets = useSafeAreaInsets()
   const { user, logout } = useAuthStore()
   const { inspections } = useInspectionStore()
@@ -385,8 +386,13 @@ export default function AccountModal({ visible, onClose }: Props) {
           <View style={{ height: spacing.lg }} />
         </ScrollView>
 
-        {/* ── Logout footer ───────────────────────────────────────────────── */}
+        {/* ── Footer ──────────────────────────────────────────────────────── */}
         <View style={[s.footer, { paddingBottom: insets.bottom + 8 }]}>
+          {isAdmin && !!onOpenAdmin && (
+            <TouchableOpacity style={s.adminBtn} onPress={onOpenAdmin}>
+              <Text style={s.adminBtnText}>Admin Panel</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
             <Text style={s.logoutBtnText}>Log Out</Text>
           </TouchableOpacity>
@@ -523,14 +529,24 @@ const s = StyleSheet.create({
   checkAddress: { fontSize: font.sm, fontWeight: '600', color: colors.text },
   checkMeta:    { fontSize: font.xs, color: colors.textMid, marginTop: 1 },
 
-  // Footer logout
+  // Footer
   footer: {
     padding: spacing.md,
     paddingTop: spacing.sm,
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+    gap: spacing.sm,
   },
+  adminBtn: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+  },
+  adminBtnText: { color: colors.primary, fontSize: font.md, fontWeight: '700' },
   logoutBtn: {
     backgroundColor: colors.dangerLight,
     borderRadius: radius.md,

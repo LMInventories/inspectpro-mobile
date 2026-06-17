@@ -369,6 +369,7 @@ export default function RoomDictationRecorder({
         sectionType,
         isCheckOut,
         isDamageReport,
+        inspectionId,
         processedItemIds: processedItemIds.length > 0 ? processedItemIds : undefined,
         items: items.map(it => ({
           id:             it.id,

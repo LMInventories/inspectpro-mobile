@@ -77,6 +77,16 @@ export default function RoomInspectionScreen() {
   // Sub-item quantity modal — opened when clerk taps the ⊕ swipe action
   const [subQtyModal, setSubQtyModal] = useState<{ itemId: string; label: string; count: number } | null>(null)
 
+  // Copy item to room modal
+  const [copyItemModal, setCopyItemModal] = useState<{ itemId: string; item: any } | null>(null)
+  const [copyTargetKey, setCopyTargetKey] = useState('')
+  const [copyDescs,     setCopyDescs]     = useState(true)
+  const [copyConds,     setCopyConds]     = useState(true)
+  const [copyPhotos,    setCopyPhotos]    = useState(true)
+  const [copyRoomsList, setCopyRoomsList] = useState<{ key: string; name: string }[]>([])
+  const [copyRoomsLoading, setCopyRoomsLoading] = useState(false)
+  const [copyingItem, setCopyingItem] = useState(false)
+
   // Rearrange modal
   const [rearrangeModal, setRearrangeModal]   = useState(false)
   const [rearrangeItems, setRearrangeItems]   = useState<any[]>([])
@@ -809,6 +819,7 @@ export default function RoomInspectionScreen() {
         sectionType:    sectionType_,
         isCheckOut:     isCheckOut_,
         isDamageReport: isDamageReport_,
+        inspectionId,
       })
 
       const result = response.data
@@ -1258,6 +1269,7 @@ export default function RoomInspectionScreen() {
         sectionType:    'room',
         isCheckOut:     isCheckOut_,
         isDamageReport: isDamageReport_,
+        inspectionId,
       })
       const result = response.data
 
@@ -1388,6 +1400,103 @@ export default function RoomInspectionScreen() {
       ? { ...item, id: newId, label: copyName, custom: true }
       : adaptExtraItem(newId, copyName, sectionType_)
     setItems(prev => [...prev, newItem])
+  }
+
+  async function openCopyItemModal(item: any) {
+    setCopyTargetKey('')
+    setCopyDescs(true)
+    setCopyConds(true)
+    setCopyPhotos(true)
+    setCopyRoomsList([])
+    setCopyRoomsLoading(true)
+    setCopyItemModal({ itemId: item.id, item })
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const hidden: string[]              = rd['_hiddenRooms'] || []
+    const roomNames: Record<string, string> = rd['_roomNames'] || {}
+    const rooms: { key: string; name: string }[] = []
+
+    // Template sections
+    if (fresh?.template_id) {
+      try {
+        let templateData = fresh?.template || null
+        if (!templateData) {
+          const tmplRes = await api.getTemplate(fresh.template_id)
+          templateData = tmplRes.data
+        }
+        for (const s of (templateData?.sections || [])) {
+          const key = String(s.id)
+          if (!hidden.includes(key) && key !== sectionKey)
+            rooms.push({ key, name: roomNames[key] || s.name })
+        }
+      } catch {}
+    }
+
+    // Custom rooms
+    for (const cr of (rd['_customRooms'] || [])) {
+      if (!hidden.includes(cr.key) && cr.key !== sectionKey)
+        rooms.push({ key: cr.key, name: cr.name })
+    }
+
+    // Apply _roomOrder
+    const order: string[] = rd['_roomOrder'] || []
+    if (order.length) {
+      const orderMap = new Map(order.map((k: string, i: number) => [k, i]))
+      rooms.sort((a, b) => {
+        const ai = orderMap.has(a.key) ? orderMap.get(a.key)! : Infinity
+        const bi = orderMap.has(b.key) ? orderMap.get(b.key)! : Infinity
+        return ai - bi
+      })
+    }
+
+    setCopyRoomsList(rooms)
+    setCopyRoomsLoading(false)
+  }
+
+  async function commitCopyItemToRoom() {
+    if (!copyItemModal || !copyTargetKey) return
+    const { itemId, item } = copyItemModal
+    setCopyingItem(true)
+    try {
+      const newId = `extra_${Date.now()}`
+      const fresh = await getLocalInspection(inspectionId)
+      const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+      const src   = rd[sectionKey]?.[String(itemId)] || {}
+      const newData: any = {}
+
+      if (copyDescs && src.description) newData.description = src.description
+      if (copyConds && src.condition)   newData.condition   = src.condition
+
+      if (copyPhotos && Array.isArray(src._photos) && src._photos.length > 0) {
+        const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+        await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+        const newPhotos: string[] = []
+        for (const uri of src._photos) {
+          try {
+            const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+            await FileSystem.copyAsync({ from: uri, to: dest })
+            newPhotos.push(dest)
+          } catch {}
+        }
+        if (newPhotos.length) newData._photos = newPhotos
+      }
+
+      if (!rd[copyTargetKey]) rd[copyTargetKey] = {}
+      rd[copyTargetKey][newId] = newData
+      if (!rd[copyTargetKey]['_extra']) rd[copyTargetKey]['_extra'] = []
+      const label = item.label || item.name || ''
+      rd[copyTargetKey]['_extra'].push({ _eid: newId, name: label })
+
+      await setReportData(inspectionId, rd)
+      const targetName = copyRoomsList.find(r => r.key === copyTargetKey)?.name || 'room'
+      useToastStore.getState().showToast(`"${label}" copied to ${targetName}`, 'success')
+      setCopyItemModal(null)
+    } catch (e: any) {
+      Alert.alert('Copy failed', 'Could not copy item to room.')
+    } finally {
+      setCopyingItem(false)
+    }
   }
 
   async function handleRenameItem() {
@@ -1886,11 +1995,12 @@ export default function RoomInspectionScreen() {
 
     const itemLabel = item.label || item.name || 'Item'
     const isRoomItem = item.hasDescription && sectionType_ === 'room'
-    // 2-column grid layout: row1 = Sub-item/Rename, row2 = Copy/Rearrange, row3 = Delete (wide)
+    // 2-column grid layout (room items): Sub-item/Rename, Copy/Copy To, Rearrange, Delete(wide)
     const itemActions = [
       ...(isRoomItem ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: itemLabel, count: 1 }) }] : []),
       { icon: '✏️', label: 'Rename',    bg: colors.primaryLight, onPress: () => { setRenameItemId(item.id); setRenameItemName(label); setRenameItemModal(true) } },
       { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => duplicateItem(item.id, item) },
+      ...(isRoomItem ? [{ icon: '⤢', label: 'Copy To', bg: '#f0f9ff', onPress: () => openCopyItemModal(item) }] : []),
       { icon: '⇅',  label: 'Rearrange', bg: '#f5f3ff',           onPress: () => openRearrangeModal() },
       { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteItemConfirmed(item.id, label), wide: true },
     ]
@@ -2177,12 +2287,12 @@ export default function RoomInspectionScreen() {
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Reading</Text>
             <TextInput
-              style={[styles.notesInput, styles.inlineInput]}
+              style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'reading')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'reading', v)}
               placeholder="e.g. 12345.6" placeholderTextColor={c.textLight}
-              keyboardType="decimal-pad"
+              multiline textAlignVertical="top"
             />
           </View>
         )}
@@ -2762,6 +2872,83 @@ export default function RoomInspectionScreen() {
           </View>
         </Modal>
 
+        {/* ── Copy item to room modal ───────────────────────────────────── */}
+        <Modal visible={!!copyItemModal} transparent animationType="fade" onRequestClose={() => setCopyItemModal(null)}>
+          <View style={mStyles.overlay}>
+            <View style={[mStyles.box, { width: '88%', maxHeight: '80%', padding: 0, overflow: 'hidden' }]}>
+              {/* Header */}
+              <View style={ciStyles.header}>
+                <Text style={ciStyles.title}>Copy to Room</Text>
+                <Text style={ciStyles.sub} numberOfLines={1}>
+                  {copyItemModal?.item?.label || copyItemModal?.item?.name || 'Item'}
+                </Text>
+              </View>
+
+              <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
+                {/* What to include */}
+                <View style={ciStyles.section}>
+                  <Text style={ciStyles.sectionLabel}>Include</Text>
+                  {[
+                    { label: 'Descriptions', value: copyDescs, set: setCopyDescs },
+                    { label: 'Conditions',   value: copyConds, set: setCopyConds },
+                    { label: 'Photos',       value: copyPhotos, set: setCopyPhotos },
+                  ].map(({ label, value, set }) => (
+                    <TouchableOpacity key={label} style={ciStyles.checkRow} onPress={() => set(!value)} activeOpacity={0.7}>
+                      <View style={[ciStyles.checkbox, value && ciStyles.checkboxOn]}>
+                        {value && <Text style={ciStyles.checkmark}>✓</Text>}
+                      </View>
+                      <Text style={ciStyles.checkLabel}>{label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Room picker */}
+                <View style={ciStyles.section}>
+                  <Text style={ciStyles.sectionLabel}>Destination Room</Text>
+                  {copyRoomsLoading ? (
+                    <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                  ) : copyRoomsList.length === 0 ? (
+                    <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                  ) : (
+                    copyRoomsList.map(room => (
+                      <TouchableOpacity
+                        key={room.key}
+                        style={[ciStyles.roomRow, copyTargetKey === room.key && ciStyles.roomRowSelected]}
+                        onPress={() => setCopyTargetKey(room.key)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[ciStyles.radio, copyTargetKey === room.key && ciStyles.radioSelected]}>
+                          {copyTargetKey === room.key && <View style={ciStyles.radioDot} />}
+                        </View>
+                        <Text style={[ciStyles.roomName, copyTargetKey === room.key && ciStyles.roomNameSelected]}>
+                          {room.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              </ScrollView>
+
+              {/* Actions */}
+              <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                <TouchableOpacity style={mStyles.cancel} onPress={() => setCopyItemModal(null)}>
+                  <Text style={mStyles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[mStyles.confirm, (!copyTargetKey || copyingItem) && { backgroundColor: colors.borderDark }]}
+                  onPress={commitCopyItemToRoom}
+                  disabled={!copyTargetKey || copyingItem}
+                >
+                  {copyingItem
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={mStyles.confirmText}>Copy Item</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* ── Actions picker modal — check-out only ─────────────────────── */}
         <Modal visible={!!actionsModal} transparent animationType="slide">
           <View style={actStyles.overlay}>
@@ -3022,6 +3209,26 @@ const mStyles = StyleSheet.create({
   cancelText: { color: colors.textMid, fontWeight: '600' },
   confirm: { flex: 1, padding: 12, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: 'center' },
   confirmText: { color: '#fff', fontWeight: '700' },
+})
+const ciStyles = StyleSheet.create({
+  header:         { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  title:          { fontSize: font.lg, fontWeight: '700', color: colors.text },
+  sub:            { fontSize: font.sm, color: colors.textMid, marginTop: 2 },
+  section:        { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: 4 },
+  sectionLabel:   { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: spacing.xs },
+  checkRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.border },
+  checkbox:       { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  checkboxOn:     { backgroundColor: colors.primary, borderColor: colors.primary },
+  checkmark:      { color: '#fff', fontSize: 13, fontWeight: '800' },
+  checkLabel:     { fontSize: font.md, color: colors.text, fontWeight: '500' },
+  emptyRooms:     { fontSize: font.sm, color: colors.textLight, textAlign: 'center', paddingVertical: spacing.md },
+  roomRow:        { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.border },
+  roomRowSelected:{ backgroundColor: colors.primaryLight, marginHorizontal: -spacing.md, paddingHorizontal: spacing.md },
+  radio:          { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  radioSelected:  { borderColor: colors.primary },
+  radioDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary },
+  roomName:       { fontSize: font.sm, color: colors.text, flex: 1, fontWeight: '500' },
+  roomNameSelected: { color: colors.primary, fontWeight: '700' },
 })
 const rrStyles = StyleSheet.create({
   screen: { flex: 1 },

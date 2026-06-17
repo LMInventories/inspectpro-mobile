@@ -169,6 +169,9 @@ export const api = {
     sectionKey: string
     sectionType?: string   // 'room' (default) or fixed section type
     isCheckOut?: boolean   // check-out mode — verbatim CO conditions + sub-item routing
+    isDamageReport?: boolean
+    inspectionId?: number
+    processedItemIds?: string[]
     items: Array<{
       id: string
       name: string
@@ -243,6 +246,68 @@ export const api = {
 
   createProperty: (data: any) =>
     http.post('/api/properties', data),
+
+  // ── Admin — Users CRUD ───────────────────────────────────────────────────
+  createUser: (data: { name: string; email: string; password: string; role: string; color?: string; phone?: string; typist_mode?: string | null }) =>
+    http.post('/api/users', data),
+
+  updateUser: (id: number, data: { name?: string; email?: string; role?: string; color?: string; phone?: string; typist_mode?: string | null; password?: string }) =>
+    http.put(`/api/users/${id}`, data),
+
+  deleteUser: (id: number) =>
+    http.delete(`/api/users/${id}`),
+
+  // ── Admin — Properties update / delete ───────────────────────────────────
+  updateProperty: (id: number, data: any) =>
+    http.put(`/api/properties/${id}`, data),
+
+  deleteProperty: (id: number) =>
+    http.delete(`/api/properties/${id}`),
+
+  // ── Admin — Clients CRUD ─────────────────────────────────────────────────
+  createClient: (data: { name: string; email?: string; phone?: string; company?: string; address?: string; primary_color?: string; report_disclaimer?: string }) =>
+    http.post('/api/clients', data),
+
+  updateClient: (id: number, data: { name?: string; email?: string; phone?: string; company?: string; address?: string; primary_color?: string; report_disclaimer?: string }) =>
+    http.put(`/api/clients/${id}`, data),
+
+  deleteClient: (id: number) =>
+    http.delete(`/api/clients/${id}`),
+
+  // ── Admin — all inspections + delete ────────────────────────────────────
+  getAllInspections: () =>
+    http.get('/api/inspections'),
+
+  deleteInspection: (id: number) =>
+    http.delete(`/api/inspections/${id}`),
+
+  // ── Dashboard ────────────────────────────────────────────────────────────
+  getDashboardStats: () =>
+    http.get('/api/dashboard/stats'),
+
+  // ── Templates CRUD + copy ────────────────────────────────────────────────
+  createTemplate: (data: { name: string; inspection_type: string; is_default?: boolean }) =>
+    http.post('/api/templates', data),
+
+  updateTemplate: (id: number, data: { name?: string; inspection_type?: string; is_default?: boolean }) =>
+    http.put(`/api/templates/${id}`, data),
+
+  deleteTemplate: (id: number) =>
+    http.delete(`/api/templates/${id}`),
+
+  copyTemplate: (id: number) =>
+    http.post(`/api/templates/${id}/copy`),
+
+  // ── Actions (check-out action catalogue) ─────────────────────────────────
+  updateActions: (data: { actions: Array<{ id: string; name: string; color: string }>; responsibilities: string[] }) =>
+    http.put('/api/actions', data),
+
+  // ── System Settings ───────────────────────────────────────────────────────
+  getSystemSettings: () =>
+    http.get('/api/system-settings'),
+
+  updateSystemSettings: (data: Record<string, string>) =>
+    http.put('/api/system-settings', data),
 }
 
 export default api

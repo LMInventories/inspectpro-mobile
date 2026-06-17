@@ -94,6 +94,11 @@ export function getLocalInspections(): any[] {
       server_updated_at:  r.server_updated_at,
       idempotency_key:    r.idempotency_key,
     }
+  }).sort((a, b) => {
+    if (!a.conduct_date && !b.conduct_date) return 0
+    if (!a.conduct_date) return 1
+    if (!b.conduct_date) return -1
+    return new Date(a.conduct_date).getTime() - new Date(b.conduct_date).getTime()
   })
 }
 
