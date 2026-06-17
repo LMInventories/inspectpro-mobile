@@ -87,6 +87,14 @@ export default function RoomInspectionScreen() {
   const [copyRoomsLoading, setCopyRoomsLoading] = useState(false)
   const [copyingItem, setCopyingItem] = useState(false)
 
+  // Move item to room modal (shares copyRoomsList/copyRoomsLoading — can't both be open)
+  const [moveItemModal, setMoveItemModal] = useState<{ itemId: string; item: any } | null>(null)
+  const [moveTargetKey, setMoveTargetKey] = useState('')
+  const [moveDescs,     setMoveDescs]     = useState(true)
+  const [moveConds,     setMoveConds]     = useState(true)
+  const [movePhotos,    setMovePhotos]    = useState(true)
+  const [movingItem,    setMovingItem]    = useState(false)
+
   // Rearrange modal
   const [rearrangeModal, setRearrangeModal]   = useState(false)
   const [rearrangeItems, setRearrangeItems]   = useState<any[]>([])
@@ -1482,6 +1490,15 @@ export default function RoomInspectionScreen() {
         if (newPhotos.length) newData._photos = newPhotos
       }
 
+      if (Array.isArray(src._subs) && src._subs.length > 0) {
+        newData._subs = src._subs.map((sub: any) => {
+          const newSub: any = { _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
+          if (copyDescs && sub.description) newSub.description = sub.description
+          if (copyConds && sub.condition)   newSub.condition   = sub.condition
+          return newSub
+        })
+      }
+
       if (!rd[copyTargetKey]) rd[copyTargetKey] = {}
       rd[copyTargetKey][newId] = newData
       if (!rd[copyTargetKey]['_extra']) rd[copyTargetKey]['_extra'] = []
@@ -1496,6 +1513,124 @@ export default function RoomInspectionScreen() {
       Alert.alert('Copy failed', 'Could not copy item to room.')
     } finally {
       setCopyingItem(false)
+    }
+  }
+
+  async function openMoveItemModal(item: any) {
+    setMoveTargetKey('')
+    setMoveDescs(true)
+    setMoveConds(true)
+    setMovePhotos(true)
+    setCopyRoomsList([])
+    setCopyRoomsLoading(true)
+    setMoveItemModal({ itemId: item.id, item })
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const hidden: string[]                   = rd['_hiddenRooms'] || []
+    const roomNames: Record<string, string>  = rd['_roomNames']   || {}
+    const rooms: { key: string; name: string }[] = []
+
+    if (fresh?.template_id) {
+      try {
+        let templateData = fresh?.template || null
+        if (!templateData) {
+          const tmplRes = await api.getTemplate(fresh.template_id)
+          templateData = tmplRes.data
+        }
+        for (const s of (templateData?.sections || [])) {
+          const key = String(s.id)
+          if (!hidden.includes(key) && key !== sectionKey)
+            rooms.push({ key, name: roomNames[key] || s.name })
+        }
+      } catch {}
+    }
+
+    for (const cr of (rd['_customRooms'] || [])) {
+      if (!hidden.includes(cr.key) && cr.key !== sectionKey)
+        rooms.push({ key: cr.key, name: cr.name })
+    }
+
+    const order: string[] = rd['_roomOrder'] || []
+    if (order.length) {
+      const orderMap = new Map(order.map((k: string, i: number) => [k, i]))
+      rooms.sort((a, b) => {
+        const ai = orderMap.has(a.key) ? orderMap.get(a.key)! : Infinity
+        const bi = orderMap.has(b.key) ? orderMap.get(b.key)! : Infinity
+        return ai - bi
+      })
+    }
+
+    setCopyRoomsList(rooms)
+    setCopyRoomsLoading(false)
+  }
+
+  async function commitMoveItemToRoom() {
+    if (!moveItemModal || !moveTargetKey) return
+    const { itemId, item } = moveItemModal
+    setMovingItem(true)
+    try {
+      const newId  = `extra_${Date.now()}`
+      const label  = item.label || item.name || ''
+      // Read fresh once — all mutations below happen on this single snapshot
+      const fresh  = await getLocalInspection(inspectionId)
+      const rd     = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+      const src    = rd[sectionKey]?.[String(itemId)] || {}
+      const newData: any = {}
+
+      if (moveDescs && src.description) newData.description = src.description
+      if (moveConds && src.condition)   newData.condition   = src.condition
+
+      // Copy photos before the DB write (only async part)
+      if (movePhotos && Array.isArray(src._photos) && src._photos.length > 0) {
+        const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+        await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+        const newPhotos: string[] = []
+        for (const uri of src._photos) {
+          try {
+            const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+            await FileSystem.copyAsync({ from: uri, to: dest })
+            newPhotos.push(dest)
+          } catch {}
+        }
+        if (newPhotos.length) newData._photos = newPhotos
+      }
+
+      if (Array.isArray(src._subs) && src._subs.length > 0) {
+        newData._subs = src._subs.map((sub: any) => {
+          const newSub: any = { _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
+          if (moveDescs && sub.description) newSub.description = sub.description
+          if (moveConds && sub.condition)   newSub.condition   = sub.condition
+          return newSub
+        })
+      }
+
+      // ── Add to target room ───────────────────────────────────────────────
+      if (!rd[moveTargetKey]) rd[moveTargetKey] = {}
+      rd[moveTargetKey][newId] = newData
+      if (!rd[moveTargetKey]['_extra']) rd[moveTargetKey]['_extra'] = []
+      rd[moveTargetKey]['_extra'].push({ _eid: newId, name: label })
+
+      // ── Remove from source room (atomic with the add above) ──────────────
+      if (!rd[sectionKey]) rd[sectionKey] = {}
+      delete rd[sectionKey][String(itemId)]
+      if (rd[sectionKey]['_extra']) {
+        rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
+      }
+      if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
+      if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
+
+      // Single DB write — item can never exist in both rooms simultaneously
+      setReportData(inspectionId, rd)
+      setItems(prev => prev.filter(i => i.id !== itemId))
+
+      const targetName = copyRoomsList.find(r => r.key === moveTargetKey)?.name || 'room'
+      setMoveItemModal(null)
+      useToastStore.getState().showToast(`"${label}" moved to ${targetName}`, 'success')
+    } catch {
+      Alert.alert('Move failed', 'Could not move item to room.')
+    } finally {
+      setMovingItem(false)
     }
   }
 
@@ -2001,6 +2136,7 @@ export default function RoomInspectionScreen() {
       { icon: '✏️', label: 'Rename',    bg: colors.primaryLight, onPress: () => { setRenameItemId(item.id); setRenameItemName(label); setRenameItemModal(true) } },
       { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => duplicateItem(item.id, item) },
       ...(isRoomItem ? [{ icon: '⤢', label: 'Copy To', bg: '#f0f9ff', onPress: () => openCopyItemModal(item) }] : []),
+      ...(isRoomItem ? [{ icon: '↗', label: 'Move To', bg: '#fdf4ff', onPress: () => openMoveItemModal(item) }] : []),
       { icon: '⇅',  label: 'Rearrange', bg: '#f5f3ff',           onPress: () => openRearrangeModal() },
       { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteItemConfirmed(item.id, label), wide: true },
     ]
@@ -2942,6 +3078,83 @@ export default function RoomInspectionScreen() {
                   {copyingItem
                     ? <ActivityIndicator color="#fff" size="small" />
                     : <Text style={mStyles.confirmText}>Copy Item</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Move item to room modal ───────────────────────────────────── */}
+        <Modal visible={!!moveItemModal} transparent animationType="fade" onRequestClose={() => setMoveItemModal(null)}>
+          <View style={mStyles.overlay}>
+            <View style={[mStyles.box, { width: '88%', maxHeight: '80%', padding: 0, overflow: 'hidden' }]}>
+              {/* Header */}
+              <View style={ciStyles.header}>
+                <Text style={ciStyles.title}>Move to Room</Text>
+                <Text style={ciStyles.sub} numberOfLines={1}>
+                  {moveItemModal?.item?.label || moveItemModal?.item?.name || 'Item'}
+                </Text>
+              </View>
+
+              <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
+                {/* What to include */}
+                <View style={ciStyles.section}>
+                  <Text style={ciStyles.sectionLabel}>Include</Text>
+                  {[
+                    { label: 'Descriptions', value: moveDescs, set: setMoveDescs },
+                    { label: 'Conditions',   value: moveConds, set: setMoveConds },
+                    { label: 'Photos',       value: movePhotos, set: setMovePhotos },
+                  ].map(({ label, value, set }) => (
+                    <TouchableOpacity key={label} style={ciStyles.checkRow} onPress={() => set(!value)} activeOpacity={0.7}>
+                      <View style={[ciStyles.checkbox, value && ciStyles.checkboxOn]}>
+                        {value && <Text style={ciStyles.checkmark}>✓</Text>}
+                      </View>
+                      <Text style={ciStyles.checkLabel}>{label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Room picker */}
+                <View style={ciStyles.section}>
+                  <Text style={ciStyles.sectionLabel}>Destination Room</Text>
+                  {copyRoomsLoading ? (
+                    <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                  ) : copyRoomsList.length === 0 ? (
+                    <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                  ) : (
+                    copyRoomsList.map(room => (
+                      <TouchableOpacity
+                        key={room.key}
+                        style={[ciStyles.roomRow, moveTargetKey === room.key && ciStyles.roomRowSelected]}
+                        onPress={() => setMoveTargetKey(room.key)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[ciStyles.radio, moveTargetKey === room.key && ciStyles.radioSelected]}>
+                          {moveTargetKey === room.key && <View style={ciStyles.radioDot} />}
+                        </View>
+                        <Text style={[ciStyles.roomName, moveTargetKey === room.key && ciStyles.roomNameSelected]}>
+                          {room.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              </ScrollView>
+
+              {/* Actions */}
+              <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                <TouchableOpacity style={mStyles.cancel} onPress={() => setMoveItemModal(null)}>
+                  <Text style={mStyles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[mStyles.confirm, (!moveTargetKey || movingItem) && { backgroundColor: colors.borderDark }]}
+                  onPress={commitMoveItemToRoom}
+                  disabled={!moveTargetKey || movingItem}
+                >
+                  {movingItem
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={mStyles.confirmText}>Move Item</Text>
                   }
                 </TouchableOpacity>
               </View>
