@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  Image, Modal, Dimensions, Alert, ActivityIndicator,
-  ScrollView, BackHandler, Animated,
+  Image, Modal, Alert, ActivityIndicator,
+  ScrollView, BackHandler, Animated, useWindowDimensions,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
@@ -22,8 +22,9 @@ import { api } from '../services/api'
 type Nav   = StackNavigationProp<RootStackParamList, 'ItemGallery'>
 type Route = RouteProp<RootStackParamList, 'ItemGallery'>
 
-const { width: SW, height: SH } = Dimensions.get('window')
-const THUMB = (SW - spacing.md * 2 - spacing.sm * 3) / 4
+const GRID_H_PAD  = spacing.md   // 16px each side
+const GRID_GAP    = spacing.sm   // 8px between thumbs
+const TARGET_THUMB = 88          // target thumb size — drive column count from this
 
 interface RoomOption { key: string; name: string; items: ItemOption[] }
 interface ItemOption { key: string; name: string }
@@ -40,7 +41,12 @@ export default function ItemGalleryScreen() {
   const navigation = useNavigation<Nav>()
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions()
   const { inspectionId, sectionKey, sectionName, itemKey, itemName, itemPosition } = route.params
+
+  // Fit-to-screen grid: fill available width with columns of ~TARGET_THUMB size
+  const numCols  = Math.max(4, Math.floor((screenWidth - GRID_H_PAD * 2 + GRID_GAP) / (TARGET_THUMB + GRID_GAP)))
+  const thumbSize = (screenWidth - GRID_H_PAD * 2 - GRID_GAP * (numCols - 1)) / numCols
   const { activeInspection, setReportData } = useInspectionStore()
 
   // Lightbox
@@ -127,6 +133,17 @@ export default function ItemGalleryScreen() {
     }, 0)
     return () => clearTimeout(t)
   }, [lightboxUri])
+
+  // Re-scroll lightbox to correct page when screen dimensions change (rotation)
+  useEffect(() => {
+    if (!lightboxUri) return
+    const idx = photosRef.current.indexOf(lightboxUri)
+    if (idx < 0) return
+    const t = setTimeout(() => {
+      lightboxFlatRef.current?.scrollToIndex({ index: idx, animated: false })
+    }, 50)
+    return () => clearTimeout(t)
+  }, [screenWidth])
 
   // ── Zoom + pan gesture — created once, shared across all lightbox items ─────
   // Pinch scales 1×–4×; double-tap toggles 1× ↔ 2.5×.
@@ -541,7 +558,8 @@ export default function ItemGalleryScreen() {
         <FlatList
           data={photos}
           keyExtractor={(uri) => uri}
-          numColumns={4}
+          key={numCols}
+          numColumns={numCols}
           contentContainerStyle={[styles.grid, selecting && { paddingBottom: 96 }]}
           columnWrapperStyle={styles.row}
           renderItem={({ item: uri, index }) => (
@@ -550,7 +568,7 @@ export default function ItemGalleryScreen() {
               onLongPress={() => { if (!selecting) { setSelecting(true); setSelected(new Set([uri])) } }}
               activeOpacity={0.8}
             >
-              <Image source={{ uri }} style={[styles.thumb, selecting && selected.has(uri) && styles.thumbSelected]} />
+              <Image source={{ uri }} style={[{ width: thumbSize, height: thumbSize, borderRadius: radius.md }, selecting && selected.has(uri) && styles.thumbSelected]} />
               {selecting
                 ? <View style={[styles.checkbox, selected.has(uri) && styles.checkboxChecked]}>
                     {selected.has(uri) && <Text style={styles.checkmark}>✓</Text>}
@@ -770,21 +788,21 @@ export default function ItemGalleryScreen() {
             style={StyleSheet.absoluteFill}
             renderItem={({ item: uri }) => (
               <GestureDetector gesture={zoomGesture}>
-                <View style={{ width: SW, height: SH, justifyContent: 'center', alignItems: 'center' }}>
+                <View style={{ width: screenWidth, height: screenHeight, justifyContent: 'center', alignItems: 'center' }}>
                   <Animated.Image
                     source={{ uri }}
-                    style={[lbS.image, { transform: [
+                    style={{ width: screenWidth, height: screenHeight, transform: [
                       { scale: lightboxScale },
                       { translateX: lightboxTranslateX },
                       { translateY: lightboxTranslateY },
-                    ] }]}
+                    ] }}
                     resizeMode="contain"
                   />
                 </View>
               </GestureDetector>
             )}
             onMomentumScrollEnd={(e) => {
-              const newIndex = Math.round(e.nativeEvent.contentOffset.x / SW)
+              const newIndex = Math.round(e.nativeEvent.contentOffset.x / screenWidth)
               if (newIndex >= 0 && newIndex < photosRef.current.length) {
                 setLightboxUri(photosRef.current[newIndex])
                 lightboxLastScale.current = 1
@@ -793,7 +811,7 @@ export default function ItemGalleryScreen() {
                 setFlatScrollEnabled(true)
               }
             }}
-            getItemLayout={(_, index) => ({ length: SW, offset: SW * index, index })}
+            getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
           />
 
           {lightboxUri && (
@@ -875,7 +893,6 @@ const styles = StyleSheet.create({
   screen:  { flex: 1, backgroundColor: colors.background },
   grid:    { padding: spacing.md, paddingBottom: 40 },
   row:     { gap: spacing.sm, marginBottom: spacing.sm },
-  thumb:   { width: THUMB, height: THUMB, borderRadius: radius.md },
   thumbSelected: { opacity: 0.55, borderWidth: 3, borderColor: colors.primary, borderRadius: radius.md },
   checkbox: {
     position: 'absolute', top: 5, right: 5,
@@ -936,7 +953,6 @@ const lbS = StyleSheet.create({
     paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.sm,
   },
   counterText: { color: '#fff', fontSize: font.sm },
-  image: { width: SW, height: SH * 0.65, alignSelf: 'center' },
   overlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,

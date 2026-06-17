@@ -40,7 +40,8 @@ const CLIENT_BRAND_COLORS = [
 ]
 const PROPERTY_TYPES  = ['House', 'Flat', 'Studio', 'Bungalow', 'Maisonette', 'Cottage', 'Commercial', 'Other']
 const FURNISHED_OPTS  = ['Furnished', 'Part Furnished', 'Unfurnished']
-const DETACHMENT_OPTS = ['Detached', 'Semi-Detached', 'Terraced', 'End of Terrace', 'Mid-Terrace']
+const DETACHMENT_OPTS = ['Terraced', 'Semi-Detached', 'Detached', 'Purpose Built Flat', 'Converted Flat', 'Bungalow', 'Penthouse']
+const ELEVATION_OPTS  = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor or Above']
 const TIME_PREFS      = ['Morning', 'Afternoon', 'Evening', 'Flexible', 'AM', 'PM']
 const INSP_STATUSES   = ['created', 'assigned', 'active', 'processing', 'review', 'complete']
 
@@ -286,10 +287,12 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
   const [notes,            setNotes]            = useState(item?.notes || '')
   const [loading,          setLoading]          = useState(false)
   const [error,            setError]            = useState('')
+  const [elevation,        setElevation]        = useState(item?.elevation || '')
   const [showClientPicker,     setShowClientPicker]     = useState(false)
   const [showTypePicker,       setShowTypePicker]       = useState(false)
   const [showFurnPicker,       setShowFurnPicker]       = useState(false)
   const [showDetachmentPicker, setShowDetachmentPicker] = useState(false)
+  const [showElevPicker,       setShowElevPicker]       = useState(false)
 
   const selectedClient = clients.find(c => c.id === clientId)
 
@@ -302,6 +305,7 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
         client_id:         clientId || undefined,
         property_type:     propType         || null,
         detachment_type:   detachmentType   || null,
+        elevation:         elevation        || null,
         bedrooms:          bedrooms  ? Number(bedrooms)  : null,
         bathrooms:         bathrooms ? Number(bathrooms) : null,
         furnished:         furnished || null,
@@ -341,6 +345,9 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
 
             <FLabel>Detachment Type</FLabel>
             <FPicker value={detachmentType} placeholder="Select…" onPress={() => setShowDetachmentPicker(true)} />
+
+            <FLabel>Elevation / Floor</FLabel>
+            <FPicker value={elevation} placeholder="Select…" onPress={() => setShowElevPicker(true)} />
 
             <View style={{ flexDirection: 'row', gap: spacing.sm }}>
               <View style={{ flex: 1 }}>
@@ -451,6 +458,14 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
         selectedValue={detachmentType}
         onSelect={v => { setDetachmentType(v); setShowDetachmentPicker(false) }}
         onClose={() => setShowDetachmentPicker(false)}
+      />
+      <PickerSheet
+        visible={showElevPicker}
+        title="Elevation / Floor"
+        options={[{ label: 'None', value: '' }, ...ELEVATION_OPTS.map(e => ({ label: e, value: e }))]}
+        selectedValue={elevation}
+        onSelect={v => { setElevation(v); setShowElevPicker(false) }}
+        onClose={() => setShowElevPicker(false)}
       />
     </Modal>
   )
@@ -1195,13 +1210,14 @@ const s = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    flexShrink: 0,
   },
   backBtn:       { width: 72, justifyContent: 'flex-start' },
   backBtnText:   { fontSize: font.md, color: colors.primary, fontWeight: '600' },
   headerTitle:   { fontSize: font.lg, fontWeight: '700', color: colors.text },
 
   // Tabs
-  tabStrip:      { backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border, flexGrow: 0 },
+  tabStrip:      { backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border, flexGrow: 0, flexShrink: 0 },
   tabStripInner: { paddingHorizontal: spacing.sm, gap: 4 },
   tab:           { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: 12, gap: spacing.xs, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   tabActive:     { borderBottomColor: colors.primary },

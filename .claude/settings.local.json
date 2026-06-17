@@ -24,7 +24,8 @@
       "Bash(\\\\.ts\")",
       "PowerShell(cd C:\\\\Projects\\\\inspectpro-mobile; npx tsc --noEmit --skipLibCheck 2>&1 | Where-Object { $_ -match \"RoomSelection\" } | Select-Object -First 15)",
       "Bash(xargs grep -l \"condition.summary\\\\|condition_summary\")",
-      "PowerShell(\\(Get-Content C:\\\\Projects\\\\inspectpro-mobile\\\\src\\\\screens\\\\AdminPanelScreen.tsx | Measure-Object -Line\\).Lines)"
+      "PowerShell(\\(Get-Content C:\\\\Projects\\\\inspectpro-mobile\\\\src\\\\screens\\\\AdminPanelScreen.tsx | Measure-Object -Line\\).Lines)",
+      "PowerShell(cd C:\\\\Projects\\\\inspectpro-mobile; npx tsc --noEmit 2>&1 | Where-Object { $_ -match \"AdminPanelScreen|CreatePropertyModal\" })"
     ]
   }
 }

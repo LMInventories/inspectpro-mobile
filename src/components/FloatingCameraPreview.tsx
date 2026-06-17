@@ -7,7 +7,7 @@
  * Layout: preview on the left, shutter button vertically centred to its right.
  * The whole widget is draggable — long-press-move or move-threshold drag repositions it.
  *
- * Tap the preview to cycle zoom: 0.6× (ultra-wide) → 1× → 2× → …
+ * Zoom is selected via 0.6×/1×/2×/5× buttons on the right edge of the preview.
  */
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
 import {
@@ -112,6 +112,10 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
       presets.push({ zoom: mainDevice.neutralZoom * 2, label: '2×', useUltraWide: false })
     }
 
+    if (mainDevice.neutralZoom * 5 <= mainDevice.maxZoom) {
+      presets.push({ zoom: mainDevice.neutralZoom * 5, label: '5×', useUltraWide: false })
+    }
+
     return presets
   }, [mainDevice?.id, ultraWideDevice?.id, hasSeparateUltraWide, hasZoomUltraWide])
 
@@ -132,14 +136,13 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
       ? (ultraWideDevice?.neutralZoom ?? 1)
       : currentPreset.zoom
 
-  function cycleZoom() {
-    const nextIdx    = (zoomIdx + 1) % zoomPresets.length
-    const nextPreset = zoomPresets[nextIdx]
+  function selectZoom(idx: number) {
+    const nextPreset = zoomPresets[idx]
     const switchingDevice =
       (nextPreset.useUltraWide && hasSeparateUltraWide) !==
       (currentPreset.useUltraWide && hasSeparateUltraWide)
     if (switchingDevice) setCameraKey(k => k + 1)
-    setZoomIdx(nextIdx)
+    setZoomIdx(idx)
   }
 
   // ── Visual feedback ────────────────────────────────────────────────────────
@@ -264,8 +267,8 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
       style={[styles.container, { transform: position.getTranslateTransform() }]}
       {...panResponder.panHandlers}
     >
-      {/* Live preview — tap to cycle zoom */}
-      <TouchableOpacity style={styles.preview} onPress={cycleZoom} activeOpacity={0.85}>
+      {/* Live preview */}
+      <View style={styles.preview}>
         <Camera
           key={cameraKey}
           ref={cameraRef}
@@ -280,10 +283,23 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
           pointerEvents="none"
           style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
         />
-        <View style={styles.zoomBadge}>
-          <Text style={styles.zoomBadgeText}>{currentPreset.label}</Text>
+
+        {/* Zoom buttons — right edge of preview */}
+        <View style={styles.zoomBtns}>
+          {zoomPresets.map((preset, idx) => (
+            <TouchableOpacity
+              key={preset.label}
+              style={[styles.zoomBtn, zoomIdx === idx && styles.zoomBtnActive]}
+              onPress={() => selectZoom(idx)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.zoomBtnText, zoomIdx === idx && styles.zoomBtnTextActive]}>
+                {preset.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
-      </TouchableOpacity>
+      </View>
 
       {/* Shutter — right of preview, vertically centred */}
       <View style={styles.shutterArea}>
@@ -352,20 +368,33 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
   },
 
-  zoomBadge: {
+  zoomBtns: {
     position: 'absolute',
-    bottom: 6,
-    left: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    right: 7,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    gap: 5,
+  },
+  zoomBtn: {
+    backgroundColor: 'rgba(0,0,0,0.4)',
     borderRadius: 4,
     paddingHorizontal: 5,
-    paddingVertical: 2,
+    paddingVertical: 3,
+    alignItems: 'center',
+    minWidth: 28,
   },
-  zoomBadgeText: {
+  zoomBtnActive: {
+    backgroundColor: 'rgba(255,255,255,0.85)',
+  },
+  zoomBtnText: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
+  },
+  zoomBtnTextActive: {
+    color: '#111',
   },
 
   noPerm: {

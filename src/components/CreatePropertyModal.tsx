@@ -10,8 +10,8 @@ import PickerSheet from './PickerSheet'
 
 const PROPERTY_TYPES  = ['House', 'Flat', 'Studio', 'Bungalow', 'Maisonette', 'Cottage', 'Commercial', 'Other']
 const FURNISHED_OPTS  = ['Furnished', 'Part Furnished', 'Unfurnished']
-const DETACHMENT_OPTS = ['Terraced', 'End Terrace', 'Semi-Detached', 'Detached', 'Purpose Built']
-const ELEVATION_OPTS  = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor', '5th Floor+', 'Top Floor', 'Penthouse']
+const DETACHMENT_OPTS = ['Terraced', 'Semi-Detached', 'Detached', 'Purpose Built Flat', 'Converted Flat', 'Bungalow', 'Penthouse']
+const ELEVATION_OPTS  = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor or Above']
 
 interface Props {
   visible: boolean
