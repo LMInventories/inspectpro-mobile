@@ -50,8 +50,11 @@ export default function ActionsTab() {
   }
 
   function removeAction(id: string) {
-    setActions(prev => prev.filter(a => a.id !== id))
-    mark()
+    const action = actions.find(a => a.id === id)
+    Alert.alert('Delete Action', `Delete "${action?.name}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => { setActions(prev => prev.filter(a => a.id !== id)); mark() } },
+    ])
   }
 
   function startEditAction(action: Action) {
@@ -80,8 +83,11 @@ export default function ActionsTab() {
   }
 
   function removeResponsibility(idx: number) {
-    setResponsibilities(prev => prev.filter((_, i) => i !== idx))
-    mark()
+    const label = responsibilities[idx]
+    Alert.alert('Delete Responsibility', `Delete "${label}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => { setResponsibilities(prev => prev.filter((_, i) => i !== idx)); mark() } },
+    ])
   }
 
   async function handleSave() {

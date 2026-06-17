@@ -109,11 +109,14 @@ export default function DashboardTab() {
       </View>
 
       {/* ── Upcoming ── */}
-      {upcoming.length > 0 && (
-        <>
-          <Text style={s.sectionLabel}>Upcoming</Text>
-          <View style={s.listCard}>
-            {upcoming.map((item: any, idx: number) => {
+      <Text style={s.sectionLabel}>Upcoming</Text>
+      {upcoming.length === 0 ? (
+        <View style={s.emptyRow}>
+          <Text style={s.emptyText}>Nothing scheduled</Text>
+        </View>
+      ) : (
+        <View style={s.listCard}>
+          {upcoming.map((item: any, idx: number) => {
               const sc2 = STATUS_COLORS[item.status] || STATUS_COLORS.created
               return (
                 <View
@@ -137,7 +140,6 @@ export default function DashboardTab() {
               )
             })}
           </View>
-        </>
       )}
 
       {/* ── Recent activity ── */}
@@ -223,4 +225,7 @@ const s = StyleSheet.create({
   listRowDate:   { fontSize: font.xs, color: colors.textLight, fontWeight: '500' },
   statusPill:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10 },
   statusPillText: { fontSize: 10, fontWeight: '700' },
+
+  emptyRow:  { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, alignItems: 'center' },
+  emptyText: { fontSize: font.sm, color: colors.textLight, fontStyle: 'italic' },
 })

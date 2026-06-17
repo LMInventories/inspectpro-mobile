@@ -286,7 +286,7 @@ export default function PropertyOverviewScreen() {
       sigs.clerk = { signature_data: clerkSignature, signer_name: user?.name || '', signed_at: now }
     }
     if (tenantSignature) {
-      sigs.tenant = { signature_data: tenantSignature, signer_name: '', signed_at: now }
+      sigs.tenant = { signature_data: tenantSignature, signer_name: inspection.tenant_name || '', signed_at: now }
     }
     rd._signatures = sigs
     // Write updated report_data (with _signatures) back to the store
@@ -434,6 +434,32 @@ export default function PropertyOverviewScreen() {
                       : <Text style={styles.btnFinalisedText}>✓ Finalised — tap to undo</Text>
                     }
                   </TouchableOpacity>
+
+                  {/* Signature status */}
+                  {(() => {
+                    const sigs = reportData._signatures || {}
+                    const clerkCaptured  = !!sigs.clerk?.signature_data
+                    const tenantCaptured = !!sigs.tenant?.signature_data
+                    if (!clerkCaptured && !tenantCaptured) return null
+                    return (
+                      <View style={styles.sigStatusRow}>
+                        {clerkCaptured && (
+                          <View style={styles.sigChip}>
+                            <Text style={styles.sigChipText}>✓ Inspector signed</Text>
+                          </View>
+                        )}
+                        {tenantCaptured ? (
+                          <View style={styles.sigChip}>
+                            <Text style={styles.sigChipText}>✓ Tenant signed</Text>
+                          </View>
+                        ) : (
+                          <View style={[styles.sigChip, styles.sigChipSkipped]}>
+                            <Text style={[styles.sigChipText, styles.sigChipSkippedText]}>Tenant not present</Text>
+                          </View>
+                        )}
+                      </View>
+                    )
+                  })()}
 
                   {syncProgress ? (
                     <InlineSyncProgress progress={syncProgress} />
@@ -862,6 +888,11 @@ const styles = StyleSheet.create({
   btnSyncText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
   syncingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   modeHint: { fontSize: font.xs, color: colors.textLight, marginBottom: spacing.sm, lineHeight: 16 },
+  sigStatusRow: { flexDirection: 'row', gap: spacing.xs, flexWrap: 'wrap', marginTop: 6 },
+  sigChip: { backgroundColor: '#dcfce7', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#86efac' },
+  sigChipText: { fontSize: font.xs, color: '#15803d', fontWeight: '600' },
+  sigChipSkipped: { backgroundColor: colors.muted, borderColor: colors.border },
+  sigChipSkippedText: { color: colors.textMid },
 })
 
 const modeStyles = StyleSheet.create({

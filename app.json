@@ -84,7 +84,8 @@
           "photosPermission": "InspectPro needs access to your photo library.",
           "savePhotosPermission": "InspectPro needs permission to save photos."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "extra": {
       "eas": {

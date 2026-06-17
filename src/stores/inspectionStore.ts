@@ -5,27 +5,21 @@ import {
   updateReportData,
   deleteLocalInspection,
 } from '../services/database'
-import type { HumanRecording } from '../components/HumanTypistRecorder'
 
 interface InspectionStore {
   inspections: any[]
   activeInspection: any | null
-  // Human typist recordings keyed by inspectionId — persists across screen navigation
-  humanRecordings: Record<number, HumanRecording[]>
   loadInspections: () => void
   loadInspection: (id: number) => void
   setReportData: (inspectionId: number, reportData: any) => void
   updateSectionInReport: (inspectionId: number, sectionKey: string, sectionData: any) => void
   updateItemInReport: (inspectionId: number, sectionKey: string, itemKey: string, itemData: any) => void
-  addHumanRecording: (inspectionId: number, rec: HumanRecording) => void
-  removeHumanRecording: (inspectionId: number, recId: string) => void
   removeInspection: (id: number) => void
 }
 
 export const useInspectionStore = create<InspectionStore>((set, get) => ({
   inspections: [],
   activeInspection: null,
-  humanRecordings: {},
 
   loadInspections: () => {
     const inspections = getLocalInspections()
@@ -65,18 +59,6 @@ export const useInspectionStore = create<InspectionStore>((set, get) => ({
       ...itemData,
     }
     get().setReportData(inspectionId, reportData)
-  },
-
-  addHumanRecording: (inspectionId, rec) => {
-    const { humanRecordings } = get()
-    const existing = humanRecordings[inspectionId] || []
-    set({ humanRecordings: { ...humanRecordings, [inspectionId]: [...existing, rec] } })
-  },
-
-  removeHumanRecording: (inspectionId, recId) => {
-    const { humanRecordings } = get()
-    const existing = humanRecordings[inspectionId] || []
-    set({ humanRecordings: { ...humanRecordings, [inspectionId]: existing.filter(r => r.id !== recId) } })
   },
 
   removeInspection: (id) => {

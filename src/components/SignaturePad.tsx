@@ -116,39 +116,65 @@ export default function SignaturePad({
     onSave(`data:image/svg+xml;base64,${b64}`)
   }, [strokes, strokeColor, strokeWidth, height, onSave])
 
-  // Render preview lines as thin Views between consecutive points
+  // Render preview using the same quadratic bezier midpoint algorithm as the SVG export,
+  // approximated by short straight segments (N subdivisions per curve) so the preview
+  // matches the saved output accurately. Dots at each sampled point fill corner gaps.
   const renderStrokeLines = (points: Point[], key: string | number) => {
-    const lines: React.ReactNode[] = []
-    for (let i = 1; i < points.length; i++) {
-      const p1 = points[i - 1]
-      const p2 = points[i]
-      const dx = p2.x - p1.x
-      const dy = p2.y - p1.y
-      const length = Math.sqrt(dx * dx + dy * dy)
-      if (length < 0.5) continue
+    if (points.length === 0) return []
+    const elements: React.ReactNode[] = []
+    const N = 5 // sub-divisions per bezier curve
+
+    const drawSeg = (x1: number, y1: number, x2: number, y2: number, k: string) => {
+      const dx = x2 - x1
+      const dy = y2 - y1
+      const len = Math.sqrt(dx * dx + dy * dy)
+      if (len < 0.3) return
       const angle = Math.atan2(dy, dx) * (180 / Math.PI)
-      // Position the view so its center sits at the midpoint of the segment —
-      // default center-based rotation then places endpoints exactly at p1 and p2.
-      const cx = (p1.x + p2.x) / 2
-      const cy = (p1.y + p2.y) / 2
-      lines.push(
-        <View
-          key={`${key}-${i}`}
-          style={[
-            previewStyles.line,
-            {
-              width: length,
-              height: strokeWidth,
-              left: cx - length / 2,
-              top: cy - strokeWidth / 2,
-              transform: [{ rotate: `${angle}deg` }],
-              backgroundColor: strokeColor,
-            },
-          ]}
-        />
+      elements.push(
+        <View key={k} style={[previewStyles.line, {
+          width: len, height: strokeWidth,
+          left: (x1 + x2) / 2 - len / 2,
+          top:  (y1 + y2) / 2 - strokeWidth / 2,
+          transform: [{ rotate: `${angle}deg` }],
+          backgroundColor: strokeColor,
+        }]} />
       )
     }
-    return lines
+
+    // Single-point stroke — render a dot
+    if (points.length === 1) {
+      const { x, y } = points[0]
+      elements.push(
+        <View key={`${key}-dot`} style={[previewStyles.dot, {
+          width: strokeWidth * 1.5, height: strokeWidth * 1.5,
+          borderRadius: strokeWidth,
+          left: x - strokeWidth * 0.75, top: y - strokeWidth * 0.75,
+          backgroundColor: strokeColor,
+        }]} />
+      )
+      return elements
+    }
+
+    // Multi-point: quadratic bezier through midpoints (same algorithm as buildPathD)
+    for (let i = 1; i < points.length; i++) {
+      const p0 = i === 1 ? points[0] : { x: (points[i - 2].x + points[i - 1].x) / 2, y: (points[i - 2].y + points[i - 1].y) / 2 }
+      const p1 = points[i - 1]   // control point
+      const p2 = { x: (points[i - 1].x + points[i].x) / 2, y: (points[i - 1].y + points[i].y) / 2 } // end point
+
+      for (let t = 0; t < N; t++) {
+        const t1 = t / N
+        const t2 = (t + 1) / N
+        const bx = (t: number) => (1 - t) * (1 - t) * p0.x + 2 * (1 - t) * t * p1.x + t * t * p2.x
+        const by = (t: number) => (1 - t) * (1 - t) * p0.y + 2 * (1 - t) * t * p1.y + t * t * p2.y
+        drawSeg(bx(t1), by(t1), bx(t2), by(t2), `${key}-${i}-${t}`)
+      }
+    }
+    // Final point to actual last point
+    const last = points[points.length - 1]
+    const secondLast = { x: (points[points.length - 2].x + last.x) / 2, y: (points[points.length - 2].y + last.y) / 2 }
+    drawSeg(secondLast.x, secondLast.y, last.x, last.y, `${key}-tail`)
+
+    return elements
   }
 
   return (
@@ -192,6 +218,9 @@ const previewStyles = StyleSheet.create({
   line: {
     position: 'absolute',
     borderRadius: 99,
+  },
+  dot: {
+    position: 'absolute',
   },
 })
 

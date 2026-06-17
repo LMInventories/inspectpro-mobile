@@ -4,6 +4,7 @@ import {
   Modal, ScrollView, Alert, ActivityIndicator, KeyboardAvoidingView,
   Platform, RefreshControl,
 } from 'react-native'
+import DateTimePicker from '@react-native-community/datetimepicker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
 import { api } from '../services/api'
@@ -17,8 +18,11 @@ import ActionsTab     from './admin/ActionsTab'
 import SettingsTab    from './admin/SettingsTab'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const TABS = ['Dashboard', 'Users', 'Properties', 'Clients', 'Inspections', 'Templates', 'Actions', 'Settings'] as const
+const TABS = ['Dashboard', 'Users', 'Properties', 'Clients', 'Inspections', 'Settings'] as const
 type Tab = typeof TABS[number]
+
+const SETTINGS_SUB_TABS = ['General', 'Reports', 'Actions', 'Templates', 'Integrations'] as const
+type SettingsSubTab = typeof SETTINGS_SUB_TABS[number]
 
 const CRUD_TABS: Tab[] = ['Users', 'Properties', 'Clients', 'Inspections']
 
@@ -616,6 +620,9 @@ function InspectionEditSheet({ item, users, onClose, onSaved }: {
   const [showInspectorPicker, setShowInspectorPicker] = useState(false)
   const [showTypistPicker,    setShowTypistPicker]    = useState(false)
   const [showTimePrefPicker,  setShowTimePrefPicker]  = useState(false)
+  const [showDatePicker,      setShowDatePicker]      = useState(false)
+
+  const datePickerValue = conductDate ? new Date(conductDate) : new Date()
 
   const assignable        = users.filter(u => ['admin', 'manager', 'clerk'].includes(u.role))
   const typists           = users.filter(u => u.role === 'typist')
@@ -692,12 +699,33 @@ function InspectionEditSheet({ item, users, onClose, onSaved }: {
             />
 
             <FLabel>Inspection Date</FLabel>
-            <FInput
-              placeholder="YYYY-MM-DD"
-              value={conductDate}
-              onChangeText={setConductDate}
-              keyboardType="numbers-and-punctuation"
-            />
+            <TouchableOpacity style={fs.pickerRow} onPress={() => setShowDatePicker(true)}>
+              <Text style={[fs.pickerText, !conductDate && fs.pickerPlaceholder]}>
+                {conductDate
+                  ? new Date(conductDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+                  : 'Select date…'}
+              </Text>
+              <Text style={fs.chevron}>›</Text>
+            </TouchableOpacity>
+            {conductDate ? (
+              <TouchableOpacity onPress={() => setConductDate('')} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
+                <Text style={{ fontSize: font.xs, color: colors.danger, fontWeight: '600' }}>Clear date</Text>
+              </TouchableOpacity>
+            ) : null}
+            {showDatePicker && (
+              <DateTimePicker
+                value={datePickerValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                onChange={(_, date) => {
+                  setShowDatePicker(Platform.OS === 'ios')
+                  if (date) {
+                    const iso = date.toISOString().split('T')[0]
+                    setConductDate(iso)
+                  }
+                }}
+              />
+            )}
 
             <FLabel>Time Preference</FLabel>
             <FPicker
@@ -807,7 +835,8 @@ export default function AdminPanelScreen() {
   const navigation = useNavigation()
   const insets     = useSafeAreaInsets()
 
-  const [activeTab,    setActiveTab]    = useState<Tab>('Users')
+  const [activeTab,        setActiveTab]        = useState<Tab>('Users')
+  const [settingsSubTab,   setSettingsSubTab]   = useState<SettingsSubTab>('General')
   const [users,        setUsers]        = useState<any[]>([])
   const [properties,   setProperties]   = useState<any[]>([])
   const [clients,      setClients]      = useState<any[]>([])
@@ -1065,11 +1094,33 @@ export default function AdminPanelScreen() {
         })}
       </ScrollView>
 
+      {/* ── Settings sub-navbar ── */}
+      {activeTab === 'Settings' && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={s.subTabStrip}
+          contentContainerStyle={s.tabStripInner}
+        >
+          {SETTINGS_SUB_TABS.map(tab => (
+            <TouchableOpacity
+              key={tab}
+              style={[s.subTab, settingsSubTab === tab && s.tabActive]}
+              onPress={() => setSettingsSubTab(tab)}
+            >
+              <Text style={[s.subTabText, settingsSubTab === tab && s.tabTextActive]}>{tab}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
       {/* ── Self-contained new tabs ── */}
       {activeTab === 'Dashboard' && <DashboardTab />}
-      {activeTab === 'Templates' && <TemplatesTab />}
-      {activeTab === 'Actions'   && <ActionsTab />}
-      {activeTab === 'Settings'  && <SettingsTab />}
+      {activeTab === 'Settings' && settingsSubTab === 'General'      && <SettingsTab section="general" />}
+      {activeTab === 'Settings' && settingsSubTab === 'Reports'      && <SettingsTab section="reports" />}
+      {activeTab === 'Settings' && settingsSubTab === 'Integrations' && <SettingsTab section="integrations" />}
+      {activeTab === 'Settings' && settingsSubTab === 'Actions'      && <ActionsTab />}
+      {activeTab === 'Settings' && settingsSubTab === 'Templates'    && <TemplatesTab />}
 
       {/* ── CRUD tabs: search + filter + list + FAB ── */}
       {isCrudTab && (
@@ -1218,10 +1269,13 @@ const s = StyleSheet.create({
 
   // Tabs
   tabStrip:      { backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border, flexGrow: 0, flexShrink: 0 },
+  subTabStrip:   { backgroundColor: colors.background, borderBottomWidth: 1, borderBottomColor: colors.border, flexGrow: 0, flexShrink: 0 },
   tabStripInner: { paddingHorizontal: spacing.sm, gap: 4 },
   tab:           { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: 12, gap: spacing.xs, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  subTab:        { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, paddingVertical: 9, gap: spacing.xs, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   tabActive:     { borderBottomColor: colors.primary },
   tabText:       { fontSize: font.sm, fontWeight: '600', color: colors.textLight },
+  subTabText:    { fontSize: font.xs, fontWeight: '600', color: colors.textLight },
   tabTextActive: { color: colors.primary },
   tabBadge:      { backgroundColor: colors.muted, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1, minWidth: 20, alignItems: 'center' },
   tabBadgeActive:     { backgroundColor: colors.primaryLight },

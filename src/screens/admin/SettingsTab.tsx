@@ -30,7 +30,9 @@ function SectionHead({ title }: { title: string }) {
   return <Text style={s.sectionHead}>{title}</Text>
 }
 
-export default function SettingsTab() {
+type Section = 'general' | 'reports' | 'integrations'
+
+export default function SettingsTab({ section }: { section?: Section }) {
   // Company Info
   const [companyName,   setCompanyName]   = useState('')
   const [addressLine1,  setAddressLine1]  = useState('')
@@ -120,126 +122,142 @@ export default function SettingsTab() {
 
   const orientationLabel = ORIENTATIONS.find(o => o.value === orientation)?.label || 'Portrait'
 
+  const showGeneral      = !section || section === 'general'
+  const showReports      = !section || section === 'reports'
+  const showIntegrations = !section || section === 'integrations'
+
   return (
     <ScrollView style={s.scroll} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
 
       {/* ── Company Info ── */}
-      <SectionHead title="Company Info" />
-      <View style={s.card}>
-        <FLabel>Company Name</FLabel>
-        <FInput placeholder="Acme Lettings Ltd" value={companyName} onChangeText={t => { setCompanyName(t); mark() }} autoCapitalize="words" />
+      {showGeneral && (
+        <>
+          <SectionHead title="Company Info" />
+          <View style={s.card}>
+            <FLabel>Company Name</FLabel>
+            <FInput placeholder="Acme Lettings Ltd" value={companyName} onChangeText={t => { setCompanyName(t); mark() }} autoCapitalize="words" />
 
-        <FLabel>Address Line 1</FLabel>
-        <FInput placeholder="123 High Street" value={addressLine1} onChangeText={t => { setAddressLine1(t); mark() }} autoCapitalize="words" />
+            <FLabel>Address Line 1</FLabel>
+            <FInput placeholder="123 High Street" value={addressLine1} onChangeText={t => { setAddressLine1(t); mark() }} autoCapitalize="words" />
 
-        <FLabel>Address Line 2</FLabel>
-        <FInput placeholder="Optional" value={addressLine2} onChangeText={t => { setAddressLine2(t); mark() }} autoCapitalize="words" />
+            <FLabel>Address Line 2</FLabel>
+            <FInput placeholder="Optional" value={addressLine2} onChangeText={t => { setAddressLine2(t); mark() }} autoCapitalize="words" />
 
-        <View style={s.row}>
-          <View style={{ flex: 2 }}>
-            <FLabel>City</FLabel>
-            <FInput placeholder="London" value={city} onChangeText={t => { setCity(t); mark() }} autoCapitalize="words" />
+            <View style={s.row}>
+              <View style={{ flex: 2 }}>
+                <FLabel>City</FLabel>
+                <FInput placeholder="London" value={city} onChangeText={t => { setCity(t); mark() }} autoCapitalize="words" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FLabel>Postcode</FLabel>
+                <FInput placeholder="SW1A 1AA" value={postcode} onChangeText={t => { setPostcode(t.toUpperCase()); mark() }} autoCapitalize="characters" />
+              </View>
+            </View>
+
+            <FLabel>Email</FLabel>
+            <FInput placeholder="info@company.com" value={email} onChangeText={t => { setEmail(t); mark() }} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+
+            <FLabel>Phone</FLabel>
+            <FInput placeholder="+44 20 0000 0000" value={phone} onChangeText={t => { setPhone(t); mark() }} keyboardType="phone-pad" />
+
+            <FLabel>Website</FLabel>
+            <FInput placeholder="https://yourcompany.com" value={website} onChangeText={t => { setWebsite(t); mark() }} keyboardType="url" autoCapitalize="none" autoCorrect={false} />
           </View>
-          <View style={{ flex: 1 }}>
-            <FLabel>Postcode</FLabel>
-            <FInput placeholder="SW1A 1AA" value={postcode} onChangeText={t => { setPostcode(t.toUpperCase()); mark() }} autoCapitalize="characters" />
-          </View>
-        </View>
-
-        <FLabel>Email</FLabel>
-        <FInput placeholder="info@company.com" value={email} onChangeText={t => { setEmail(t); mark() }} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
-
-        <FLabel>Phone</FLabel>
-        <FInput placeholder="+44 20 0000 0000" value={phone} onChangeText={t => { setPhone(t); mark() }} keyboardType="phone-pad" />
-
-        <FLabel>Website</FLabel>
-        <FInput placeholder="https://yourcompany.com" value={website} onChangeText={t => { setWebsite(t); mark() }} keyboardType="url" autoCapitalize="none" autoCorrect={false} />
-      </View>
+        </>
+      )}
 
       {/* ── Report Settings ── */}
-      <SectionHead title="Report Settings" />
-      <View style={s.card}>
-        <FLabel>Page Orientation</FLabel>
-        <TouchableOpacity style={s.pickerRow} onPress={() => setShowOrientationPicker(true)}>
-          <Text style={s.pickerText}>{orientationLabel}</Text>
-          <Text style={s.chevron}>›</Text>
-        </TouchableOpacity>
+      {showReports && (
+        <>
+          <SectionHead title="Report Settings" />
+          <View style={s.card}>
+            <FLabel>Page Orientation</FLabel>
+            <TouchableOpacity style={s.pickerRow} onPress={() => setShowOrientationPicker(true)}>
+              <Text style={s.pickerText}>{orientationLabel}</Text>
+              <Text style={s.chevron}>›</Text>
+            </TouchableOpacity>
 
-        <FLabel>Header Text Color</FLabel>
-        <View style={s.colorPickRow}>
-          <View style={[s.colorPreview, { backgroundColor: headerColor }]} />
-          <Text style={s.colorHex}>{headerColor}</Text>
-        </View>
-        <View style={s.swatchGrid}>
-          {REPORT_COLORS.map(c => (
-            <TouchableOpacity
-              key={c}
-              style={[s.swatch, { backgroundColor: c }, headerColor === c && s.swatchSelected,
-                c === '#ffffff' && { borderWidth: 1, borderColor: colors.border }]}
-              onPress={() => { setHeaderColor(c); mark() }}
+            <FLabel>Header Text Color</FLabel>
+            <View style={s.colorPickRow}>
+              <View style={[s.colorPreview, { backgroundColor: headerColor }]} />
+              <Text style={s.colorHex}>{headerColor}</Text>
+            </View>
+            <View style={s.swatchGrid}>
+              {REPORT_COLORS.map(c => (
+                <TouchableOpacity
+                  key={c}
+                  style={[s.swatch, { backgroundColor: c }, headerColor === c && s.swatchSelected,
+                    c === '#ffffff' && { borderWidth: 1, borderColor: colors.border }]}
+                  onPress={() => { setHeaderColor(c); mark() }}
+                />
+              ))}
+            </View>
+
+            <FLabel>Body Text Color</FLabel>
+            <View style={s.colorPickRow}>
+              <View style={[s.colorPreview, { backgroundColor: bodyColor }]} />
+              <Text style={s.colorHex}>{bodyColor}</Text>
+            </View>
+            <View style={s.swatchGrid}>
+              {REPORT_COLORS.map(c => (
+                <TouchableOpacity
+                  key={c}
+                  style={[s.swatch, { backgroundColor: c }, bodyColor === c && s.swatchSelected,
+                    c === '#ffffff' && { borderWidth: 1, borderColor: colors.border }]}
+                  onPress={() => { setBodyColor(c); mark() }}
+                />
+              ))}
+            </View>
+
+            <FLabel>Report Disclaimer</FLabel>
+            <FInput
+              placeholder="Disclaimer text shown on every report…"
+              value={disclaimer}
+              onChangeText={t => { setDisclaimer(t); mark() }}
+              multiline
+              numberOfLines={4}
+              style={[s.input, s.inputMulti]}
             />
-          ))}
-        </View>
-
-        <FLabel>Body Text Color</FLabel>
-        <View style={s.colorPickRow}>
-          <View style={[s.colorPreview, { backgroundColor: bodyColor }]} />
-          <Text style={s.colorHex}>{bodyColor}</Text>
-        </View>
-        <View style={s.swatchGrid}>
-          {REPORT_COLORS.map(c => (
-            <TouchableOpacity
-              key={c}
-              style={[s.swatch, { backgroundColor: c }, bodyColor === c && s.swatchSelected,
-                c === '#ffffff' && { borderWidth: 1, borderColor: colors.border }]}
-              onPress={() => { setBodyColor(c); mark() }}
-            />
-          ))}
-        </View>
-
-        <FLabel>Report Disclaimer</FLabel>
-        <FInput
-          placeholder="Disclaimer text shown on every report…"
-          value={disclaimer}
-          onChangeText={t => { setDisclaimer(t); mark() }}
-          multiline
-          numberOfLines={4}
-          style={[s.input, s.inputMulti]}
-        />
-      </View>
+          </View>
+        </>
+      )}
 
       {/* ── Integrations ── */}
-      <SectionHead title="Integrations" />
-      <View style={s.card}>
-        <FLabel>Depositary API URL</FLabel>
-        <FInput
-          placeholder="https://api.depositary.co.uk/..."
-          value={depositaryUrl}
-          onChangeText={t => { setDepositaryUrl(t); mark() }}
-          keyboardType="url"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+      {showIntegrations && (
+        <>
+          <SectionHead title="Integrations" />
+          <View style={s.card}>
+            <FLabel>Depositary API URL</FLabel>
+            <FInput
+              placeholder="https://api.depositary.co.uk/..."
+              value={depositaryUrl}
+              onChangeText={t => { setDepositaryUrl(t); mark() }}
+              keyboardType="url"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
 
-        <FLabel>Depositary API Key</FLabel>
-        <FInput
-          placeholder="API key"
-          value={depositaryKey}
-          onChangeText={t => { setDepositaryKey(t); mark() }}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
+            <FLabel>Depositary API Key</FLabel>
+            <FInput
+              placeholder="API key"
+              value={depositaryKey}
+              onChangeText={t => { setDepositaryKey(t); mark() }}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
 
-        <FLabel>Google Master Sheet ID</FLabel>
-        <FInput
-          placeholder="Spreadsheet ID from Google Sheets URL"
-          value={sheetId}
-          onChangeText={t => { setSheetId(t); mark() }}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
+            <FLabel>Google Master Sheet ID</FLabel>
+            <FInput
+              placeholder="Spreadsheet ID from Google Sheets URL"
+              value={sheetId}
+              onChangeText={t => { setSheetId(t); mark() }}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+        </>
+      )}
 
       {/* ── Save ── */}
       <TouchableOpacity
@@ -249,7 +267,13 @@ export default function SettingsTab() {
       >
         {saving
           ? <ActivityIndicator color="#fff" />
-          : <Text style={s.saveBtnText}>{dirty ? 'Save Settings' : 'No Changes'}</Text>
+          : <Text style={s.saveBtnText}>{dirty
+              ? section === 'general'      ? 'Save Company Info'
+              : section === 'reports'      ? 'Save Report Settings'
+              : section === 'integrations' ? 'Save Integrations'
+              : 'Save Settings'
+              : 'No Changes'
+            }</Text>
         }
       </TouchableOpacity>
 
