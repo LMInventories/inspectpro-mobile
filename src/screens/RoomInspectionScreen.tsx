@@ -1180,10 +1180,25 @@ export default function RoomInspectionScreen() {
     try {
       const summaryItems = items.map(it => ({ id: String(it.id), name: it.name || '' }))
       const prop = fresh?.property || {}
+
+      // Derive missing property details from the template name (e.g. "2 Bedroom Flat",
+      // "3 Bed 2 Bath House") so the backend doesn't fall back to "residential".
+      const tmplName      = (fresh?.template?.name ?? '') as string
+      const bedroomMatch  = tmplName.match(/(\d+)\s*bed(?:room)?s?/i)
+      const bathroomMatch = tmplName.match(/(\d+)\s*bath(?:room)?s?/i)
+      // House group: detached variants, terraced, bungalow, house
+      // Flat group: purpose-built/converted flat, penthouse, flat
+      const HOUSE_TMPL = /\b(detached|semi[- ]detached|terraced|bungalow|house)\b/i
+      const FLAT_TMPL  = /\b(purpose[\s-]built[\s-]flat|converted[\s-]flat|penthouse|flat)\b/i
+      const OTHER_TMPL = /\b(studio|maisonette|cottage)\b/i
+      const derivedType = HOUSE_TMPL.test(tmplName) ? 'House'
+        : FLAT_TMPL.test(tmplName)  ? 'Flat'
+        : (() => { const m = tmplName.match(OTHER_TMPL); return m ? m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase() : null })()
+
       const propertyDetails = {
-        property_type: prop.property_type ?? null,
-        bedrooms:      prop.bedrooms      ?? null,
-        bathrooms:     prop.bathrooms     ?? null,
+        property_type: prop.property_type ?? derivedType,
+        bedrooms:      prop.bedrooms      ?? (bedroomMatch  ? parseInt(bedroomMatch[1],  10) : null),
+        bathrooms:     prop.bathrooms     ?? (bathroomMatch ? parseInt(bathroomMatch[1], 10) : null),
         furnished:     prop.furnished     ?? null,
         address:       fresh?.property_address ?? null,
       }
