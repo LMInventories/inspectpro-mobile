@@ -4,6 +4,7 @@ import {
   Image, Alert, ActivityIndicator, Platform, Linking, Modal,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImagePicker from 'expo-image-picker'
@@ -631,7 +632,11 @@ export default function PropertyOverviewScreen() {
 
 
       {/* ── Signature capture modal ─────────────────────────────────────── */}
+      {/* GestureHandlerRootView is required here: Modals render outside the
+          native view hierarchy and don't inherit the app-level RNGH root,
+          so GestureDetector inside SignaturePad would have no context. */}
       <Modal visible={showSignature} animationType="slide" presentationStyle="fullScreen">
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={[sigStyles.screen, { paddingTop: insets.top }]}>
           <View style={sigStyles.header}>
             <Text style={sigStyles.title}>
@@ -692,6 +697,7 @@ export default function PropertyOverviewScreen() {
             )}
           </View>
         </View>
+        </GestureHandlerRootView>
       </Modal>
 
       {/* ── Pre-finalise review overlay ─────────────────────────────────────── */}

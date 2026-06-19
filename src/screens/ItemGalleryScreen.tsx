@@ -16,6 +16,7 @@ import { useInspectionStore } from '../stores/inspectionStore'
 import { getLocalInspection } from '../services/database'
 import { setCameraTarget, processPendingPhotos } from '../services/cameraStore'
 import Header from '../components/Header'
+import AnnotateModal from '../components/AnnotateModal'
 import { colors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
 
@@ -52,6 +53,7 @@ export default function ItemGalleryScreen() {
   // Lightbox
   const [lightboxUri, setLightboxUri]     = useState<string | null>(null)
   const [rotating, setRotating]           = useState(false)
+  const [showAnnotate, setShowAnnotate]   = useState(false)
 
   // Multi-select
   const [selecting, setSelecting]   = useState(false)
@@ -127,21 +129,35 @@ export default function ItemGalleryScreen() {
     const idx = photosRef.current.indexOf(lightboxUri)
     if (idx < 0) return
     // setTimeout(0) defers until after React has committed the render,
-    // ensuring the FlatList is mounted before we attempt scrollToIndex.
+    // ensuring the FlatList is mounted before scrolling.
+    // scrollToOffset is used throughout (instead of scrollToIndex) because it
+    // computes the destination pixel directly — no dependency on getItemLayout
+    // having been evaluated with up-to-date item dimensions.
     const t = setTimeout(() => {
-      lightboxFlatRef.current?.scrollToIndex({ index: idx, animated: false })
+      lightboxFlatRef.current?.scrollToOffset({ offset: screenWidth * idx, animated: false })
     }, 0)
     return () => clearTimeout(t)
   }, [lightboxUri])
 
-  // Re-scroll lightbox to correct page when screen dimensions change (rotation)
+  // Re-scroll lightbox to correct page when screen dimensions change (rotation).
+  // Also resets zoom/pan: translate values are in old-orientation pixels and
+  // become invalid after a dimension change, and flatScrollEnabled must be
+  // restored so swipe navigation works in the new orientation.
   useEffect(() => {
     if (!lightboxUri) return
     const idx = photosRef.current.indexOf(lightboxUri)
     if (idx < 0) return
+    lightboxLastScale.current = 1
+    lightboxLastTranslate.current = { x: 0, y: 0 }
+    lightboxScale.setValue(1)
+    lightboxTranslateX.setValue(0)
+    lightboxTranslateY.setValue(0)
+    setFlatScrollEnabled(true)
+    // 100ms gives the layout pass time to apply the new item widths before
+    // we compute the scroll offset against screenWidth.
     const t = setTimeout(() => {
-      lightboxFlatRef.current?.scrollToIndex({ index: idx, animated: false })
-    }, 50)
+      lightboxFlatRef.current?.scrollToOffset({ offset: screenWidth * idx, animated: false })
+    }, 100)
     return () => clearTimeout(t)
   }, [screenWidth])
 
@@ -276,6 +292,18 @@ export default function ItemGalleryScreen() {
         setLightboxUri(null)
       }},
     ])
+  }
+
+  async function handleAnnotateSave(newUri: string) {
+    const current = getPhotos()
+    const idx = current.indexOf(lightboxUri!)
+    if (idx >= 0) {
+      const next = [...current]
+      next[idx] = newUri
+      await updatePhotos(next)
+      setLightboxUri(newUri)
+    }
+    setShowAnnotate(false)
   }
 
   function handleAddMore() {
@@ -843,6 +871,10 @@ export default function ItemGalleryScreen() {
                   <Text style={lbS.actionIcon}>↻</Text>
                   <Text style={lbS.actionLabel}>Rotate Right</Text>
                 </TouchableOpacity>
+                <TouchableOpacity style={lbS.actionBtn} onPress={() => setShowAnnotate(true)} disabled={rotating}>
+                  <Text style={lbS.actionIcon}>✏️</Text>
+                  <Text style={lbS.actionLabel}>Annotate</Text>
+                </TouchableOpacity>
                 <TouchableOpacity style={lbS.actionBtn} onPress={() => handleDeleteSingle(lightboxUri)}>
                   <Text style={lbS.actionIcon}>🗑</Text>
                   <Text style={[lbS.actionLabel, { color: colors.danger }]}>Delete</Text>
@@ -870,6 +902,17 @@ export default function ItemGalleryScreen() {
         </View>
         </GestureHandlerRootView>
       </Modal>
+
+      {/* ── Annotate Modal ─────────────────────────────────────────────────── */}
+      {lightboxUri && (
+        <AnnotateModal
+          visible={showAnnotate}
+          photoUri={lightboxUri}
+          inspectionId={inspectionId}
+          onSave={handleAnnotateSave}
+          onDismiss={() => setShowAnnotate(false)}
+        />
+      )}
 
       {/* Auto-fading AI reassign toast — no interaction required */}
       {toastMsg && (
