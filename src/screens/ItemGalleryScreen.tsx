@@ -123,6 +123,7 @@ export default function ItemGalleryScreen() {
   const lightboxTranslateY    = useRef(new Animated.Value(0)).current
   const lightboxLastTranslate = useRef({ x: 0, y: 0 })
   const [flatScrollEnabled, setFlatScrollEnabled] = useState(true)
+  const [panEnabled, setPanEnabled]               = useState(false)
 
   useEffect(() => {
     if (!lightboxUri) return
@@ -153,6 +154,7 @@ export default function ItemGalleryScreen() {
     lightboxTranslateX.setValue(0)
     lightboxTranslateY.setValue(0)
     setFlatScrollEnabled(true)
+    setPanEnabled(false)
     // 100ms gives the layout pass time to apply the new item widths before
     // we compute the scroll offset against screenWidth.
     const t = setTimeout(() => {
@@ -186,8 +188,10 @@ export default function ItemGalleryScreen() {
           lightboxTranslateX.setValue(0)
           lightboxTranslateY.setValue(0)
           setFlatScrollEnabled(true)
+          setPanEnabled(false)
         } else {
           setFlatScrollEnabled(false)
+          setPanEnabled(true)
         }
       })
 
@@ -204,19 +208,20 @@ export default function ItemGalleryScreen() {
           lightboxTranslateY.setValue(0)
         }
         setFlatScrollEnabled(next === 1)
+        setPanEnabled(next !== 1)
       })
 
-    // Pan: only moves the image when zoomed — returns early at 1× so the FlatList
-    // scroll recogniser can still handle horizontal swipe-to-navigate.
+    // Pan is .enabled(panEnabled) so it's disabled at 1× zoom — the gesture
+    // recogniser at the native level won't compete with the FlatList scroll
+    // recogniser when the user swipes to navigate between photos.
     const pan = Gesture.Pan()
       .runOnJS(true)
+      .enabled(panEnabled)
       .onUpdate(e => {
-        if (lightboxLastScale.current <= 1) return
         lightboxTranslateX.setValue(lightboxLastTranslate.current.x + e.translationX)
         lightboxTranslateY.setValue(lightboxLastTranslate.current.y + e.translationY)
       })
       .onEnd(e => {
-        if (lightboxLastScale.current <= 1) return
         lightboxLastTranslate.current = {
           x: lightboxLastTranslate.current.x + e.translationX,
           y: lightboxLastTranslate.current.y + e.translationY,
@@ -224,7 +229,7 @@ export default function ItemGalleryScreen() {
       })
 
     return Gesture.Simultaneous(pinch, doubleTap, pan)
-  }, [])  // stable refs only — no deps needed
+  }, [panEnabled])
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getPhotos(): string[] {
@@ -798,6 +803,7 @@ export default function ItemGalleryScreen() {
           lightboxScale.setValue(1)
           resetLightboxTransform()
           setFlatScrollEnabled(true)
+          setPanEnabled(false)
         }}
       >
         {/* GestureHandlerRootView must live inside the Modal — Modals render
@@ -837,6 +843,7 @@ export default function ItemGalleryScreen() {
                 lightboxScale.setValue(1)
                 resetLightboxTransform()
                 setFlatScrollEnabled(true)
+                setPanEnabled(false)
               }
             }}
             getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
@@ -850,6 +857,7 @@ export default function ItemGalleryScreen() {
                 lightboxScale.setValue(1)
                 resetLightboxTransform()
                 setFlatScrollEnabled(true)
+                setPanEnabled(false)
               }}>
                 <Text style={lbS.closeBtnText}>✕</Text>
               </TouchableOpacity>

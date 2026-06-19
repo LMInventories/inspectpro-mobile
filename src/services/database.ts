@@ -270,7 +270,10 @@ export function getAudioRecordings(inspectionId: number): any[] {
 
 export function getAudioRecordingsForSection(inspectionId: number, sectionKey: string): any[] {
   const rows = db.getAllSync(
-    'SELECT * FROM audio_recordings WHERE inspection_id = ? AND section_key = ? AND item_key IS NULL ORDER BY created_at ASC',
+    // Exclude clips that already have a transcription — those were processed by
+    // AI Room mode and their transcription text was saved before the file was
+    // deleted. Restoring them would cause stale re-transcription on remount.
+    'SELECT * FROM audio_recordings WHERE inspection_id = ? AND section_key = ? AND item_key IS NULL AND transcription IS NULL ORDER BY created_at ASC',
     [inspectionId, sectionKey]
   )
   return rows.map(normaliseRow)

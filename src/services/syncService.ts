@@ -349,10 +349,14 @@ export async function syncSingleInspection(
           }
         })
       )
-      const withAudio = serialised.filter(r => r.audioB64.length > 0)
-      if (withAudio.length > 0) {
-        rd._recordings = withAudio
-        console.log(`[Sync] ${withAudio.length}/${totalAudio} clips serialised successfully`)
+      // Include clips that have audio OR a transcript — AI Room mode clips have
+      // their audio file deleted immediately after transcription (to free space)
+      // but their transcript text is saved to SQLite and must reach the server.
+      const withContent = serialised.filter(r => r.audioB64.length > 0 || !!r.transcript)
+      if (withContent.length > 0) {
+        rd._recordings = withContent
+        const withAudio = withContent.filter(r => r.audioB64.length > 0)
+        console.log(`[Sync] ${withAudio.length}/${totalAudio} clips with audio, ${withContent.length - withAudio.length} transcript-only`)
       } else {
         console.warn('[Sync] all clips failed to encode — check file paths')
       }

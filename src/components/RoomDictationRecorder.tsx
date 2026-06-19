@@ -41,7 +41,7 @@ import {
 import * as FileSystem from 'expo-file-system/legacy'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import SwipeableRow from './SwipeableRow'
-import { saveAudioRecording, deleteAudioRecording, getAudioRecordingsForSection } from '../services/database'
+import { saveAudioRecording, deleteAudioRecording, getAudioRecordingsForSection, updateTranscription } from '../services/database'
 import { api } from '../services/api'
 import { colors, font, radius, spacing } from '../utils/theme'
 import { probe } from '../hooks/useNetworkStatus'
@@ -394,6 +394,7 @@ export default function RoomDictationRecorder({
 
       // Snapshot clips before clearing — needed for deletion after the async await
       const clipsToDelete = [...clips]
+      const fullTranscript: string = (response.data as any).transcript || ''
 
       await onTranscribed(filled)
 
@@ -403,13 +404,15 @@ export default function RoomDictationRecorder({
       setElapsed(0)
       setMode('idle')
 
-      // Delete both SQLite records and files now that transcription is confirmed.
-      // Deleting the DB rows prevents them from being restored into recorder state
-      // on remount (e.g. after an orientation change), which would cause stale clips
-      // to be re-transcribed and re-add text to already-filled fields.
+      // Save the Whisper transcript into each SQLite row so it travels to the
+      // server during sync and becomes available for Export Transcription.
+      // Then delete only the audio file — the row stays in SQLite (with a
+      // non-null transcription) so getAudioRecordingsForSection skips it on
+      // remount, preventing stale re-transcription while preserving the text.
       clipsToDelete.forEach(clip => {
         if (clip.id !== undefined) {
-          deleteAudioRecording(clip.id, clip.uri).catch(() => {})
+          if (fullTranscript) updateTranscription(clip.id, fullTranscript)
+          FileSystem.deleteAsync(clip.uri, { idempotent: true }).catch(() => {})
         } else {
           FileSystem.deleteAsync(clip.uri, { idempotent: true }).catch(() => {})
         }

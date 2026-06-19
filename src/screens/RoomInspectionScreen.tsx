@@ -1195,8 +1195,18 @@ export default function RoomInspectionScreen() {
         : FLAT_TMPL.test(tmplName)  ? 'Flat'
         : (() => { const m = tmplName.match(OTHER_TMPL); return m ? m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase() : null })()
 
+      const DET_MAP: Record<string, string> = {
+        'Terraced': 'house', 'Semi-Detached': 'house', 'Detached': 'house',
+        'Purpose Built Flat': 'flat', 'Converted Flat': 'flat', 'Penthouse': 'flat',
+        'Bungalow': 'bungalow',
+      }
+      const typeFromDetachment = prop.detachment_type ? (DET_MAP[prop.detachment_type as string] ?? null) : null
+      const effectiveType = typeFromDetachment
+        ?? (prop.property_type && prop.property_type !== 'residential' ? prop.property_type : null)
+        ?? derivedType
+
       const propertyDetails = {
-        property_type: prop.property_type ?? derivedType,
+        property_type: effectiveType,
         bedrooms:      prop.bedrooms      ?? (bedroomMatch  ? parseInt(bedroomMatch[1],  10) : null),
         bathrooms:     prop.bathrooms     ?? (bathroomMatch ? parseInt(bathroomMatch[1], 10) : null),
         furnished:     prop.furnished     ?? null,
