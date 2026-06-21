@@ -69,7 +69,7 @@ interface Props {
   sectionType?: string   // 'room' (default) or fixed section type
   isDamageReport?: boolean
   items: RoomDictationItem[]
-  onTranscribed: (filled: Record<string, Record<string, any>>) => Promise<void>
+  onTranscribed: (filled: Record<string, Record<string, any>>, transcript?: string) => Promise<void>
   showAiButton?: boolean
   // Landscape sidebar support
   isLandscape?: boolean
@@ -396,7 +396,7 @@ export default function RoomDictationRecorder({
       const clipsToDelete = [...clips]
       const fullTranscript: string = (response.data as any).transcript || ''
 
-      await onTranscribed(filled)
+      await onTranscribed(filled, fullTranscript)
 
       setQueuedOffline(false)
       setClips([])

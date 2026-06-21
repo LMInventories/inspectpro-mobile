@@ -855,6 +855,22 @@ export default function RoomInspectionScreen() {
       // ── "Not Applicable" — delete item ────────────────────────────────────
       if (editMode === 'delete') {
         await deleteItemImmediate(itemId)
+        // Log after deletion — re-read so we don't overwrite the now-deleted item
+        if (result.transcript) {
+          const freshAfterDelete = await getLocalInspection(inspectionId)
+          const rdAfterDelete = freshAfterDelete?.report_data ? JSON.parse(freshAfterDelete.report_data) : {}
+          if (!rdAfterDelete._transcriptionLog) rdAfterDelete._transcriptionLog = []
+          rdAfterDelete._transcriptionLog.push({
+            mode:      'instant',
+            timestamp: new Date().toISOString(),
+            room:      sectionName,
+            item:      itemLabel,
+            transcript: result.transcript,
+            command:   'delete',
+            filled:    null,
+          })
+          await setReportData(inspectionId, rdAfterDelete)
+        }
         return
       }
 
@@ -873,6 +889,18 @@ export default function RoomInspectionScreen() {
               _sid: sid,
               description: sub.description || '',
               condition:   sub.condition   || '',
+            })
+          }
+          if (result.transcript) {
+            if (!rd2._transcriptionLog) rd2._transcriptionLog = []
+            rd2._transcriptionLog.push({
+              mode:      'instant',
+              timestamp: new Date().toISOString(),
+              room:      sectionName,
+              item:      itemLabel,
+              transcript: result.transcript,
+              command:   'add_sub',
+              filled:    { _subs: incomingSubs },
             })
           }
           await setReportData(inspectionId, rd2)
@@ -944,6 +972,29 @@ export default function RoomInspectionScreen() {
         }
       }
 
+      // Append to transcription log so admins can review Whisper + Haiku output
+      if (result.transcript) {
+        if (!rd._transcriptionLog) rd._transcriptionLog = []
+        const logFilled: Record<string, any> = {}
+        if (result.description)      logFilled.description      = result.description
+        if (result.condition)        logFilled.condition        = result.condition
+        if (result.notes)            logFilled.notes            = result.notes
+        if (result.cleanlinessNotes) logFilled.cleanlinessNotes = result.cleanlinessNotes
+        if (result.locationSerial)   logFilled.locationSerial   = result.locationSerial
+        if (result.reading)          logFilled.reading          = result.reading
+        if (Array.isArray(result._subs) && result._subs.length) logFilled._subs = result._subs
+        rd._transcriptionLog.push({
+          mode:       'instant',
+          timestamp:  new Date().toISOString(),
+          room:       sectionName,
+          item:       itemLabel,
+          transcript: result.transcript,
+          ...(editMode !== 'normal' ? { command: editMode, commandField: editField || undefined } : {}),
+          filled:     logFilled,
+        })
+        changed = true
+      }
+
       if (changed) {
         await setReportData(inspectionId, rd)
       }
@@ -974,7 +1025,7 @@ export default function RoomInspectionScreen() {
     return NONE_SEEN_PHRASES.some(p => text === p)
   }
 
-  async function handleRoomTranscribed(filled: Record<string, Record<string, any>>) {
+  async function handleRoomTranscribed(filled: Record<string, Record<string, any>>, transcript?: string) {
     // Read fresh from DB — room dictation is async (recording + upload + AI round-trip
     // can take 10+ seconds), so the store closure captured at component render time
     // may be stale.  A fresh read ensures no user keystrokes are silently dropped.
@@ -1081,6 +1132,24 @@ export default function RoomInspectionScreen() {
     if (filledCount > 0) parts.push(`${filledCount} item${filledCount !== 1 ? 's' : ''} filled`)
     if (subItemsCreated > 0) parts.push(`${subItemsCreated} sub-item${subItemsCreated !== 1 ? 's' : ''} created`)
     if (deletedItems.length > 0) parts.push(`${deletedItems.length} removed (none seen)`)
+
+    // Append room-mode log entry so admins can review full Whisper transcript + Haiku fill
+    if (transcript) {
+      if (!rd._transcriptionLog) rd._transcriptionLog = []
+      const logFilled: Record<string, any> = {}
+      for (const [itemId, fields] of Object.entries(filled)) {
+        const item = items.find((i: any) => String(i.id) === String(itemId))
+        logFilled[itemId] = { name: item?.label || item?.name || itemId, ...fields }
+      }
+      rd._transcriptionLog.push({
+        mode:      'room',
+        timestamp: new Date().toISOString(),
+        room:      sectionName,
+        transcript,
+        filled:    logFilled,
+      })
+      changed = true
+    }
 
     if (changed) {
       setReportData(inspectionId, rd)
