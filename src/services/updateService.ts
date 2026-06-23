@@ -64,9 +64,13 @@ export async function downloadAndInstall(
   if (!result) throw new Error('Download failed.')
 
   const contentUri = await FileSystem.getContentUriAsync(dest)
-  await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-    data: contentUri,
-    flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
-    type: 'application/vnd.android.package-archive',
-  })
+  try {
+    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+      data: contentUri,
+      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      type: 'application/vnd.android.package-archive',
+    })
+  } finally {
+    FileSystem.deleteAsync(dest, { idempotent: true }).catch(() => {})
+  }
 }
