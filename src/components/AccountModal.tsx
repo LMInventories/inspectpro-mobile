@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import {
   Modal, View, Text, TextInput, TouchableOpacity,
-  ScrollView, StyleSheet, Alert, ActivityIndicator,
+  ScrollView, StyleSheet, Alert, ActivityIndicator, Platform,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as FileSystem from 'expo-file-system/legacy'
@@ -12,6 +12,10 @@ import { useInspectionStore } from '../stores/inspectionStore'
 import { getAudioRecordings } from '../services/database'
 import { api } from '../services/api'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
+import {
+  fetchLatestRelease, downloadAndInstall, getCurrentBuildNumber,
+  type ReleaseInfo,
+} from '../services/updateService'
 
 interface Props {
   visible: boolean
@@ -32,6 +36,42 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [exporting, setExporting]     = useState(false)
+
+  type UpdateStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'error'
+  const [updateStatus, setUpdateStatus]   = useState<UpdateStatus>('idle')
+  const [updateProgress, setUpdateProgress] = useState(0)
+  const [releaseInfo, setReleaseInfo]     = useState<ReleaseInfo | null>(null)
+  const [updateError, setUpdateError]     = useState('')
+
+  async function handleCheckForUpdates() {
+    setUpdateStatus('checking')
+    setUpdateError('')
+    try {
+      const info = await fetchLatestRelease()
+      const current = getCurrentBuildNumber()
+      setReleaseInfo(info)
+      if (info.buildNumber > current && info.downloadUrl) {
+        setUpdateStatus('available')
+      } else {
+        setUpdateStatus('up-to-date')
+      }
+    } catch (err: any) {
+      setUpdateError(err?.message || 'Could not check for updates.')
+      setUpdateStatus('error')
+    }
+  }
+
+  async function handleDownloadAndInstall() {
+    if (!releaseInfo?.downloadUrl) return
+    setUpdateStatus('downloading')
+    setUpdateProgress(0)
+    try {
+      await downloadAndInstall(releaseInfo.downloadUrl, setUpdateProgress)
+    } catch (err: any) {
+      setUpdateError(err?.message || 'Download failed.')
+      setUpdateStatus('error')
+    }
+  }
 
   // Inspections that have been worked on enough to have meaningful transcription data
   const exportableInspections = inspections.filter(i =>
@@ -275,6 +315,60 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
               {!!user?.email && <Text style={s.profileEmail}>{user.email}</Text>}
             </View>
           </View>
+
+          {/* ── App Update ────────────────────────────────────────────────── */}
+          {Platform.OS === 'android' && (
+            <View style={s.section}>
+              <Text style={s.sectionLabel}>APP UPDATE</Text>
+              <View style={s.updateRow}>
+                <Text style={s.updateBuildText}>
+                  {getCurrentBuildNumber() > 0
+                    ? `Installed: build #${getCurrentBuildNumber()}`
+                    : 'Installed: dev build'}
+                </Text>
+                {updateStatus === 'up-to-date' && (
+                  <Text style={s.updateUpToDate}>Up to date</Text>
+                )}
+                {updateStatus === 'available' && releaseInfo && (
+                  <Text style={s.updateAvailableTag}>
+                    Build #{releaseInfo.buildNumber} available
+                  </Text>
+                )}
+              </View>
+
+              {updateStatus === 'error' && (
+                <Text style={s.updateError}>{updateError}</Text>
+              )}
+
+              {updateStatus === 'downloading' && (
+                <View style={s.progressBar}>
+                  <View style={[s.progressFill, { width: `${Math.round(updateProgress * 100)}%` as any }]} />
+                </View>
+              )}
+
+              {updateStatus !== 'downloading' && updateStatus !== 'available' && (
+                <TouchableOpacity
+                  style={[s.actionBtn, s.actionBtnUpdate, updateStatus === 'checking' && s.actionBtnDisabled]}
+                  onPress={handleCheckForUpdates}
+                  disabled={updateStatus === 'checking'}
+                >
+                  {updateStatus === 'checking'
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={s.actionBtnText}>Check for Updates</Text>
+                  }
+                </TouchableOpacity>
+              )}
+
+              {updateStatus === 'available' && (
+                <TouchableOpacity
+                  style={[s.actionBtn, s.actionBtnUpdate]}
+                  onPress={handleDownloadAndInstall}
+                >
+                  <Text style={s.actionBtnText}>Download & Install</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           {/* ── Change Password ────────────────────────────────────────────── */}
           <View style={s.section}>
@@ -528,6 +622,31 @@ const s = StyleSheet.create({
   checkInfo:   { flex: 1 },
   checkAddress: { fontSize: font.sm, fontWeight: '600', color: colors.text },
   checkMeta:    { fontSize: font.xs, color: colors.textMid, marginTop: 1 },
+
+  // Update section
+  updateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  updateBuildText:   { fontSize: font.xs, color: colors.textMid },
+  updateUpToDate:    { fontSize: font.xs, color: colors.accent, fontWeight: '600' },
+  updateAvailableTag:{ fontSize: font.xs, color: colors.primary, fontWeight: '700' },
+  updateError:       { fontSize: font.xs, color: colors.danger, marginBottom: spacing.xs },
+  actionBtnUpdate:   { backgroundColor: colors.primaryMid },
+  progressBar: {
+    height: 6,
+    backgroundColor: colors.muted,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: spacing.xs,
+  },
+  progressFill: {
+    height: 6,
+    backgroundColor: colors.primaryMid,
+    borderRadius: 3,
+  },
 
   // Footer
   footer: {

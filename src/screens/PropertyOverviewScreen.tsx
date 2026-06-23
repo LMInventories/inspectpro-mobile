@@ -12,7 +12,8 @@ import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption } from '../services/database'
 import { api } from '../services/api'
-import { syncSingleInspection, SyncProgress } from '../services/syncService'
+import { SyncProgress } from '../services/syncService'
+import { useSyncStore } from '../stores/syncStore'
 import { useAuthStore } from '../stores/authStore'
 import Header from '../components/Header'
 import SignaturePad from '../components/SignaturePad'
@@ -47,9 +48,10 @@ export default function PropertyOverviewScreen() {
   const { inspectionId } = route.params
   const { activeInspection, loadInspection, updateItemInReport, setReportData } = useInspectionStore()
   const { user } = useAuthStore()
-  const [starting, setStarting] = useState(false)
+  const { startSync, progress: storeProgress } = useSyncStore()
+  const [starting, setStarting]     = useState(false)
   const [finalising, setFinalising] = useState(false)
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
+  const [localSyncing, setLocalSyncing] = useState(false)
   const [showReview, setShowReview] = useState(false)
   const [reviewRooms, setReviewRooms] = useState<ReviewRoom[]>([])
   const [showSignature, setShowSignature] = useState(false)
@@ -346,17 +348,12 @@ export default function PropertyOverviewScreen() {
         {
           text: 'Sync Now',
           onPress: async () => {
-            setSyncProgress({ phase: 'photos', done: 0, total: 0 })
+            setLocalSyncing(true)
             try {
-              const result = await syncSingleInspection(inspectionId, inspection, user, setSyncProgress)
-              if (result.success) {
-                await loadInspection(inspectionId)
-                Alert.alert('Synced ✓', 'Report uploaded successfully.')
-              } else {
-                Alert.alert('Sync Failed', result.error || 'Something went wrong. Please try again.')
-              }
+              await startSync([inspection], user)
+              await loadInspection(inspectionId)
             } finally {
-              setSyncProgress(null)
+              setLocalSyncing(false)
             }
           },
         },
@@ -462,8 +459,8 @@ export default function PropertyOverviewScreen() {
                     )
                   })()}
 
-                  {syncProgress ? (
-                    <InlineSyncProgress progress={syncProgress} />
+                  {localSyncing ? (
+                    <InlineSyncProgress progress={storeProgress || { phase: 'uploading', done: 0, total: 1 }} />
                   ) : (
                     <TouchableOpacity
                       style={[styles.btnSecondary, styles.btnSync]}

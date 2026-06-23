@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Release APK
@@ -73,15 +76,23 @@ jobs:
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       # ── 9. Build APK ──────────────────────────────────────────────
+      # EXPO_PUBLIC_BUILD_NUMBER is baked into the JS bundle by Metro at build time
       - name: Build release APK
+        env:
+          EXPO_PUBLIC_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x android/gradlew
           cd android && ./gradlew assembleRelease --no-daemon
 
-      # ── 10. Upload ────────────────────────────────────────────────
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      # ── 10. Publish GitHub Release ────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: inspectpro-release-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
-          retention-days: 30
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          body: |
+            Automated build #${{ github.run_number }}
+            Commit: ${{ github.sha }}
+          files: android/app/build/outputs/apk/release/app-release.apk
