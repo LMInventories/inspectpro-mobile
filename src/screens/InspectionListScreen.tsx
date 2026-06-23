@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useState, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   RefreshControl, Alert, Image,
@@ -17,6 +17,15 @@ import CreatePropertyModal from '../components/CreatePropertyModal'
 import AccountModal from '../components/AccountModal'
 import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
+type SortMode = 'date-desc' | 'name-asc' | 'name-desc'
+
+function sortInspections(list: any[], mode: SortMode): any[] {
+  const copy = [...list]
+  if (mode === 'date-desc') return copy.sort((a, b) => new Date(b.conduct_date || 0).getTime() - new Date(a.conduct_date || 0).getTime())
+  if (mode === 'name-asc')  return copy.sort((a, b) => (a.property_address || '').localeCompare(b.property_address || ''))
+  return copy.sort((a, b) => (b.property_address || '').localeCompare(a.property_address || ''))
+}
+
 type Nav = StackNavigationProp<RootStackParamList, 'InspectionList'>
 
 export default function InspectionListScreen() {
@@ -28,6 +37,8 @@ export default function InspectionListScreen() {
 
   const isAdmin   = user?.role === 'admin'
   const isAM      = user?.role === 'admin' || user?.role === 'manager'
+  const [sortBy, setSortBy] = useState<SortMode>('date-desc')
+  const sortedInspections = useMemo(() => sortInspections(inspections, sortBy), [inspections, sortBy])
   const [fabOpen,         setFabOpen]         = useState(false)
   const [showCreateInsp,  setShowCreateInsp]  = useState(false)
   const [showCreateProp,  setShowCreateProp]  = useState(false)
@@ -178,6 +189,23 @@ export default function InspectionListScreen() {
         </View>
       </View>
 
+      {/* Sort row */}
+      {inspections.length > 0 && (
+        <View style={[styles.sortRow, dm.surface, { borderBottomColor: c.border }]}>
+          {(['date-desc', 'name-asc', 'name-desc'] as SortMode[]).map(mode => (
+            <TouchableOpacity
+              key={mode}
+              style={[styles.sortPill, sortBy === mode && styles.sortPillActive]}
+              onPress={() => setSortBy(mode)}
+            >
+              <Text style={[styles.sortPillText, sortBy === mode && styles.sortPillTextActive]}>
+                {mode === 'date-desc' ? 'Date ↓' : mode === 'name-asc' ? 'A → Z' : 'Z → A'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {inspections.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>📋</Text>
@@ -189,7 +217,7 @@ export default function InspectionListScreen() {
         </View>
       ) : (
         <FlatList
-          data={inspections}
+          data={sortedInspections}
           keyExtractor={i => String(i.id)}
           renderItem={renderItem}
           contentContainerStyle={[styles.list, isAM && { paddingBottom: 100 }]}
@@ -217,9 +245,6 @@ export default function InspectionListScreen() {
                   style={styles.fabActionRow}
                   onPress={() => { setFabOpen(false); setShowCreateProp(true) }}
                 >
-                  <View style={[styles.fabActionBtn, styles.fabBtnProperty]}>
-                    <Text style={styles.fabActionIcon}>🏠</Text>
-                  </View>
                   <View style={styles.fabActionLabel}>
                     <Text style={styles.fabActionLabelText}>New Property</Text>
                   </View>
@@ -229,9 +254,6 @@ export default function InspectionListScreen() {
                 style={styles.fabActionRow}
                 onPress={() => { setFabOpen(false); setShowCreateInsp(true) }}
               >
-                <View style={[styles.fabActionBtn, styles.fabBtnInspection]}>
-                  <Text style={styles.fabActionIcon}>📋</Text>
-                </View>
                 <View style={styles.fabActionLabel}>
                   <Text style={styles.fabActionLabelText}>New Inspection</Text>
                 </View>
@@ -324,15 +346,33 @@ const styles = StyleSheet.create({
   btnPrimary: { backgroundColor: colors.primary, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: 12, alignItems: 'center', minWidth: 180 },
   btnPrimaryText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
 
+  sortRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+  },
+  sortPill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  sortPillActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  sortPillText:       { fontSize: font.xs, fontWeight: '600', color: colors.textMid },
+  sortPillTextActive: { color: colors.primary },
+
   // Speed-dial FAB
   fabWrap:      { position: 'absolute', right: 20, alignItems: 'flex-end' },
   fabBackdrop:  { position: 'absolute', top: -9999, left: -9999, right: -9999, bottom: -9999 },
   fabActions:   { alignItems: 'flex-end', gap: spacing.sm, marginBottom: spacing.sm },
   fabActionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  fabActionBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
-  fabBtnProperty:   { backgroundColor: '#10b981' },
-  fabBtnInspection: { backgroundColor: colors.primary },
-  fabActionIcon: { fontSize: 20 },
   fabActionLabel: { backgroundColor: 'rgba(15,23,42,0.88)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.sm },
   fabActionLabelText: { color: '#f1f5f9', fontSize: font.sm, fontWeight: '600' },
   fab:       { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 6, elevation: 6 },

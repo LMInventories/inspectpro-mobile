@@ -284,20 +284,23 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
           style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
         />
 
-        {/* Zoom buttons — right edge of preview */}
+        {/* Zoom buttons — right edge of preview, highest zoom at top */}
         <View style={styles.zoomBtns}>
-          {zoomPresets.map((preset, idx) => (
-            <TouchableOpacity
-              key={preset.label}
-              style={[styles.zoomBtn, zoomIdx === idx && styles.zoomBtnActive]}
-              onPress={() => selectZoom(idx)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.zoomBtnText, zoomIdx === idx && styles.zoomBtnTextActive]}>
-                {preset.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {[...zoomPresets].reverse().map((preset) => {
+            const idx = zoomPresets.indexOf(preset)
+            return (
+              <TouchableOpacity
+                key={preset.label}
+                style={[styles.zoomBtn, zoomIdx === idx && styles.zoomBtnActive]}
+                onPress={() => selectZoom(idx)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.zoomBtnText, zoomIdx === idx && styles.zoomBtnTextActive]}>
+                  {preset.label}
+                </Text>
+              </TouchableOpacity>
+            )
+          })}
         </View>
       </View>
 

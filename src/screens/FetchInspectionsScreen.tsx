@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Modal, Switch,
@@ -75,7 +75,23 @@ async function extractBase64PhotosToFiles(inspectionId: number, rd: any): Promis
  * file:// paths. Runs after extractBase64PhotosToFiles so S3-hosted photos from
  * completed source inspections are also available offline during check-out.
  */
-async function downloadRemotePhotosToFiles(inspectionId: number, rd: any): Promise<any> {
+function countRemotePhotos(rd: any): number {
+  let n = 0
+  for (const sKey of Object.keys(rd)) {
+    const section = rd[sKey]
+    if (!section || typeof section !== 'object' || Array.isArray(section)) continue
+    for (const iKey of Object.keys(section)) {
+      const item = section[iKey]
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      if (Array.isArray(item._photos)) {
+        n += item._photos.filter((u: string) => typeof u === 'string' && u.startsWith('https://')).length
+      }
+    }
+  }
+  return n
+}
+
+async function downloadRemotePhotosToFiles(inspectionId: number, rd: any, onPhoto?: () => void): Promise<any> {
   const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
   let dirReady = false
 
@@ -105,8 +121,11 @@ async function downloadRemotePhotosToFiles(inspectionId: number, rd: any): Promi
           try {
             const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
             const result = await FileSystem.downloadAsync(uri, dest)
-            return result.status === 200 ? result.uri : uri
+            const out = result.status === 200 ? result.uri : uri
+            onPhoto?.()
+            return out
           } catch {
+            onPhoto?.()
             return uri  // keep remote URL as fallback
           }
         })
@@ -114,6 +133,23 @@ async function downloadRemotePhotosToFiles(inspectionId: number, rd: any): Promi
     }
   }
   return rd
+}
+
+type SortMode = 'date-desc' | 'name-asc' | 'name-desc'
+
+type FetchProgress = {
+  current: number
+  total: number
+  address: string
+  photosDone: number
+  photosTotal: number
+}
+
+function sortList(list: any[], mode: SortMode): any[] {
+  const copy = [...list]
+  if (mode === 'date-desc') return copy.sort((a, b) => new Date(b.conduct_date || 0).getTime() - new Date(a.conduct_date || 0).getTime())
+  if (mode === 'name-asc')  return copy.sort((a, b) => (a.property_address || '').localeCompare(b.property_address || ''))
+  return copy.sort((a, b) => (b.property_address || '').localeCompare(a.property_address || ''))
 }
 
 type Nav = StackNavigationProp<RootStackParamList, 'FetchInspections'>
@@ -127,13 +163,17 @@ export default function FetchInspectionsScreen() {
   const [selected, setSelected]       = useState<Set<number>>(new Set())
   const [loading, setLoading]         = useState(false)
   const [fetching, setFetching]       = useState(false)
+  const [fetchProgress, setFetchProgress] = useState<FetchProgress | null>(null)
   const [results, setResults]         = useState<{ id: number; address: string; success: boolean; error?: string }[] | null>(null)
   const [confirmModal, setConfirmModal] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
+  const [sortBy, setSortBy]           = useState<SortMode>('date-desc')
 
   const displayList = showComplete
     ? serverList
     : serverList.filter(i => i.status !== 'complete')
+
+  const sortedList = useMemo(() => sortList(displayList, sortBy), [displayList, sortBy])
 
   function toggleShowComplete(val: boolean) {
     setShowComplete(val)
@@ -179,17 +219,19 @@ export default function FetchInspectionsScreen() {
   }
 
   function toggleAll() {
-    if (selected.size === displayList.length) {
+    if (selected.size === sortedList.length) {
       setSelected(new Set())
     } else {
-      setSelected(new Set(displayList.map(i => i.id)))
+      setSelected(new Set(sortedList.map(i => i.id)))
     }
   }
 
   async function runFetch() {
     setConfirmModal(false)
     setFetching(true)
+    setFetchProgress(null)
     const res: { id: number; address: string; success: boolean; error?: string }[] = []
+    const total = selected.size
 
     // Fetch both fixed and midterm sections once before the loop.
     // We embed the appropriate copy in each downloaded inspection for offline use.
@@ -208,9 +250,12 @@ export default function FetchInspectionsScreen() {
       console.warn('[FetchInspections] Could not pre-fetch midterm sections:', msErr)
     }
 
+    let current = 0
     for (const id of Array.from(selected)) {
       const inspection = serverList.find(i => i.id === id)
       if (!inspection) continue
+      current++
+      setFetchProgress({ current, total, address: inspection.property_address || '', photosDone: 0, photosTotal: 0 })
       try {
         // Fetch full inspection detail (includes property.overview_photo)
         const detail = await api.getInspection(id)
@@ -274,10 +319,16 @@ export default function FetchInspectionsScreen() {
             if (srcRd) {
               try {
                 const srcRdObj = typeof srcRd === 'string' ? JSON.parse(srcRd) : srcRd
-                // Extract any base64 data URIs → local files
-                let processed = await extractBase64PhotosToFiles(d.source_inspection_id, srcRdObj)
-                // Download any S3/HTTPS photo URLs → local files
-                processed = await downloadRemotePhotosToFiles(d.source_inspection_id, processed)
+                // Store CI photos under the CO inspection's own directory (not the CI's)
+                // so they're isolated and can be cleanly deleted when the CO report syncs.
+                let processed = await extractBase64PhotosToFiles(id, srcRdObj)
+                const photosTotal = countRemotePhotos(processed)
+                if (photosTotal > 0) {
+                  setFetchProgress(p => p ? { ...p, photosTotal, photosDone: 0 } : p)
+                }
+                processed = await downloadRemotePhotosToFiles(id, processed, () => {
+                  setFetchProgress(p => p ? { ...p, photosDone: p.photosDone + 1 } : p)
+                })
                 normalised.source_report_data = JSON.stringify(processed)
               } catch (rdErr) {
                 console.warn('[FetchInspections] Could not cache source CI photos:', rdErr)
@@ -328,6 +379,7 @@ export default function FetchInspectionsScreen() {
     setLocalIds(new Set(local.map((i: any) => i.id)))
     setSelected(new Set())
     setFetching(false)
+    setFetchProgress(null)
     setResults(res)
   }
 
@@ -416,17 +468,31 @@ export default function FetchInspectionsScreen() {
             />
           </View>
 
+          <View style={styles.sortRow}>
+            {(['date-desc', 'name-asc', 'name-desc'] as SortMode[]).map(mode => (
+              <TouchableOpacity
+                key={mode}
+                style={[styles.sortPill, sortBy === mode && styles.sortPillActive]}
+                onPress={() => setSortBy(mode)}
+              >
+                <Text style={[styles.sortPillText, sortBy === mode && styles.sortPillTextActive]}>
+                  {mode === 'date-desc' ? 'Date ↓' : mode === 'name-asc' ? 'A → Z' : 'Z → A'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
           <View style={styles.listHeader}>
-            <Text style={styles.listCount}>{displayList.length} inspection{displayList.length !== 1 ? 's' : ''} available</Text>
+            <Text style={styles.listCount}>{sortedList.length} inspection{sortedList.length !== 1 ? 's' : ''} available</Text>
             <TouchableOpacity onPress={toggleAll}>
               <Text style={styles.toggleAll}>
-                {selected.size === displayList.length ? 'Deselect All' : 'Select All'}
+                {selected.size === sortedList.length ? 'Deselect All' : 'Select All'}
               </Text>
             </TouchableOpacity>
           </View>
 
           <FlatList
-            data={displayList}
+            data={sortedList}
             keyExtractor={i => String(i.id)}
             renderItem={renderItem}
             contentContainerStyle={styles.list}
@@ -434,19 +500,45 @@ export default function FetchInspectionsScreen() {
             onRefresh={loadServer}
           />
 
+          {fetching && fetchProgress && (
+            <View style={styles.progressBanner}>
+              <View style={styles.progressHeader}>
+                <Text style={styles.progressTitle}>
+                  Downloading {fetchProgress.current} of {fetchProgress.total}
+                </Text>
+                <Text style={styles.progressAddress} numberOfLines={1}>
+                  {fetchProgress.address}
+                </Text>
+              </View>
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${Math.round((fetchProgress.current / fetchProgress.total) * 100)}%` as any }]} />
+              </View>
+              {fetchProgress.photosTotal > 0 && (
+                <>
+                  <Text style={styles.progressPhotos}>
+                    Photos {fetchProgress.photosDone}/{fetchProgress.photosTotal}
+                  </Text>
+                  <View style={styles.progressBarBg}>
+                    <View style={[styles.progressBarFill, styles.progressBarPhotoFill, {
+                      width: `${Math.round((fetchProgress.photosDone / fetchProgress.photosTotal) * 100)}%` as any,
+                    }]} />
+                  </View>
+                </>
+              )}
+            </View>
+          )}
+
           <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
             <TouchableOpacity
               style={[styles.fetchBtn, (selected.size === 0 || fetching) && styles.fetchBtnDisabled]}
               onPress={() => { if (selected.size > 0) setConfirmModal(true) }}
               disabled={selected.size === 0 || fetching}
             >
-              {fetching ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.fetchBtnText}>
-                  ↓ Download {selected.size > 0 ? `${selected.size} Inspection${selected.size !== 1 ? 's' : ''}` : ''}
-                </Text>
-              )}
+              <Text style={styles.fetchBtnText}>
+                {fetching
+                  ? 'Downloading…'
+                  : `↓ Download ${selected.size > 0 ? `${selected.size} Inspection${selected.size !== 1 ? 's' : ''}` : ''}`}
+              </Text>
             </TouchableOpacity>
           </View>
         </>
@@ -523,6 +615,45 @@ const styles = StyleSheet.create({
   badges: { flexDirection: 'row', gap: spacing.xs, marginTop: 4, flexWrap: 'wrap' },
   localBadge: { backgroundColor: colors.successLight, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
   localBadgeText: { fontSize: 10, color: colors.success, fontWeight: '700' },
+  sortRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  sortPill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  sortPillActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  sortPillText: { fontSize: font.xs, fontWeight: '600', color: colors.textMid },
+  sortPillTextActive: { color: colors.primary },
+
+  progressBanner: {
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    padding: spacing.md,
+    gap: 6,
+  },
+  progressHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: spacing.sm },
+  progressTitle:  { fontSize: font.sm, fontWeight: '700', color: colors.text },
+  progressAddress:{ fontSize: font.xs, color: colors.textMid, flex: 1, textAlign: 'right' },
+  progressBarBg:  { height: 6, backgroundColor: colors.muted, borderRadius: 3, overflow: 'hidden' },
+  progressBarFill:{ height: 6, backgroundColor: colors.primary, borderRadius: 3 },
+  progressBarPhotoFill: { backgroundColor: colors.accent },
+  progressPhotos: { fontSize: font.xs, color: colors.textMid, fontWeight: '600', marginTop: 2 },
+
   footer: { padding: spacing.md, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border },
   fetchBtn: { backgroundColor: colors.primary, borderRadius: radius.md, padding: 14, alignItems: 'center' },
   fetchBtnDisabled: { backgroundColor: colors.borderDark },

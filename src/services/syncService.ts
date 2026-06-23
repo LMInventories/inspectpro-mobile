@@ -239,6 +239,23 @@ export async function uploadPhotosToS3(
   return rd
 }
 
+// ── Photo cleanup — delete the inspection's local photo directory after sync ──
+// Photos are stored in the app's private documentDirectory (never in the device
+// gallery) and are only needed until the report reaches the server. Once synced,
+// S3 URLs in the server's report_data are the source of truth.
+async function cleanupPhotoFiles(inspectionId: number): Promise<void> {
+  const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+  try {
+    const info = await FileSystem.getInfoAsync(dir)
+    if (info.exists) {
+      await FileSystem.deleteAsync(dir, { idempotent: true })
+      console.log(`[Sync] deleted photo directory for inspection ${inspectionId}`)
+    }
+  } catch (e) {
+    console.warn(`[Sync] could not delete photo directory for inspection ${inspectionId}:`, e)
+  }
+}
+
 // ── Audio cleanup — delete local files after successful server sync ───────────
 async function cleanupAudioFiles(inspectionId: number): Promise<void> {
   try {
@@ -421,6 +438,11 @@ export async function syncSingleInspection(
     if (totalAudio > 0) {
       await cleanupAudioFiles(id)
     }
+
+    // Delete the entire local photo directory — photos are now on S3.
+    // This covers both the inspection's own photos and any CI photos
+    // cached for check-out reference (all stored under photos/{id}/).
+    await cleanupPhotoFiles(id)
 
     return { id, address: inspection.property_address, success: true }
 
