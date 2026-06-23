@@ -17,6 +17,7 @@
       "bundleIdentifier": "uk.co.lminventories.inspectpro"
     },
     "android": {
+      "softwareKeyboardLayoutMode": "adjustNothing",
       "adaptiveIcon": {
         "foregroundImage": "./assets/favicon.png",
         "backgroundColor": "#ffffff"

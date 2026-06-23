@@ -146,6 +146,10 @@ export default function RoomInspectionScreen() {
   // Y-position + height cache for each item card, populated via onLayout.
   const itemLayoutsRef = useRef<Map<string, number>>(new Map())
   const itemHeightsRef = useRef<Map<string, number>>(new Map())
+  // Y of each item's subsContainer within its item card (keyed by item.id).
+  const subContainerLayoutsRef = useRef<Map<string, number>>(new Map())
+  // Y of each sub-item within its subsContainer (keyed by sub._sid).
+  const subItemLayoutsRef = useRef<Map<string, number>>(new Map())
 
   // Overview section layout — so the floating camera can assign to Room Overview
   // when it is the majority-visible section (not just a fallback when no items show).
@@ -303,37 +307,41 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  function handleTextFocus(itemId: string) {
-    const y = itemLayoutsRef.current.get(itemId)
-    if (y === undefined) return
-    // Scroll the item to near the top of the visible area so the keyboard cannot
-    // overlap it regardless of keyboard height or adjustment mode.
-    const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 40), animated: true })
+  function handleTextFocus(itemId: string, sid?: string) {
+    const itemY = itemLayoutsRef.current.get(itemId)
+    if (itemY === undefined) return
+    // For sub-items: scroll to the sub-item's position in scroll space.
+    // subContainerLayoutsRef gives the subsContainer's Y within the item card,
+    // subItemLayoutsRef gives the sub-item's Y within the subsContainer.
+    const subOffset = sid
+      ? (subContainerLayoutsRef.current.get(itemId) ?? 0) + (subItemLayoutsRef.current.get(sid) ?? 0)
+      : 0
+    const y = itemY + subOffset
+    // Pull the target to the very top of the visible area (8 px breathing room).
+    const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
 
     if (Platform.OS === 'android') {
-      // Wait for keyboard to finish appearing before scrolling so the content
-      // area has been resized (or padded) and the scroll target is correct.
-      let done = false
-      const sub = Keyboard.addListener('keyboardDidShow', () => {
-        if (done) return
-        done = true
-        sub.remove()
+      if (keyboardHeight > 0) {
+        // Keyboard already visible (switching between inputs) — scroll straight away.
         doScroll()
-      })
-      // Fallback if keyboard is already visible (switching between inputs)
-      setTimeout(() => {
-        if (done) return
-        done = true
-        sub.remove()
-        doScroll()
-      }, 400)
+      } else {
+        // Keyboard not yet visible. Wait for it to finish appearing, then give React
+        // one frame to apply the paddingBottom re-render before scrolling, otherwise
+        // scrollTo runs against the old (shorter) content height and stops short.
+        const sub = Keyboard.addListener('keyboardDidShow', () => {
+          sub.remove()
+          setTimeout(doScroll, 50)
+        })
+      }
     } else {
-      // iOS: keyboard animation is ~250 ms; scroll after it finishes
+      // iOS: keyboard animation is ~250 ms; scroll after it finishes.
       setTimeout(doScroll, 260)
     }
   }
 
   async function buildItems() {
+    subItemLayoutsRef.current.clear()
+    subContainerLayoutsRef.current.clear()
     setLoading(true)
     try {
       // Read fresh from DB — avoids store race condition
@@ -549,12 +557,12 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  function getReportData() {
-    // Always read from activeInspection store — store is updated synchronously
-    // by setReportData so this is always current within a session
+  const parsedReportData = useMemo(() => {
     if (!activeInspection?.report_data) return {}
     try { return JSON.parse(activeInspection.report_data) } catch { return {} }
-  }
+  }, [activeInspection?.report_data])
+
+  function getReportData() { return parsedReportData }
 
   function getField(itemId: string, field: string) {
     const rd = getReportData()
@@ -2542,12 +2550,19 @@ export default function RoomInspectionScreen() {
 
         {/* Sub-items — only for room items */}
         {sectionType_ === 'room' && getSubs(item.id).length > 0 && (
-          <View style={styles.subsContainer}>
+          <View
+            style={styles.subsContainer}
+            onLayout={(e) => subContainerLayoutsRef.current.set(item.id, e.nativeEvent.layout.y)}
+          >
             <View style={styles.subsDivider} />
             {getSubs(item.id).map((sub: any, idx: number) => (
               isCheckOut_ ? (
                 /* ── CHECK OUT sub-item: read-only CI fields + editable CO condition ── */
-                <View key={sub._sid} style={styles.subItem}>
+                <View
+                  key={sub._sid}
+                  style={styles.subItem}
+                  onLayout={(e) => subItemLayoutsRef.current.set(sub._sid, e.nativeEvent.layout.y)}
+                >
                   <View style={styles.subItemHeader}>
                     <Text style={styles.subItemTitle} numberOfLines={1}>
                       {sub.description ? sub.description.split('\n')[0] : `Sub-item ${idx + 1}`}
@@ -2574,7 +2589,7 @@ export default function RoomInspectionScreen() {
                       style={[styles.notesInput, dm.input]}
                       value={sub.checkOutCondition || ''}
                       onFocus={() => {
-                        handleTextFocus(item.id)
+                        handleTextFocus(item.id, sub._sid)
                         if (!sub.checkOutCondition) {
                           setSubField(item.id, sub._sid, 'checkOutCondition', 'As Inventory+')
                         }
@@ -2648,7 +2663,11 @@ export default function RoomInspectionScreen() {
                 </View>
               ) : (
                 /* ── CHECK IN sub-item: editable description + condition ── */
-                <View key={sub._sid} style={styles.subItem}>
+                <View
+                  key={sub._sid}
+                  style={styles.subItem}
+                  onLayout={(e) => subItemLayoutsRef.current.set(sub._sid, e.nativeEvent.layout.y)}
+                >
                   <View style={styles.subItemHeader}>
                     <Text style={styles.subItemTitle}>—</Text>
                     <TouchableOpacity onPress={() => removeSubItem(item.id, sub._sid)}>
@@ -2660,7 +2679,7 @@ export default function RoomInspectionScreen() {
                     <TextInput
                       style={[styles.notesInput, dm.input]}
                       value={sub.description}
-                      onFocus={() => handleTextFocus(item.id)}
+                      onFocus={() => handleTextFocus(item.id, sub._sid)}
                       onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
                       placeholder="Describe sub-item…"
                       placeholderTextColor={c.textLight}
@@ -2672,7 +2691,7 @@ export default function RoomInspectionScreen() {
                     <TextInput
                       style={[styles.notesInput, dm.input]}
                       value={sub.condition}
-                      onFocus={() => handleTextFocus(item.id)}
+                      onFocus={() => handleTextFocus(item.id, sub._sid)}
                       onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn…"
                       placeholderTextColor={c.textLight}

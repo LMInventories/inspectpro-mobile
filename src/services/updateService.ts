@@ -16,7 +16,15 @@ export function getCurrentBuildNumber(): number {
   return raw ? parseInt(raw, 10) : 0
 }
 
+const RELEASE_CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
+let releaseCache: { info: ReleaseInfo; checkedAt: number } | null = null
+
 export async function fetchLatestRelease(): Promise<ReleaseInfo> {
+  const now = Date.now()
+  if (releaseCache && now - releaseCache.checkedAt < RELEASE_CACHE_TTL_MS) {
+    return releaseCache.info
+  }
+
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
   const res = await fetch(url, {
     headers: { Accept: 'application/vnd.github+json' },
@@ -31,11 +39,13 @@ export async function fetchLatestRelease(): Promise<ReleaseInfo> {
   const apkAsset = (data.assets ?? []).find((a: any) =>
     (a.name as string).endsWith('.apk')
   )
-  return {
+  const info: ReleaseInfo = {
     buildNumber,
     tagName,
     downloadUrl: apkAsset?.browser_download_url ?? null,
   }
+  releaseCache = { info, checkedAt: now }
+  return info
 }
 
 export async function downloadAndInstall(

@@ -47,7 +47,7 @@ interface Props {
   onCapture: (uri: string, fallback?: boolean) => void
 }
 
-export default function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
+function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const { width: screenW, height: screenH } = useWindowDimensions()
   const isFocused    = useIsFocused()
   const insets       = useSafeAreaInsets()
@@ -432,3 +432,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
 })
+
+export default React.memo(FloatingCameraPreview)
