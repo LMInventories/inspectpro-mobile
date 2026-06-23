@@ -20,6 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
+import { useToastStore } from '../stores/toastStore'
 
 // Preview dimensions — 50% larger than before
 const PREVIEW_W = 462
@@ -43,7 +44,7 @@ interface ZoomPreset {
 
 interface Props {
   inspectionId: number
-  onCapture: (uri: string) => void
+  onCapture: (uri: string, fallback?: boolean) => void
 }
 
 export default function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
@@ -184,15 +185,28 @@ export default function FloatingCameraPreview({ inspectionId, onCapture }: Props
         skipMetadata: true,
       } as any)
 
-      const srcUri = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`
-      capturingRef.current = false
-
+      const rawPath = photo.path
+      const srcUri = rawPath.startsWith('file://') || rawPath.startsWith('content://')
+        ? rawPath
+        : `file://${rawPath}`
       const dest = `${photoDirRef.current}${Date.now()}_float.jpg`
-      FileSystem.copyAsync({ from: srcUri, to: dest })
-        .then(() => onCapture(dest))
-        .catch(() => onCapture(srcUri))
+
+      try {
+        // Ensure directory exists — on some devices (e.g. Oppo/ColorOS) the async
+        // makeDirectoryAsync in the useEffect may not have settled before the first capture.
+        await FileSystem.makeDirectoryAsync(photoDirRef.current, { intermediates: true })
+        await FileSystem.copyAsync({ from: srcUri, to: dest })
+        onCapture(dest)
+      } catch (copyErr) {
+        // Copy failed (device-specific path/permission issue). Send to Room Overview so the
+        // user still has the photo and can manually reassign — don't silently drop it.
+        console.warn('[FloatingCamera] copy failed, routing to Room Overview', copyErr)
+        onCapture(srcUri, true)
+      }
     } catch (err) {
       console.error('[FloatingCamera] capture error', err)
+      useToastStore.getState().showToast('Camera failed', 'error')
+    } finally {
       capturingRef.current = false
     }
   }, [activeDevice, onCapture])

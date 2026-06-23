@@ -621,8 +621,8 @@ export default function RoomInspectionScreen() {
     return bestId
   }
 
-  async function handleFloatingCapture(fileUri: string) {
-    const itemId   = getMajorityItemId()
+  const handleFloatingCapture = useCallback(async (fileUri: string, fallback?: boolean) => {
+    const itemId = fallback ? null : getMajorityItemId()
     const itemName = itemId
       ? (items.find((it: any) => String(it.id) === String(itemId))?.label ||
          items.find((it: any) => String(it.id) === String(itemId))?.name ||
@@ -633,9 +633,13 @@ export default function RoomInspectionScreen() {
       useToastStore.getState().showToast(`Photo assigned to ${itemName}`, 'success')
     } else {
       await addOverviewPhotoUri(fileUri)
-      useToastStore.getState().showToast('Photo assigned to Room Overview', 'success')
+      useToastStore.getState().showToast(
+        fallback ? 'Photo saved to Room Overview — reassign if needed' : 'Photo assigned to Room Overview',
+        fallback ? 'info' : 'success',
+      )
     }
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items])
 
   async function addPhotoUri(itemId: string, fileUri: string) {
     // MUST await — getLocalInspection is async; without await fresh is a Promise,

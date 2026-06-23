@@ -21,7 +21,7 @@ type SortMode = 'date-desc' | 'name-asc' | 'name-desc'
 
 function sortInspections(list: any[], mode: SortMode): any[] {
   const copy = [...list]
-  if (mode === 'date-desc') return copy.sort((a, b) => new Date(b.conduct_date || 0).getTime() - new Date(a.conduct_date || 0).getTime())
+  if (mode === 'date-desc') return copy.sort((a, b) => new Date(a.conduct_date || 0).getTime() - new Date(b.conduct_date || 0).getTime())
   if (mode === 'name-asc')  return copy.sort((a, b) => (a.property_address || '').localeCompare(b.property_address || ''))
   return copy.sort((a, b) => (b.property_address || '').localeCompare(a.property_address || ''))
 }
@@ -199,7 +199,7 @@ export default function InspectionListScreen() {
               onPress={() => setSortBy(mode)}
             >
               <Text style={[styles.sortPillText, sortBy === mode && styles.sortPillTextActive]}>
-                {mode === 'date-desc' ? 'Date ↓' : mode === 'name-asc' ? 'A → Z' : 'Z → A'}
+                {mode === 'date-desc' ? 'Date ↑' : mode === 'name-asc' ? 'A → Z' : 'Z → A'}
               </Text>
             </TouchableOpacity>
           ))}
