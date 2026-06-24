@@ -121,6 +121,11 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   }, [mainDevice?.id, ultraWideDevice?.id, hasSeparateUltraWide, hasZoomUltraWide])
 
   const [zoomIdx, setZoomIdx] = useState(0)
+  const [flashMode, setFlashMode] = useState<'off' | 'on' | 'auto'>('off')
+
+  function cycleFlash() {
+    setFlashMode(m => m === 'off' ? 'on' : m === 'on' ? 'auto' : 'off')
+  }
 
   useEffect(() => {
     const idx = zoomPresets.findIndex(p => p.label === '1×')
@@ -180,7 +185,7 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
     dimShutter()
     try {
       const photo = await cameraRef.current.takePhoto({
-        flash: 'off',
+        flash: activeDevice?.hasFlash ? flashMode : 'off',
         enableShutterSound: false,
         skipMetadata: true,
       } as any)
@@ -318,13 +323,24 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
         </View>
       </View>
 
-      {/* Shutter — right of preview, vertically centred */}
+      {/* Shutter + flash toggle — right of preview */}
       <View style={styles.shutterArea}>
         <Animated.View style={{ opacity: shutterOpacity }}>
           <TouchableOpacity style={styles.shutter} onPressIn={handleCapture} activeOpacity={1}>
             <View style={styles.shutterInner} />
           </TouchableOpacity>
         </Animated.View>
+        {activeDevice?.hasFlash && (
+          <TouchableOpacity
+            style={[styles.flashBtn, flashMode !== 'off' && styles.flashBtnActive]}
+            onPress={cycleFlash}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.flashBtnText, flashMode !== 'off' && styles.flashBtnTextActive]}>
+              {flashMode === 'off' ? '⚡ Off' : flashMode === 'on' ? '⚡ On' : '⚡ Auto'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
     </Animated.View>
   )
@@ -360,6 +376,7 @@ const styles = StyleSheet.create({
     width: SHUTTER_SIZE + SHUTTER_MARGIN,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
   },
   shutter: {
     width: SHUTTER_SIZE,
@@ -383,6 +400,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderWidth: 2,
     borderColor: '#ddd',
+  },
+
+  flashBtn: {
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    alignItems: 'center',
+    minWidth: SHUTTER_SIZE,
+  },
+  flashBtnActive: {
+    backgroundColor: 'rgba(255,220,0,0.85)',
+  },
+  flashBtnText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  flashBtnTextActive: {
+    color: '#111',
   },
 
   zoomBtns: {

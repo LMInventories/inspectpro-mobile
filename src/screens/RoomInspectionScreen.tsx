@@ -607,14 +607,22 @@ export default function RoomInspectionScreen() {
     const visibleTop = scrollY
     const visibleBot = scrollY + winHeight
     let bestId: string | null = null
-    let bestOverlap = 0
+    let bestRatio   = 0
+    let bestAbsOverlap = 0
 
-    // Check each room item
+    // Only consider items still in the active items list — layout refs may lag deletions
+    const activeIds = new Set(items.map((it: any) => String(it.id)))
+
     for (const [id, y] of itemLayoutsRef.current) {
+      if (!activeIds.has(String(id))) continue  // skip deleted/moved items
       const h       = itemHeightsRef.current.get(id) ?? 150
       const overlap = Math.max(0, Math.min(visibleBot, y + h) - Math.max(visibleTop, y))
       const ratio   = h > 0 ? overlap / h : 0
-      if (ratio > bestOverlap) { bestOverlap = ratio; bestId = id }
+      // Primary: highest ratio of the item's own height that is visible
+      // Tiebreaker: largest absolute overlap (bigger item wins when ratios are equal)
+      if (ratio > bestRatio || (ratio === bestRatio && overlap > bestAbsOverlap)) {
+        bestRatio = ratio; bestAbsOverlap = overlap; bestId = id
+      }
     }
 
     // Also check the overview block — if it is more visible than any item, assign
@@ -623,19 +631,21 @@ export default function RoomInspectionScreen() {
       const { y: ovy, h: ovh } = overviewLayoutRef.current
       const ovOverlap = Math.max(0, Math.min(visibleBot, ovy + ovh) - Math.max(visibleTop, ovy))
       const ovRatio   = ovh > 0 ? ovOverlap / ovh : 0
-      if (ovRatio > bestOverlap) return null
+      if (ovRatio > bestRatio) return null
     }
 
     return bestId
   }
 
   const handleFloatingCapture = useCallback(async (fileUri: string, fallback?: boolean) => {
-    const itemId = fallback ? null : getMajorityItemId()
-    const itemName = itemId
-      ? (items.find((it: any) => String(it.id) === String(itemId))?.label ||
-         items.find((it: any) => String(it.id) === String(itemId))?.name ||
-         'item')
+    const candidateId = fallback ? null : getMajorityItemId()
+    // Safety net: reject any ID that is no longer in the active items list
+    // (layout refs can briefly lag a deletion before the React re-render fires onLayout)
+    const activeItem = candidateId
+      ? items.find((it: any) => String(it.id) === String(candidateId))
       : null
+    const itemId   = activeItem ? candidateId : null
+    const itemName = activeItem?.label || activeItem?.name || null
     if (itemId) {
       await addPhotoUri(itemId, fileUri)
       useToastStore.getState().showToast(`Photo assigned to ${itemName}`, 'success')
@@ -1055,6 +1065,8 @@ export default function RoomInspectionScreen() {
       // deletions alongside any other fills — avoids a second write overwriting _deleted.
       if ((fields as any)._delete === true || isNoneSeen(fields)) {
         setItems(prev => prev.filter(i => i.id !== itemId))
+        itemLayoutsRef.current.delete(itemId)
+        itemHeightsRef.current.delete(itemId)
         if (rd[sectionKey][String(itemId)]) delete rd[sectionKey][String(itemId)]
         if (rd[sectionKey]['_extra']) {
           rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
@@ -1468,6 +1480,8 @@ export default function RoomInspectionScreen() {
 
   async function deleteItemImmediate(itemId: string) {
     setItems(prev => prev.filter(i => i.id !== itemId))
+    itemLayoutsRef.current.delete(itemId)
+    itemHeightsRef.current.delete(itemId)
     const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
@@ -1729,6 +1743,8 @@ export default function RoomInspectionScreen() {
       // Single DB write — item can never exist in both rooms simultaneously
       setReportData(inspectionId, rd)
       setItems(prev => prev.filter(i => i.id !== itemId))
+      itemLayoutsRef.current.delete(itemId)
+      itemHeightsRef.current.delete(itemId)
 
       const targetName = copyRoomsList.find(r => r.key === moveTargetKey)?.name || 'room'
       setMoveItemModal(null)

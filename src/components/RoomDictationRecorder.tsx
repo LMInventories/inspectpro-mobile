@@ -380,21 +380,24 @@ export default function RoomDictationRecorder({
         })),
       })
 
-      const { filled } = response.data as {
+      const { filled, transcript: whisperTranscript } = response.data as {
         transcript: string
         filled: Record<string, { description?: string; condition?: string }>
       }
 
       const count = Object.keys(filled).length
       if (count === 0) {
-        Alert.alert('Nothing filled', 'AI could not match dictation to room items. Please try again.')
+        const preview = whisperTranscript
+          ? `\n\nWhisper heard:\n"${whisperTranscript.slice(0, 200)}${whisperTranscript.length > 200 ? '…' : ''}"`
+          : ''
+        Alert.alert('Nothing filled', `AI could not match dictation to room items. Please say each item name alone as a heading before describing it.${preview}`)
         setMode('paused')
         return
       }
 
       // Snapshot clips before clearing — needed for deletion after the async await
       const clipsToDelete = [...clips]
-      const fullTranscript: string = (response.data as any).transcript || ''
+      const fullTranscript: string = whisperTranscript || ''
 
       await onTranscribed(filled, fullTranscript)
 
