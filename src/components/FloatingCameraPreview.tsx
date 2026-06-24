@@ -214,7 +214,7 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
     } finally {
       capturingRef.current = false
     }
-  }, [activeDevice, onCapture])
+  }, [activeDevice, flashMode, onCapture])
 
   useEffect(() => {
     if (!hasPermission) requestPermission()
@@ -403,12 +403,12 @@ const styles = StyleSheet.create({
   },
 
   flashBtn: {
+    width: SHUTTER_SIZE,
+    height: SHUTTER_SIZE,
+    borderRadius: 12,
     backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
     alignItems: 'center',
-    minWidth: SHUTTER_SIZE,
+    justifyContent: 'center',
   },
   flashBtnActive: {
     backgroundColor: 'rgba(255,220,0,0.85)',

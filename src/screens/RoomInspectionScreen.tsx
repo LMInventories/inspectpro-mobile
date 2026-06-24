@@ -607,8 +607,7 @@ export default function RoomInspectionScreen() {
     const visibleTop = scrollY
     const visibleBot = scrollY + winHeight
     let bestId: string | null = null
-    let bestRatio   = 0
-    let bestAbsOverlap = 0
+    let bestOverlap = 0
 
     // Only consider items still in the active items list — layout refs may lag deletions
     const activeIds = new Set(items.map((it: any) => String(it.id)))
@@ -617,21 +616,16 @@ export default function RoomInspectionScreen() {
       if (!activeIds.has(String(id))) continue  // skip deleted/moved items
       const h       = itemHeightsRef.current.get(id) ?? 150
       const overlap = Math.max(0, Math.min(visibleBot, y + h) - Math.max(visibleTop, y))
-      const ratio   = h > 0 ? overlap / h : 0
-      // Primary: highest ratio of the item's own height that is visible
-      // Tiebreaker: largest absolute overlap (bigger item wins when ratios are equal)
-      if (ratio > bestRatio || (ratio === bestRatio && overlap > bestAbsOverlap)) {
-        bestRatio = ratio; bestAbsOverlap = overlap; bestId = id
-      }
+      if (overlap > bestOverlap) { bestOverlap = overlap; bestId = id }
     }
 
-    // Also check the overview block — if it is more visible than any item, assign
-    // to overview (return null so handleFloatingCapture routes to addOverviewPhotoUri).
+    // Overview wins if more of it (in pixels) is on screen than any single item.
+    // Using absolute overlap rather than ratio so a tall overview block isn't beaten
+    // by a small item that happens to be 100% visible.
     if (overviewLayoutRef.current) {
       const { y: ovy, h: ovh } = overviewLayoutRef.current
       const ovOverlap = Math.max(0, Math.min(visibleBot, ovy + ovh) - Math.max(visibleTop, ovy))
-      const ovRatio   = ovh > 0 ? ovOverlap / ovh : 0
-      if (ovRatio > bestRatio) return null
+      if (ovOverlap > bestOverlap) return null
     }
 
     return bestId

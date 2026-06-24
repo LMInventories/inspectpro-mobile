@@ -28,6 +28,7 @@ export default function SignaturePad({
   const [livePoints, setLivePoints] = useState<Point[]>([])
   const canvasWidth = useRef(320)
   const liveRef     = useRef<Point[]>([])
+  const svgRef      = useRef<Svg>(null)
 
   const isEmpty = strokes.length === 0 && livePoints.length === 0
 
@@ -88,22 +89,14 @@ export default function SignaturePad({
   }, [onClear])
 
   const handleSave = useCallback(() => {
-    const allStrokes = livePoints.length > 0
-      ? [...strokes, livePoints]
-      : strokes
-    if (allStrokes.length === 0) return
-
-    const w = canvasWidth.current
-    const h = height
-
-    const pathEls = allStrokes
-      .map(pts => `<path d="${buildPathD(pts)}" stroke="${strokeColor}" stroke-width="${strokeWidth}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`)
-      .join('\n  ')
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n  ${pathEls}\n</svg>`
-    const b64 = btoa(unescape(encodeURIComponent(svg)))
-    onSave(`data:image/svg+xml;base64,${b64}`)
-  }, [strokes, livePoints, strokeColor, strokeWidth, height, onSave])
+    const hasStrokes = strokes.length > 0 || livePoints.length > 0
+    if (!hasStrokes) return
+    // toDataURL rasterises whatever is rendered in the Svg to a PNG,
+    // which is what the PDF generator (ReportLab) requires.
+    svgRef.current?.toDataURL((data: string) => {
+      onSave(`data:image/png;base64,${data}`)
+    })
+  }, [strokes, livePoints, onSave])
 
   return (
     <View style={padStyles.wrap}>
@@ -115,7 +108,7 @@ export default function SignaturePad({
           onLayout={handleLayout}
           collapsable={false}
         >
-          <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>
+          <Svg ref={svgRef} width="100%" height="100%" style={StyleSheet.absoluteFill}>
             {strokes.map((pts, i) => (
               <Path
                 key={i}
