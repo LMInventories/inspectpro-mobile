@@ -619,13 +619,16 @@ export default function RoomInspectionScreen() {
       if (overlap > bestOverlap) { bestOverlap = overlap; bestId = id }
     }
 
-    // Overview wins if more of it (in pixels) is on screen than any single item.
-    // Using absolute overlap rather than ratio so a tall overview block isn't beaten
-    // by a small item that happens to be 100% visible.
+    // Overview check — two conditions, either triggers a route to Room Overview:
+    // 1. ≥50% of the overview block's own height is visible (clerk is in overview territory
+    //    even when the first item's header peeks in below — overview block is typically short)
+    // 2. Overview has more absolute pixels on screen than the best item (fallback for cases
+    //    where the overview is large and partially scrolled)
     if (overviewLayoutRef.current) {
       const { y: ovy, h: ovh } = overviewLayoutRef.current
       const ovOverlap = Math.max(0, Math.min(visibleBot, ovy + ovh) - Math.max(visibleTop, ovy))
-      if (ovOverlap > bestOverlap) return null
+      const ovRatio   = ovh > 0 ? ovOverlap / ovh : 0
+      if (ovRatio >= 0.5 || ovOverlap > bestOverlap) return null
     }
 
     return bestId
