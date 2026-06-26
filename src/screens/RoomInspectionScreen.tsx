@@ -171,6 +171,7 @@ export default function RoomInspectionScreen() {
 
   // Auto-scroll refs for item drag
   const itemScrollRef             = useRef<ScrollView>(null)
+  const scrollViewHeightRef       = useRef(0)   // measured via onLayout — actual visible height
   const itemScrollOffsetRef       = useRef(0)
   const itemDragStartScrollRef    = useRef(0)
   const itemLastTranslationYRef   = useRef(0)
@@ -603,9 +604,14 @@ export default function RoomInspectionScreen() {
   }
 
   function getMajorityItemId(): string | null {
-    const scrollY    = itemScrollOffsetRef.current
-    const visibleTop = scrollY
-    const visibleBot = scrollY + winHeight
+    const scrollY      = itemScrollOffsetRef.current
+    const visibleTop   = scrollY
+    // Use the ScrollView's measured height so the visible window is accurate.
+    // winHeight (full screen) is too large in portrait — the fixed header and
+    // recording bar sit outside the scroll area, causing off-screen items to
+    // accumulate false overlap and win over genuinely visible items.
+    const visibleHeight = scrollViewHeightRef.current > 0 ? scrollViewHeightRef.current : winHeight
+    const visibleBot   = scrollY + visibleHeight
     let bestId: string | null = null
     let bestOverlap = 0
 
@@ -1244,12 +1250,18 @@ export default function RoomInspectionScreen() {
       const crData  = rd[cr.key] || {}
       const crName  = roomNames[cr.key] || cr.name
       const crItems: any[] = []
+      // Preset-added rooms store item names in _extra, not in the data object.
+      // Build a lookup so items get their actual name instead of their internal ID.
+      const extraNameLookup: Record<string, string> = {}
+      for (const ex of (crData._extra || [])) {
+        if (ex._eid) extraNameLookup[ex._eid] = ex.name || ''
+      }
       for (const [itemId, rawData] of Object.entries(crData)) {
         if (itemId.startsWith('_')) continue
         const d = rawData as any
         if (!d.description && !d.condition) continue
         crItems.push({
-          name:        d._name || itemId,
+          name:        d._name || extraNameLookup[itemId] || itemId,
           description: d.description || '',
           condition:   d.condition   || '',
           subs: (d._subs || []).map((s: any) => ({
@@ -1305,24 +1317,27 @@ export default function RoomInspectionScreen() {
       const res = await api.generateConditionSummary({ inspectionId, sections, summaryItems, propertyDetails })
       const filled: Record<string, { condition: string }> = res.data.filled || {}
 
-      const nonEmpty = Object.entries(filled).filter(([, v]) => v.condition?.trim())
-      if (nonEmpty.length === 0) {
-        useToastStore.getState().showToast('No notable issues found — property looks good!', 'info')
-        return
-      }
+      const allEntries   = Object.entries(filled)
+      const withContent  = allEntries.filter(([, v]) => v.condition?.trim())
 
-      // Write directly to report_data, overwriting any existing condition values
+      // Write ALL items (including empty strings) so that any previously AI-filled
+      // "In good order" text is cleared — empty fields show "No issues" placeholder.
       const freshNow = await getLocalInspection(inspectionId)
       const rdNow    = freshNow?.report_data ? JSON.parse(freshNow.report_data) : {}
       if (!rdNow[sectionKey]) rdNow[sectionKey] = {}
 
-      for (const [itemId, fields] of nonEmpty) {
+      for (const [itemId, fields] of allEntries) {
         if (!rdNow[sectionKey][itemId]) rdNow[sectionKey][itemId] = {}
         rdNow[sectionKey][itemId].condition = fields.condition
       }
 
       setReportData(inspectionId, rdNow)
-      useToastStore.getState().showToast(`✨ Condition summary filled for ${nonEmpty.length} item${nonEmpty.length !== 1 ? 's' : ''}.`)
+
+      if (withContent.length === 0) {
+        useToastStore.getState().showToast('No notable issues found — property looks good!', 'info')
+      } else {
+        useToastStore.getState().showToast(`✨ Condition summary filled for ${withContent.length} item${withContent.length !== 1 ? 's' : ''}.`)
+      }
     } catch (err: any) {
       Alert.alert('AI Error', err.response?.data?.error || err.message || 'Failed to generate summary')
     } finally {
@@ -2799,6 +2814,7 @@ export default function RoomInspectionScreen() {
         ) : (
           <ScrollView
             ref={itemScrollRef}
+            onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
             onScroll={(e) => { itemScrollOffsetRef.current = e.nativeEvent.contentOffset.y }}
             scrollEventThrottle={16}
             contentContainerStyle={[

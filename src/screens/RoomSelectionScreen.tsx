@@ -467,7 +467,7 @@ export default function RoomSelectionScreen() {
         })),
       ...customRooms
         .filter(r => !hidden.includes(r.key))
-        .map(r => ({ key: r.key, name: r.name })),
+        .map(r => ({ key: r.key, name: roomNames[r.key] || r.name })),
     ]
     const order: string[] = rd['_roomOrder'] || []
     if (!order.length) return all
