@@ -1278,6 +1278,50 @@ export default function RoomInspectionScreen() {
       return
     }
 
+    // For Check Out: build CI baseline sections from source_report_data.
+    // CO data wins where present; CI fills in items with no CO note recorded.
+    let checkInSections: Array<{ name: string; items: any[] }> | undefined
+    if (isCheckOut_) {
+      const ciRd = fresh?.source_report_data ? JSON.parse(fresh.source_report_data) : null
+      if (ciRd && template?.sections?.length) {
+        checkInSections = []
+        for (const sec of template.sections) {
+          const secKey  = String(sec.id)
+          const secData = ciRd[secKey] || {}
+          const secName = sec.name || `Room ${secKey}`
+          const ciItems: any[] = []
+          for (const item of (sec.items || [])) {
+            const itemData = secData[String(item.id)] || {}
+            if (!itemData.description && !itemData.condition) continue
+            ciItems.push({ name: item.name || '', description: itemData.description || '', condition: itemData.condition || '' })
+          }
+          for (const extra of (secData._extra || [])) {
+            const eData = secData[extra._eid] || {}
+            if (!eData.description && !eData.condition) continue
+            ciItems.push({ name: extra.name || '', description: eData.description || '', condition: eData.condition || '' })
+          }
+          if (ciItems.length > 0) checkInSections.push({ name: secName, items: ciItems })
+        }
+        const ciCustomRooms: Array<{ key: string; name: string }> = ciRd._customRooms || []
+        for (const cr of ciCustomRooms) {
+          const crData = ciRd[cr.key] || {}
+          const crName = (ciRd._roomNames || {})[cr.key] || cr.name
+          const ciItems: any[] = []
+          const extraLookup: Record<string, string> = {}
+          for (const ex of (crData._extra || [])) {
+            if (ex._eid) extraLookup[ex._eid] = ex.name || ''
+          }
+          for (const [itemId, rawData] of Object.entries(crData)) {
+            if (itemId.startsWith('_')) continue
+            const d = rawData as any
+            if (!d.description && !d.condition) continue
+            ciItems.push({ name: d._name || extraLookup[itemId] || itemId, description: d.description || '', condition: d.condition || '' })
+          }
+          if (ciItems.length > 0) checkInSections.push({ name: crName, items: ciItems })
+        }
+      }
+    }
+
     setAiCondSumLoading(true)
     try {
       const summaryItems = items.map(it => ({ id: String(it.id), name: it.name || '' }))
@@ -1314,7 +1358,10 @@ export default function RoomInspectionScreen() {
         furnished:     prop.furnished     ?? null,
         address:       fresh?.property_address ?? null,
       }
-      const res = await api.generateConditionSummary({ inspectionId, sections, summaryItems, propertyDetails })
+      const res = await api.generateConditionSummary({
+        inspectionId, sections, summaryItems, propertyDetails,
+        ...(isCheckOut_ && checkInSections ? { isCheckOut: true, checkInSections } : {}),
+      })
       const filled: Record<string, { condition: string }> = res.data.filled || {}
 
       const allEntries   = Object.entries(filled)
