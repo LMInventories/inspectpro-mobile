@@ -12,6 +12,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import type { RootStackParamList } from '../../App'
 import { api } from '../services/api'
 import { saveInspection, getLocalInspections } from '../services/database'
+import { useAuthStore } from '../stores/authStore'
 import { colors, font, radius, spacing, TYPE_LABELS, STATUS_COLORS } from '../utils/theme'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
@@ -367,7 +368,8 @@ export default function FetchInspectionsScreen() {
           }
         }
 
-        await saveInspection(normalised)
+        const userCameraDefault = useAuthStore.getState().user?.camera_option ?? null
+        await saveInspection(normalised, userCameraDefault)
         res.push({ id, address: normalised.property_address, success: true })
       } catch (err: any) {
         res.push({ id, address: inspection.property_address, success: false, error: err.message || 'Network error' })

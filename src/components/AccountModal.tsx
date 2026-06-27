@@ -25,9 +25,14 @@ interface Props {
 
 export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
   const insets = useSafeAreaInsets()
-  const { user, logout } = useAuthStore()
+  const { user, logout, updateDefaults } = useAuthStore()
   const { inspections } = useInspectionStore()
   const isAdmin = user?.role === 'admin'
+
+  const [defaultsTypist, setDefaultsTypist] = useState<string>(user?.typist_mode ?? '')
+  const [defaultsCamera, setDefaultsCamera] = useState<string>(user?.camera_option ?? 'perItem')
+  const [defaultsSaving, setDefaultsSaving] = useState(false)
+  const [defaultsSaved,  setDefaultsSaved]  = useState(false)
 
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw]         = useState('')
@@ -84,6 +89,20 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
+  }
+
+  async function handleSaveDefaults() {
+    setDefaultsSaving(true)
+    setDefaultsSaved(false)
+    try {
+      await updateDefaults(defaultsTypist || null, defaultsCamera || null)
+      setDefaultsSaved(true)
+      setTimeout(() => setDefaultsSaved(false), 2500)
+    } catch (err: any) {
+      Alert.alert('Error', err?.response?.data?.error || err?.message || 'Could not save defaults.')
+    } finally {
+      setDefaultsSaving(false)
+    }
   }
 
   async function handleChangePassword() {
@@ -370,6 +389,78 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
             </View>
           )}
 
+          {/* ── Default Settings ───────────────────────────────────────────── */}
+          <View style={s.section}>
+            <Text style={s.sectionLabel}>DEFAULT SETTINGS</Text>
+            <Text style={s.defaultsHint}>
+              Applied to every new inspection. Can be overridden per inspection.
+            </Text>
+
+            <Text style={s.defaultsFieldLabel}>Typist Mode</Text>
+            {(
+              [
+                { value: 'ai_instant', label: 'AI Instant',  sub: 'Per-item mic, fills immediately on device' },
+                { value: 'ai_room',    label: 'AI by Room',  sub: 'Record whole room, AI fills all at once' },
+                { value: 'human',      label: 'Human Typist', sub: 'Audio synced to server for typist' },
+              ] as const
+            ).map(opt => {
+              const active = defaultsTypist === opt.value
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[s.defaultsRow, active && s.defaultsRowActive]}
+                  onPress={() => setDefaultsTypist(opt.value)}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.defaultsRadio, active && s.defaultsRadioActive]}>
+                    {active && <View style={s.defaultsRadioDot} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.defaultsRowLabel, active && s.defaultsRowLabelActive]}>{opt.label}</Text>
+                    <Text style={s.defaultsRowSub}>{opt.sub}</Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
+
+            <Text style={[s.defaultsFieldLabel, { marginTop: spacing.sm }]}>Camera Mode</Text>
+            {(
+              [
+                { value: 'perItem',  label: 'Per Item',             sub: 'Camera button beside each item' },
+                { value: 'floating', label: 'Floating with Preview', sub: 'Live overlay, auto-assigns to active item' },
+              ] as const
+            ).map(opt => {
+              const active = defaultsCamera === opt.value
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[s.defaultsRow, active && s.defaultsRowActive]}
+                  onPress={() => setDefaultsCamera(opt.value)}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.defaultsRadio, active && s.defaultsRadioActive]}>
+                    {active && <View style={s.defaultsRadioDot} />}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.defaultsRowLabel, active && s.defaultsRowLabelActive]}>{opt.label}</Text>
+                    <Text style={s.defaultsRowSub}>{opt.sub}</Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
+
+            <TouchableOpacity
+              style={[s.actionBtn, s.actionBtnPrimary, defaultsSaving && s.actionBtnDisabled, { marginTop: spacing.xs }]}
+              onPress={handleSaveDefaults}
+              disabled={defaultsSaving}
+            >
+              {defaultsSaving
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={s.actionBtnText}>{defaultsSaved ? 'Saved ✓' : 'Save Defaults'}</Text>
+              }
+            </TouchableOpacity>
+          </View>
+
           {/* ── Change Password ────────────────────────────────────────────── */}
           <View style={s.section}>
             <Text style={s.sectionLabel}>CHANGE PASSWORD</Text>
@@ -646,6 +737,36 @@ const s = StyleSheet.create({
     height: 6,
     backgroundColor: colors.primaryMid,
     borderRadius: 3,
+  },
+
+  // Default Settings
+  defaultsHint:       { fontSize: font.xs, color: colors.textMid, lineHeight: 17, marginBottom: spacing.xs },
+  defaultsFieldLabel: { fontSize: font.xs, fontWeight: '700', color: colors.text, marginBottom: 4, marginTop: 2 },
+  defaultsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    marginBottom: 6,
+  },
+  defaultsRowActive:      { borderColor: colors.primary, backgroundColor: colors.primaryLight },
+  defaultsRowLabel:       { fontSize: font.sm, fontWeight: '600', color: colors.text },
+  defaultsRowLabelActive: { color: colors.primary },
+  defaultsRowSub:         { fontSize: font.xs, color: colors.textMid, marginTop: 1 },
+  defaultsRadio: {
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 2, borderColor: colors.borderDark,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  defaultsRadioActive: { borderColor: colors.primary },
+  defaultsRadioDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: colors.primary,
   },
 
   // Footer

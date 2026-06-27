@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { api } from '../services/api'
 import { saveInspection } from '../services/database'
+import { useAuthStore } from '../stores/authStore'
 import { colors, font, radius, spacing } from '../utils/theme'
 import PickerSheet from './PickerSheet'
 
@@ -196,7 +197,8 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
         }
       } catch { /* non-fatal */ }
 
-      saveInspection(normalised)
+      const userCameraDefault = useAuthStore.getState().user?.camera_option ?? null
+      saveInspection(normalised, userCameraDefault)
       onCreated(id)
     } catch (e: any) {
       setError(e.response?.data?.error || 'Failed to create inspection')

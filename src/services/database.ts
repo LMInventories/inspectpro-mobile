@@ -53,7 +53,7 @@ export function initDatabase(): void {
   try { db.runSync('ALTER TABLE inspections ADD COLUMN camera_option TEXT') } catch {}
 }
 
-export function saveInspection(inspection: any): void {
+export function saveInspection(inspection: any, defaultCameraOption?: string | null): void {
   const existing = db.getFirstSync<{ id: number }>(
     'SELECT id FROM inspections WHERE id = ?', [inspection.id]
   )
@@ -66,9 +66,9 @@ export function saveInspection(inspection: any): void {
     )
   } else {
     db.runSync(
-      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced, server_updated_at)
-       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0, ?)`,
-      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now, serverUpdatedAt]
+      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced, server_updated_at, camera_option)
+       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0, ?, ?)`,
+      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now, serverUpdatedAt, defaultCameraOption ?? null]
     )
   }
 }
