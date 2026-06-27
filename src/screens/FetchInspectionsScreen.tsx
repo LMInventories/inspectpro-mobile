@@ -368,8 +368,10 @@ export default function FetchInspectionsScreen() {
           }
         }
 
-        const userCameraDefault = useAuthStore.getState().user?.camera_option ?? null
-        await saveInspection(normalised, userCameraDefault)
+        const storeUser = useAuthStore.getState().user
+        const userCameraDefault  = storeUser?.camera_option  ?? null
+        const userTypistDefault  = storeUser?.typist_mode    ?? null
+        await saveInspection(normalised, userCameraDefault, userTypistDefault)
         res.push({ id, address: normalised.property_address, success: true })
       } catch (err: any) {
         res.push({ id, address: inspection.property_address, success: false, error: err.message || 'Network error' })

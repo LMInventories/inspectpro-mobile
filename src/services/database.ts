@@ -53,7 +53,7 @@ export function initDatabase(): void {
   try { db.runSync('ALTER TABLE inspections ADD COLUMN camera_option TEXT') } catch {}
 }
 
-export function saveInspection(inspection: any, defaultCameraOption?: string | null): void {
+export function saveInspection(inspection: any, defaultCameraOption?: string | null, defaultTypistMode?: string | null): void {
   const existing = db.getFirstSync<{ id: number }>(
     'SELECT id FROM inspections WHERE id = ?', [inspection.id]
   )
@@ -65,10 +65,12 @@ export function saveInspection(inspection: any, defaultCameraOption?: string | n
       [JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, serverUpdatedAt, inspection.id]
     )
   } else {
+    // Server-resolved typist_mode wins if present; otherwise apply user default
+    const effectiveTypist = inspection.typist_mode ?? defaultTypistMode ?? null
     db.runSync(
-      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced, server_updated_at, camera_option)
-       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0, ?, ?)`,
-      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now, serverUpdatedAt, defaultCameraOption ?? null]
+      `INSERT INTO inspections (id, data, report_data, source_report_data, status, local_status, downloaded_at, updated_at, synced, server_updated_at, typist_mode, camera_option)
+       VALUES (?, ?, ?, ?, ?, 'downloaded', ?, ?, 0, ?, ?, ?)`,
+      [inspection.id, JSON.stringify(inspection), inspection.report_data || null, inspection.source_report_data || null, inspection.status, now, now, serverUpdatedAt, effectiveTypist, defaultCameraOption ?? null]
     )
   }
 }

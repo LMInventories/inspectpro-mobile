@@ -197,8 +197,10 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
         }
       } catch { /* non-fatal */ }
 
-      const userCameraDefault = useAuthStore.getState().user?.camera_option ?? null
-      saveInspection(normalised, userCameraDefault)
+      const storeUser = useAuthStore.getState().user
+      const userCameraDefault = storeUser?.camera_option ?? null
+      const userTypistDefault = storeUser?.typist_mode   ?? null
+      saveInspection(normalised, userCameraDefault, userTypistDefault)
       onCreated(id)
     } catch (e: any) {
       setError(e.response?.data?.error || 'Failed to create inspection')
