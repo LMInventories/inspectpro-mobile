@@ -29,6 +29,10 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
   const { inspections } = useInspectionStore()
   const isAdmin = user?.role === 'admin'
 
+  const [openDefaults,  setOpenDefaults]  = useState(false)
+  const [openPassword,  setOpenPassword]  = useState(false)
+  const [openExport,    setOpenExport]    = useState(false)
+
   const [defaultsTypist, setDefaultsTypist] = useState<string>(user?.typist_mode ?? '')
   const [defaultsCamera, setDefaultsCamera] = useState<string>(user?.camera_option ?? 'perItem')
   const [defaultsSaving, setDefaultsSaving] = useState(false)
@@ -391,7 +395,11 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
 
           {/* ── Default Settings ───────────────────────────────────────────── */}
           <View style={s.section}>
-            <Text style={s.sectionLabel}>DEFAULT SETTINGS</Text>
+            <TouchableOpacity style={s.accordionHeader} onPress={() => setOpenDefaults(v => !v)} activeOpacity={0.7}>
+              <Text style={s.sectionLabel}>DEFAULT SETTINGS</Text>
+              <Text style={s.accordionChevron}>{openDefaults ? '▾' : '▸'}</Text>
+            </TouchableOpacity>
+            {openDefaults && <>
             <Text style={s.defaultsHint}>
               Applied to every new inspection. Can be overridden per inspection.
             </Text>
@@ -459,11 +467,16 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
                 : <Text style={s.actionBtnText}>{defaultsSaved ? 'Saved ✓' : 'Save Defaults'}</Text>
               }
             </TouchableOpacity>
+            </>}
           </View>
 
           {/* ── Change Password ────────────────────────────────────────────── */}
           <View style={s.section}>
-            <Text style={s.sectionLabel}>CHANGE PASSWORD</Text>
+            <TouchableOpacity style={s.accordionHeader} onPress={() => setOpenPassword(v => !v)} activeOpacity={0.7}>
+              <Text style={s.sectionLabel}>CHANGE PASSWORD</Text>
+              <Text style={s.accordionChevron}>{openPassword ? '▾' : '▸'}</Text>
+            </TouchableOpacity>
+            {openPassword && <>
             <TextInput
               style={s.input}
               placeholder="Current password"
@@ -504,13 +517,17 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
                 : <Text style={s.actionBtnText}>Update Password</Text>
               }
             </TouchableOpacity>
+            </>}
           </View>
 
-          {/* ── Admin Tools ────────────────────────────────────────────────── */}
+          {/* ── Export Transcription (admin only) ──────────────────────────── */}
           {isAdmin && (
             <View style={s.section}>
-              <Text style={s.sectionLabel}>ADMIN TOOLS</Text>
-              <Text style={s.exportHeading}>Export Transcription</Text>
+              <TouchableOpacity style={s.accordionHeader} onPress={() => setOpenExport(v => !v)} activeOpacity={0.7}>
+                <Text style={s.sectionLabel}>EXPORT TRANSCRIPTION</Text>
+                <Text style={s.accordionChevron}>{openExport ? '▾' : '▸'}</Text>
+              </TouchableOpacity>
+              {openExport && <>
               <Text style={s.exportHint}>
                 Select completed inspections to download a diagnostic .txt of their transcription data.
               </Text>
@@ -565,6 +582,7 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
                   </TouchableOpacity>
                 </>
               )}
+              </>}
             </View>
           )}
 
@@ -649,8 +667,14 @@ const s = StyleSheet.create({
     fontSize: font.xs, fontWeight: '700',
     color: colors.textLight,
     textTransform: 'uppercase', letterSpacing: 0.6,
-    marginBottom: spacing.xs,
   },
+  accordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: spacing.xs,
+  },
+  accordionChevron: { fontSize: font.md, color: colors.textLight },
 
   // Change password inputs
   input: {
@@ -678,9 +702,7 @@ const s = StyleSheet.create({
   actionBtnDisabled: { opacity: 0.45 },
   actionBtnText:     { color: '#fff', fontSize: font.sm, fontWeight: '700' },
 
-  // Admin Tools
-  exportHeading: { fontSize: font.md, fontWeight: '700', color: colors.text, marginBottom: 2 },
-  exportHint:    { fontSize: font.xs, color: colors.textMid, lineHeight: 17, marginBottom: spacing.sm },
+  exportHint: { fontSize: font.xs, color: colors.textMid, lineHeight: 17, marginBottom: spacing.sm },
   emptyHint:     { fontSize: font.sm, color: colors.textLight, fontStyle: 'italic' },
 
   // Inspection checkboxes
