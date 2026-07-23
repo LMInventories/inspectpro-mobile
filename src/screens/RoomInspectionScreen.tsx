@@ -829,6 +829,24 @@ export default function RoomInspectionScreen() {
   }
 
   // ── AI Transcription ──────────────────────────────────────────────────────
+  // ── Duplicate-content guards ──────────────────────────────────────────────
+  // The same fill can reach us twice (double-tap, offline retry replay, or the
+  // AI re-emitting an already-filled item), and the AI can occasionally repeat
+  // a line. Never append text that is already present in the field.
+  const normLine = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+  function appendUnique(existing: string, incoming: string): string {
+    if (!existing) return incoming
+    if (!incoming) return existing
+    const have  = new Set(existing.split('\n').map(normLine).filter(Boolean))
+    const fresh = incoming.split('\n').filter(l => normLine(l) && !have.has(normLine(l)))
+    return fresh.length ? existing + '\n' + fresh.join('\n') : existing
+  }
+  function isDuplicateSub(subs: any[], sub: any): boolean {
+    return (subs || []).some((s: any) =>
+      normLine(s.description || '') === normLine(sub.description || '') &&
+      normLine(s.condition   || '') === normLine(sub.condition   || ''))
+  }
+
   async function transcribeItem(
     itemId: string,
     itemLabel: string,
@@ -909,6 +927,7 @@ export default function RoomInspectionScreen() {
           if (!rd2[sectionKey][String(itemId)]) rd2[sectionKey][String(itemId)] = {}
           if (!rd2[sectionKey][String(itemId)]._subs) rd2[sectionKey][String(itemId)]._subs = []
           for (const sub of incomingSubs) {
+            if (isDuplicateSub(rd2[sectionKey][String(itemId)]._subs, sub)) continue
             const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
             rd2[sectionKey][String(itemId)]._subs.push({
               _sid: sid,
@@ -941,9 +960,9 @@ export default function RoomInspectionScreen() {
         return !existing  // 'normal' → only fill if empty
       }
 
-      // Helper: compute the value to store
+      // Helper: compute the value to store (append skips lines already present)
       const computeValue = (fieldName: string, newVal: string, existing: string): string => {
-        if (editMode === 'append' && existing) return existing + '\n' + newVal
+        if (editMode === 'append' && existing) return appendUnique(existing, newVal)
         return newVal
       }
 
@@ -964,7 +983,7 @@ export default function RoomInspectionScreen() {
             const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
             row.checkOutCondition = isBlankOrPlaceholder
               ? `As Inventory+\n${aiCondition}`
-              : `${existing}\n${aiCondition}`
+              : appendUnique(existing, aiCondition)
             changed = true
           }
         } else {
@@ -975,6 +994,9 @@ export default function RoomInspectionScreen() {
             row.condition = computeValue('condition', result.condition, row.condition); changed = true
           }
         }
+        // Mark as transcribed so later room passes skip this item unless the
+        // clerk explicitly amends it (mirrors handleRoomTranscribed).
+        if (changed && !row._transcribed) row._transcribed = true
       } else if (sectionType_ === 'meter_readings') {
         if (result.locationSerial && !row.locationSerial) { row.locationSerial = result.locationSerial; changed = true }
         if (result.reading        && !row.reading)        { row.reading        = result.reading;        changed = true }
@@ -1098,17 +1120,18 @@ export default function RoomInspectionScreen() {
         if (aiCondition) {
           const existing = row.checkOutCondition || ''
           const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
-          row.checkOutCondition = isBlankOrPlaceholder
+          const mergedCO = isBlankOrPlaceholder
             ? `As Inventory+\n${aiCondition}`
-            : `${existing}\n${aiCondition}`
-          changed = true
+            : appendUnique(existing, aiCondition)
+          if (mergedCO !== existing) { row.checkOutCondition = mergedCO; changed = true }
         }
       } else {
         if (fields.description) {
           if (descAction === 'overwrite' || (descAction === 'fill' && !row.description)) {
             row.description = fields.description; changed = true
           } else if (descAction === 'append' && row.description) {
-            row.description = row.description + '\n' + fields.description; changed = true
+            const merged = appendUnique(row.description, fields.description)
+            if (merged !== row.description) { row.description = merged; changed = true }
           } else if (descAction === 'append' && !row.description) {
             row.description = fields.description; changed = true
           }
@@ -1117,7 +1140,8 @@ export default function RoomInspectionScreen() {
           if (condAction === 'overwrite' || (condAction === 'fill' && !row.condition)) {
             row.condition = fields.condition; changed = true
           } else if (condAction === 'append' && row.condition) {
-            row.condition = row.condition + '\n' + fields.condition; changed = true
+            const merged = appendUnique(row.condition, fields.condition)
+            if (merged !== row.condition) { row.condition = merged; changed = true }
           } else if (condAction === 'append' && !row.condition) {
             row.condition = fields.condition; changed = true
           }
@@ -1134,13 +1158,15 @@ export default function RoomInspectionScreen() {
             if (existing && sub.checkOutCondition) {
               const existingCO = existing.checkOutCondition || ''
               const isBlankOrPlaceholder = !existingCO.trim() || existingCO.trim() === 'As Inventory+'
-              existing.checkOutCondition = isBlankOrPlaceholder
+              const mergedSubCO = isBlankOrPlaceholder
                 ? `As Inventory+\n${sub.checkOutCondition}`
-                : `${existingCO}\n${sub.checkOutCondition}`
-              changed = true
+                : appendUnique(existingCO, sub.checkOutCondition)
+              if (mergedSubCO !== existingCO) { existing.checkOutCondition = mergedSubCO; changed = true }
             }
           } else if (!isCheckOut_) {
-            // Check-in: create new sub-items from AI-detected elements
+            // Check-in: create new sub-items from AI-detected elements —
+            // skip exact duplicates (produced by a double-apply of the same fill)
+            if (isDuplicateSub(row._subs, sub)) continue
             const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
             row._subs.push({
               _sid:        sid,

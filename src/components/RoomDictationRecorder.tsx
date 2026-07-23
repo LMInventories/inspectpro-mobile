@@ -124,6 +124,10 @@ export default function RoomDictationRecorder({
 
   const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<number>(0)
+  // Guards against a second transcribe round-trip starting while one is in
+  // flight (e.g. the AppState offline-retry firing during a 10s+ API call).
+  // A double-send re-applies the same fills and doubles up field content.
+  const transcribeInFlightRef = useRef(false)
 
   // Pulse animation — runs while transcribing
   const pulseAnim = useRef(new Animated.Value(1)).current
@@ -336,7 +340,10 @@ export default function RoomDictationRecorder({
   // ── AI Transcribe ─────────────────────────────────────────────────────────
   const handleTranscribe = useCallback(async () => {
     if (clips.length === 0) return
+    if (transcribeInFlightRef.current) return
+    transcribeInFlightRef.current = true
 
+    try {
     // Check connectivity before sending — queue locally if offline
     const online = await probe()
     if (!online) {
@@ -424,6 +431,9 @@ export default function RoomDictationRecorder({
       console.error('[RoomDictation] transcribe error:', err)
       Alert.alert('AI Error', err.response?.data?.error || err.message || 'Transcription failed')
       setMode('paused')
+    }
+    } finally {
+      transcribeInFlightRef.current = false
     }
   }, [clips, sectionName, sectionKey, items, onTranscribed])
 
