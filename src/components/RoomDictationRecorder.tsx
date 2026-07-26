@@ -46,6 +46,8 @@ import { api } from '../services/api'
 import { colors, font, radius, spacing } from '../utils/theme'
 import { probe } from '../hooks/useNetworkStatus'
 import { useToastStore } from '../stores/toastStore'
+import { mimeTypeForUri } from '../utils/audioMime'
+import { pickAndImportAudioClip } from '../services/importAudioClip'
 
 export interface RoomDictationItem {
   id: string
@@ -112,6 +114,7 @@ export default function RoomDictationRecorder({
   const [totalMs, setTotalMs]     = useState(0)
   const [clips, setClips]         = useState<SavedClip[]>([])
   const [queuedOffline, setQueuedOffline] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   // Playback modal
   const [modalVisible, setModalVisible] = useState(false)
@@ -248,6 +251,37 @@ export default function RoomDictationRecorder({
     }
   }
 
+  // ── Insert clip — pick an existing audio file from the device ─────────────
+  // Covers the case where the AI API or the recorder itself dropped out and
+  // the clerk recorded a stand-in clip with the phone's own Voice Recorder —
+  // this adds it to the queue exactly like a normally-recorded clip.
+  async function handleInsertClip() {
+    if (mode === 'recording' || mode === 'transcribing' || importing) return
+    setImporting(true)
+    try {
+      const imported = await pickAndImportAudioClip(`room_${inspectionId}_${sectionKey}`)
+      if (!imported) return  // user cancelled
+
+      let clipId: number | undefined
+      try {
+        clipId = saveAudioRecording(
+          inspectionId, sectionKey, sectionName,
+          undefined, undefined, sectionName, imported.uri, imported.durationMs,
+        )
+      } catch {}
+
+      setClips(prev => [...prev, { id: clipId, uri: imported.uri, durationMs: imported.durationMs }])
+      setTotalMs(prev => prev + imported.durationMs)
+      if (mode === 'idle') setMode('paused')
+      useToastStore.getState().showToast(`Inserted "${imported.name}"`, 'info')
+    } catch (err) {
+      console.error('[RoomDictation] insert clip error:', err)
+      Alert.alert('Insert failed', 'Could not add the selected audio file.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   // ── Delete clip ───────────────────────────────────────────────────────────
   function handleDeleteClip(uri: string) {
     if (playingUri === uri) {
@@ -360,7 +394,9 @@ export default function RoomDictationRecorder({
           const b64 = await FileSystem.readAsStringAsync(clip.uri, {
             encoding: 'base64',
           })
-          return { audio: b64, mimeType: 'audio/m4a' }
+          // Recorded clips are always .m4a; an inserted clip (see handleInsertClip)
+          // can be any format the clerk had on-device — send its real MIME type.
+          return { audio: b64, mimeType: mimeTypeForUri(clip.uri) }
         })
       )
 
@@ -479,6 +515,23 @@ export default function RoomDictationRecorder({
       <Text style={[bar.clipsLabel, !hasClips && bar.clipsDimmed]}>
         {clips.length === 1 ? 'clip' : 'clips'}
       </Text>
+    </TouchableOpacity>
+  )
+
+  // Insert an existing audio file — stand-in for when the mic/API drops out.
+  const insertButton = (
+    <TouchableOpacity
+      style={bar.insertBtn}
+      onPress={handleInsertClip}
+      disabled={isRecording || isTranscribing || importing}
+      activeOpacity={0.7}
+    >
+      {importing ? (
+        <ActivityIndicator color="rgba(255,255,255,0.7)" size="small" />
+      ) : (
+        <MaterialCommunityIcons name="file-music-outline" size={16} color="rgba(255,255,255,0.7)" />
+      )}
+      <Text style={bar.insertBtnText}>Insert</Text>
     </TouchableOpacity>
   )
 
@@ -668,9 +721,10 @@ export default function RoomDictationRecorder({
           width: DICTATION_SIDEBAR_W + Math.max(insets.right, 0),
         }]}>
 
-          {/* TOP: Clips */}
+          {/* TOP: Clips + Insert */}
           <View style={sidebar.clipsSection}>
             {clipsButton}
+            {insertButton}
           </View>
 
           {/* MIDDLE: Record */}
@@ -697,8 +751,11 @@ export default function RoomDictationRecorder({
       {/* ── Three-column row ─────────────────────────────────────────── */}
       <View style={bar.row}>
 
-        {/* LEFT: Clip count badge */}
-        {clipsButton}
+        {/* LEFT: Clip count badge + Insert */}
+        <View style={{ alignItems: 'center', gap: 6 }}>
+          {clipsButton}
+          {insertButton}
+        </View>
 
         {/* CENTRE: Record / Pause / Transcribing button */}
         <View style={bar.centreSection}>
@@ -768,6 +825,21 @@ const bar = StyleSheet.create({
   clipsCount: { fontSize: font.lg, fontWeight: '800', color: FG, lineHeight: 22 },
   clipsLabel: { fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: '600', textTransform: 'uppercase' },
   clipsDimmed:{ color: 'rgba(255,255,255,0.25)' },
+
+  // Insert an existing audio file
+  insertBtn: {
+    width: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  insertBtnText: { fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: '700', textTransform: 'uppercase' },
 
   // CENTRE: record button
   centreSection: {
@@ -863,6 +935,7 @@ const sidebar = StyleSheet.create({
   },
   clipsSection: {
     alignItems: 'center',
+    gap: 6,
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)',

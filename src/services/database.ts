@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite'
 import * as FileSystem from 'expo-file-system'
+import { copyClipToSaveLocation } from './audioSaveLocation'
 
 const db = SQLite.openDatabaseSync('inspectpro.db')
 
@@ -238,6 +239,12 @@ export function saveAudioRecording(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [inspectionId, sectionKey, sectionName, itemKey || null, itemName || null, label, fileUri, durationMs, transcription || null, new Date().toISOString()]
   )
+
+  // Fire-and-forget backup copy to the clerk's chosen save-location folder
+  // (if the setting is enabled) — never blocks or fails the DB write.
+  const filename = fileUri.split('/').pop() || `clip_${Date.now()}.m4a`
+  copyClipToSaveLocation(fileUri, filename).catch(() => {})
+
   return result.lastInsertRowId
 }
 

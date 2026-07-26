@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   Modal, View, Text, TextInput, TouchableOpacity,
-  ScrollView, StyleSheet, Alert, ActivityIndicator, Platform,
+  ScrollView, StyleSheet, Alert, ActivityIndicator, Platform, Switch,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as FileSystem from 'expo-file-system/legacy'
@@ -16,6 +16,9 @@ import {
   fetchLatestRelease, downloadAndInstall, getCurrentBuildNumber,
   type ReleaseInfo,
 } from '../services/updateService'
+import {
+  getAudioSaveLocation, setAudioSaveEnabled, pickAudioSaveFolder, clearAudioSaveFolder,
+} from '../services/audioSaveLocation'
 
 interface Props {
   visible: boolean
@@ -32,6 +35,74 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
   const [openDefaults,  setOpenDefaults]  = useState(false)
   const [openPassword,  setOpenPassword]  = useState(false)
   const [openExport,    setOpenExport]    = useState(false)
+  const [openAudioSave, setOpenAudioSave] = useState(false)
+
+  // ── Audio clip save-location (device backup copy) ──────────────────────
+  const [audioSaveEnabled, setAudioSaveEnabledState] = useState(false)
+  const [audioSaveFolder,  setAudioSaveFolderState]  = useState<string | null>(null)
+  const [pickingFolder,    setPickingFolder]         = useState(false)
+
+  useEffect(() => {
+    if (!visible) return
+    getAudioSaveLocation().then(({ enabled, folderName }) => {
+      setAudioSaveEnabledState(enabled)
+      setAudioSaveFolderState(folderName)
+    })
+  }, [visible])
+
+  // Turning the switch on with no folder chosen yet must pick a folder FIRST —
+  // the switch only visually flips to on if a folder is actually granted, so
+  // cancelling the picker correctly leaves it off (no stale-state guessing).
+  async function handleToggleAudioSave(next: boolean) {
+    if (!next) {
+      setAudioSaveEnabledState(false)
+      await setAudioSaveEnabled(false)
+      return
+    }
+    if (audioSaveFolder) {
+      setAudioSaveEnabledState(true)
+      await setAudioSaveEnabled(true)
+      return
+    }
+    setPickingFolder(true)
+    try {
+      const picked = await pickAudioSaveFolder()
+      if (!picked) return  // cancelled — leave the switch off
+      setAudioSaveFolderState(picked.name)
+      setAudioSaveEnabledState(true)
+      await setAudioSaveEnabled(true)
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not open the folder picker.')
+    } finally {
+      setPickingFolder(false)
+    }
+  }
+
+  // "Change Folder" button — only shown once already enabled, so a cancelled
+  // pick here just keeps whatever folder was already chosen.
+  async function handlePickAudioSaveFolder() {
+    setPickingFolder(true)
+    try {
+      const picked = await pickAudioSaveFolder()
+      if (picked) setAudioSaveFolderState(picked.name)
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not open the folder picker.')
+    } finally {
+      setPickingFolder(false)
+    }
+  }
+
+  function handleClearAudioSaveFolder() {
+    Alert.alert('Remove save folder?', 'Clips will stop being copied to device storage.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: async () => {
+        await clearAudioSaveFolder()
+        await setAudioSaveEnabled(false)
+        setAudioSaveFolderState(null)
+        setAudioSaveEnabledState(false)
+      }},
+    ])
+  }
 
   const [defaultsTypist, setDefaultsTypist] = useState<string>(user?.typist_mode ?? '')
   const [defaultsCamera, setDefaultsCamera] = useState<string>(user?.camera_option ?? 'perItem')
@@ -470,6 +541,57 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
             </>}
           </View>
 
+          {/* ── Audio Clips ───────────────────────────────────────────────── */}
+          {Platform.OS === 'android' && (
+            <View style={s.section}>
+              <TouchableOpacity style={s.accordionHeader} onPress={() => setOpenAudioSave(v => !v)} activeOpacity={0.7}>
+                <Text style={s.sectionLabel}>AUDIO CLIPS</Text>
+                <Text style={s.accordionChevron}>{openAudioSave ? '▾' : '▸'}</Text>
+              </TouchableOpacity>
+              {openAudioSave && <>
+              <Text style={s.defaultsHint}>
+                Keep a backup copy of every recorded clip on your phone's storage — useful if
+                the AI service is unavailable and a clip needs to be sent or transcribed another way.
+              </Text>
+
+              <View style={s.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.switchLabel}>Save clips to phone storage</Text>
+                  {!!audioSaveFolder && (
+                    <Text style={s.audioFolderText} numberOfLines={1}>Folder: {audioSaveFolder}</Text>
+                  )}
+                </View>
+                <Switch
+                  value={audioSaveEnabled}
+                  onValueChange={handleToggleAudioSave}
+                  disabled={pickingFolder}
+                  trackColor={{ false: colors.border, true: colors.primaryMid }}
+                  thumbColor={audioSaveEnabled ? colors.primary : colors.surface}
+                />
+              </View>
+
+              {audioSaveEnabled && (
+                <TouchableOpacity
+                  style={[s.actionBtn, s.actionBtnUpdate, pickingFolder && s.actionBtnDisabled, { marginTop: spacing.xs }]}
+                  onPress={handlePickAudioSaveFolder}
+                  disabled={pickingFolder}
+                >
+                  {pickingFolder
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={s.actionBtnText}>{audioSaveFolder ? 'Change Folder' : 'Choose Folder'}</Text>
+                  }
+                </TouchableOpacity>
+              )}
+
+              {!!audioSaveFolder && (
+                <TouchableOpacity style={{ marginTop: spacing.xs }} onPress={handleClearAudioSaveFolder}>
+                  <Text style={s.audioRemoveText}>Remove save folder</Text>
+                </TouchableOpacity>
+              )}
+              </>}
+            </View>
+          )}
+
           {/* ── Change Password ────────────────────────────────────────────── */}
           <View style={s.section}>
             <TouchableOpacity style={s.accordionHeader} onPress={() => setOpenPassword(v => !v)} activeOpacity={0.7}>
@@ -760,6 +882,17 @@ const s = StyleSheet.create({
     backgroundColor: colors.primaryMid,
     borderRadius: 3,
   },
+
+  // Audio Clips (save-location)
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 4,
+  },
+  switchLabel: { fontSize: font.sm, fontWeight: '600', color: colors.text },
+  audioFolderText: { fontSize: font.xs, color: colors.textMid, marginTop: 2 },
+  audioRemoveText: { fontSize: font.xs, color: colors.danger, fontWeight: '600', textAlign: 'center' },
 
   // Default Settings
   defaultsHint:       { fontSize: font.xs, color: colors.textMid, lineHeight: 17, marginBottom: spacing.xs },

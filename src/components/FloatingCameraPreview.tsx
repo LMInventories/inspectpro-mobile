@@ -17,6 +17,7 @@ import {
 import { Camera, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
 import * as FileSystem from 'expo-file-system/legacy'
+import * as MediaLibrary from 'expo-media-library'
 import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
@@ -55,6 +56,16 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const cameraRef    = useRef<Camera>(null)
   const capturingRef = useRef(false)
   const [cameraKey, setCameraKey] = useState(0)
+
+  // Pre-request MediaLibrary permission once at mount, mirroring CameraScreen —
+  // floating-camera shots are saved to the device gallery too, not just the
+  // app-private photo directory.
+  const mlPermGranted = useRef(false)
+  useEffect(() => {
+    MediaLibrary.requestPermissionsAsync().then(p => {
+      mlPermGranted.current = p.status === 'granted'
+    })
+  }, [])
 
   // Keep screen dims in refs so PanResponder closures always see current values
   const screenWRef = useRef(screenW)
@@ -195,6 +206,14 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
         ? rawPath
         : `file://${rawPath}`
       const dest = `${photoDirRef.current}${Date.now()}_float.jpg`
+
+      // Save to the device gallery independently of the app-copy below, so the
+      // photo isn't lost even if the app-private copy fails.
+      if (mlPermGranted.current) {
+        MediaLibrary.saveToLibraryAsync(srcUri).catch(e =>
+          console.warn('[FloatingCamera] gallery save failed:', e)
+        )
+      }
 
       try {
         // Ensure directory exists — on some devices (e.g. Oppo/ColorOS) the async

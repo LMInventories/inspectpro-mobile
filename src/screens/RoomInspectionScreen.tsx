@@ -30,6 +30,8 @@ import { colors, useColors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
 import SwipeableRow from '../components/SwipeableRow'
 import { useToastStore } from '../stores/toastStore'
+import { mimeTypeForUri } from '../utils/audioMime'
+import { pickAndImportAudioClip } from '../services/importAudioClip'
 
 type Nav   = StackNavigationProp<RootStackParamList, 'RoomInspection'>
 type Route = RouteProp<RootStackParamList, 'RoomInspection'>
@@ -862,7 +864,7 @@ export default function RoomInspectionScreen() {
 
       const response = await api.transcribeItem({
         audio:          audioB64,
-        mimeType:       'audio/m4a',
+        mimeType:       mimeTypeForUri(uri),
         itemLabel,
         roomName:       sectionName,
         sectionId:      sectionKey,
@@ -2287,6 +2289,7 @@ export default function RoomInspectionScreen() {
             setRecordings(prev => ({ ...prev, [item.id]: (prev[item.id] || []).filter((r: any) => r.file_uri !== uri) }))
           }}
           transcribingUri={transcribingUris[item.id] ?? null}
+          importPrefix={`item_${inspectionId}_${item.id}`}
           compact
         />
       </View>

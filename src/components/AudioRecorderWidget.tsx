@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Animated,
+  ActivityIndicator, Animated, Alert,
 } from 'react-native'
 import { useAudioRecorder } from '../hooks/useAudioRecorder'
 import { colors, font, radius, spacing } from '../utils/theme'
+import { pickAndImportAudioClip } from '../services/importAudioClip'
+import { useToastStore } from '../stores/toastStore'
 
 interface Props {
   recordings: { id?: number; uri: string; durationMs: number; transcription?: string }[]
@@ -14,6 +16,8 @@ interface Props {
   /** URI of the recording currently being transcribed — drives the pulsing state */
   transcribingUri?: string | null
   compact?: boolean
+  /** Used to namespace the imported file's on-device filename */
+  importPrefix?: string
 }
 
 export default function AudioRecorderWidget({
@@ -22,9 +26,11 @@ export default function AudioRecorderWidget({
   onDeleteRecording,
   transcribingUri,
   compact,
+  importPrefix = 'item',
 }: Props) {
   const { isRecording, startRecording, stopRecording, playRecording, stopPlayback, formatDuration } = useAudioRecorder()
   const [saving, setSaving]       = useState(false)
+  const [importing, setImporting] = useState(false)
   const [playingUri, setPlayingUri] = useState<string | null>(null)
 
   // Pulse animation — runs while any recording is being transcribed
@@ -59,6 +65,23 @@ export default function AudioRecorderWidget({
     }
   }
 
+  // Insert an existing audio file — stand-in for when the mic/API drops out.
+  async function handleInsert() {
+    if (isRecording || isTranscribing || importing) return
+    setImporting(true)
+    try {
+      const imported = await pickAndImportAudioClip(importPrefix)
+      if (!imported) return  // user cancelled
+      await onRecordingComplete(imported.uri, imported.durationMs)
+      useToastStore.getState().showToast(`Inserted "${imported.name}"`, 'info')
+    } catch (err) {
+      console.error('[AudioRecorderWidget] insert error:', err)
+      Alert.alert('Insert failed', 'Could not add the selected audio file.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   async function handlePlay(uri: string) {
     if (playingUri === uri) {
       await stopPlayback()
@@ -83,37 +106,51 @@ export default function AudioRecorderWidget({
 
   return (
     <View style={styles.container}>
-      {/* Full-width Record / Stop / Transcribing button */}
-      <Animated.View style={{ transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
+      {/* Record / Stop / Transcribing button + Insert-existing-file button */}
+      <View style={styles.recordRow}>
+        <Animated.View style={{ flex: 1, transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
+          <TouchableOpacity
+            style={[styles.recordBtn, btnStyle]}
+            onPress={handleToggleRecord}
+            disabled={saving || isTranscribing}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : isTranscribing ? (
+              <View style={styles.recordBtnInner}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.recordBtnText}>Transcribing…</Text>
+              </View>
+            ) : isRecording ? (
+              <View style={styles.recordBtnInner}>
+                <View style={styles.stopSquare} />
+                <Text style={styles.recordBtnText}>Stop</Text>
+                <View style={styles.recordingDot} />
+              </View>
+            ) : (
+              <View style={styles.recordBtnInner}>
+                <View style={styles.micCircle}>
+                  <Text style={styles.micEmoji}>🎙</Text>
+                </View>
+                <Text style={styles.recordBtnText}>Record</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </Animated.View>
+
         <TouchableOpacity
-          style={[styles.recordBtn, btnStyle]}
-          onPress={handleToggleRecord}
-          disabled={saving || isTranscribing}
+          style={styles.insertBtn}
+          onPress={handleInsert}
+          disabled={isRecording || isTranscribing || saving || importing}
           activeOpacity={0.8}
         >
-          {saving ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : isTranscribing ? (
-            <View style={styles.recordBtnInner}>
-              <ActivityIndicator color="#fff" size="small" />
-              <Text style={styles.recordBtnText}>Transcribing…</Text>
-            </View>
-          ) : isRecording ? (
-            <View style={styles.recordBtnInner}>
-              <View style={styles.stopSquare} />
-              <Text style={styles.recordBtnText}>Stop</Text>
-              <View style={styles.recordingDot} />
-            </View>
-          ) : (
-            <View style={styles.recordBtnInner}>
-              <View style={styles.micCircle}>
-                <Text style={styles.micEmoji}>🎙</Text>
-              </View>
-              <Text style={styles.recordBtnText}>Record</Text>
-            </View>
-          )}
+          {importing
+            ? <ActivityIndicator color={colors.primary} size="small" />
+            : <Text style={styles.insertBtnText}>📎</Text>
+          }
         </TouchableOpacity>
-      </Animated.View>
+      </View>
 
       {/* Recordings list */}
       {recordings.length > 0 && (
@@ -162,15 +199,32 @@ export default function AudioRecorderWidget({
 const styles = StyleSheet.create({
   container: { gap: spacing.xs },
 
-  // Full-width record button
+  recordRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: spacing.xs,
+  },
+
+  // Record button — shares the row with the Insert button
   recordBtn: {
     width: '100%',
+    height: '100%',
     backgroundColor: colors.primary,
     borderRadius: radius.md,
     paddingVertical: 13,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  insertBtn: {
+    width: 46,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  insertBtnText: { fontSize: 18 },
   recordBtnRecording: {
     backgroundColor: colors.danger,
   },

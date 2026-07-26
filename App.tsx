@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
-import { StatusBar, View, Text, StyleSheet, ActivityIndicator } from 'react-native'
+import { StatusBar, View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -12,7 +12,9 @@ import { lightColors } from './src/utils/theme'
 import { registerBackgroundSyncTask } from './src/tasks/backgroundSync'
 import FlashToast from './src/components/FlashToast'
 import { useSyncStore } from './src/stores/syncStore'
+import { useToastStore } from './src/stores/toastStore'
 import { setupNotifications } from './src/services/notificationService'
+import { checkApiStatuses } from './src/services/apiStatusService'
 
 import LoginScreen from './src/screens/LoginScreen'
 import InspectionListScreen from './src/screens/InspectionListScreen'
@@ -128,6 +130,31 @@ const bannerStyles = StyleSheet.create({
   },
 })
 
+// ── AI API status check ────────────────────────────────────────────────────────
+// Runs once in the background at launch — flashes a quick "all good" toast, or
+// pops an Alert naming whichever provider(s) are degraded, so clerks know
+// upfront whether AI transcription is likely to work before they start dictating.
+async function checkAiApiStatusOnLaunch() {
+  try {
+    const result = await checkApiStatuses()
+    if (!result || !result.checked) return  // offline — skip silently
+
+    if (result.allOperational) {
+      useToastStore.getState().showToast('OpenAI & Anthropic: fully operational', 'success')
+      return
+    }
+
+    const degraded = [result.openai, result.anthropic].filter(p => !p.operational)
+    const lines = degraded.map(p => `${p.name}: ${p.description}`).join('\n')
+    Alert.alert(
+      'AI Service Notice',
+      `${lines}\n\nAI transcription may be slow or unavailable until this clears.`
+    )
+  } catch (err) {
+    console.warn('[App] AI API status check failed (non-fatal):', err)
+  }
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const { isAuthenticated, initAuth } = useAuthStore()
@@ -142,6 +169,7 @@ export default function App() {
       // Register background sync task — best-effort, non-blocking
       registerBackgroundSyncTask().catch(() => {})
       setupNotifications().catch(() => {})  // request notification permission
+      checkAiApiStatusOnLaunch()  // background — flashes/alerts once ready, non-blocking
     }
     bootstrap()
   }, [])
