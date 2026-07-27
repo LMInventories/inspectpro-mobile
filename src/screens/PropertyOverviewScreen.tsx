@@ -24,7 +24,7 @@ type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 
 type ReviewSub  = { label: string; cond: string; subId: string }
 type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[]; photos: string[]; itemId: string }
-type ReviewRoom  = { name: string; sectionKey: string; overviewPhotos: string[]; items: ReviewItem[] }
+type ReviewRoom  = { name: string; sectionKey: string; templateSectionId?: number; overviewPhotos: string[]; items: ReviewItem[] }
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
 async function openMap(address: string) {
@@ -232,7 +232,7 @@ export default function PropertyOverviewScreen() {
         items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos, itemId: String(extra._eid) })
       }
       const overviewPhotos: string[] = rd[key]?._overview?._photos || []
-      if (items.length > 0) roomMap.set(key, { name: displayName, sectionKey: key, overviewPhotos, items })
+      if (items.length > 0) roomMap.set(key, { name: displayName, sectionKey: key, templateSectionId: section.id, overviewPhotos, items })
     }
 
     // Custom rooms
@@ -284,6 +284,7 @@ export default function PropertyOverviewScreen() {
       sectionKey: room.sectionKey,
       sectionName: room.name,
       sectionType: 'room',
+      templateSectionId: room.templateSectionId,
       focusItemKey: itemId,
       focusSubId: subId,
     })
