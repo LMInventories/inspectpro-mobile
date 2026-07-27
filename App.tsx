@@ -41,6 +41,10 @@ export type RootStackParamList = {
     templateSectionId?: number
     fixedSectionData?: string  // JSON stringified fixed section for 'fixed' type
     sectionIndex?: number      // 1-based position of this section in the template (for photo labels)
+    // Deep-link from the pre-finalise Review Report overlay — scrolls to and
+    // briefly highlights this item (or sub-item) once the room has rendered.
+    focusItemKey?: string
+    focusSubId?:   string
   }
   ItemGallery: {
     inspectionId: number

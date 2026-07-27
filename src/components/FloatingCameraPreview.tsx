@@ -4,7 +4,8 @@
  * Live camera preview + shutter button, rendered as an absolute overlay in
  * landscape mode when the clerk chooses "Floating with Preview" camera option.
  *
- * Layout: preview on the left, shutter button vertically centred to its right.
+ * Layout: preview on the left, shutter button vertically centred against the preview to
+ * its right, with the flash toggle positioned directly below the shutter.
  * The whole widget is draggable — long-press-move or move-threshold drag repositions it.
  *
  * Zoom is selected via 0.6×/1×/2×/5× buttons on the right edge of the preview.
@@ -240,9 +241,12 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   }, [hasPermission])
 
   // ── Drag / position ────────────────────────────────────────────────────────
-  const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0) + 12
+  // Extra clearance beyond the sidebar's own width so the shutter button never
+  // sits flush against (or overlaps) the dictation recorder's record button.
+  const SIDEBAR_CLEARANCE = 40
+  const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0) + SIDEBAR_CLEARANCE
 
-  // Initialise at bottom-right, just left of the dictation sidebar
+  // Initialise at bottom-right, clear of the dictation sidebar
   const position = useRef(new Animated.ValueXY({
     x: screenW - CONTAINER_W - rightOffset,
     y: screenH - CONTAINER_H - Math.max(insets.bottom, 16),
@@ -342,23 +346,29 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
         </View>
       </View>
 
-      {/* Shutter + flash toggle — right of preview */}
+      {/* Shutter + flash toggle — right of preview. Shutter is centred against the
+          preview's own height; the flash toggle sits directly below it, independent
+          of the shutter's centring. */}
       <View style={styles.shutterArea}>
-        <Animated.View style={{ opacity: shutterOpacity }}>
-          <TouchableOpacity style={styles.shutter} onPressIn={handleCapture} activeOpacity={1}>
-            <View style={styles.shutterInner} />
-          </TouchableOpacity>
-        </Animated.View>
+        <View style={styles.shutterCentered}>
+          <Animated.View style={{ opacity: shutterOpacity }}>
+            <TouchableOpacity style={styles.shutter} onPressIn={handleCapture} activeOpacity={1}>
+              <View style={styles.shutterInner} />
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
         {activeDevice?.hasFlash && (
-          <TouchableOpacity
-            style={[styles.flashBtn, flashMode !== 'off' && styles.flashBtnActive]}
-            onPress={cycleFlash}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.flashBtnText, flashMode !== 'off' && styles.flashBtnTextActive]}>
-              {flashMode === 'off' ? '⚡ Off' : flashMode === 'on' ? '⚡ On' : '⚡ Auto'}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.flashPositioned}>
+            <TouchableOpacity
+              style={[styles.flashBtn, flashMode !== 'off' && styles.flashBtnActive]}
+              onPress={cycleFlash}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.flashBtnText, flashMode !== 'off' && styles.flashBtnTextActive]}>
+                {flashMode === 'off' ? '⚡ Off' : flashMode === 'on' ? '⚡ On' : '⚡ Auto'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     </Animated.View>
@@ -393,9 +403,28 @@ const styles = StyleSheet.create({
 
   shutterArea: {
     width: SHUTTER_SIZE + SHUTTER_MARGIN,
+    height: PREVIEW_H,
+    position: 'relative',
+  },
+  // Centres the shutter against the preview's own height, independent of the
+  // flash toggle below it.
+  shutterCentered: {
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
+    marginTop: -(SHUTTER_SIZE / 2),
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
+  },
+  // Anchored a fixed gap below the shutter's centre point — never affects,
+  // or is affected by, the shutter's own centring.
+  flashPositioned: {
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
+    marginTop: SHUTTER_SIZE / 2 + 10,
+    alignItems: 'center',
   },
   shutter: {
     width: SHUTTER_SIZE,

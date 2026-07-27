@@ -22,9 +22,9 @@ import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
 type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 
-type ReviewSub  = { label: string; cond: string }
-type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[]; photos: string[] }
-type ReviewRoom  = { name: string; overviewPhotos: string[]; items: ReviewItem[] }
+type ReviewSub  = { label: string; cond: string; subId: string }
+type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[]; photos: string[]; itemId: string }
+type ReviewRoom  = { name: string; sectionKey: string; overviewPhotos: string[]; items: ReviewItem[] }
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
 async function openMap(address: string) {
@@ -193,6 +193,7 @@ export default function PropertyOverviewScreen() {
       return ((itemData?._subs) || []).map((sub: any) => ({
         label: sub.description || sub.label || '—',
         cond:  isCheckOut ? (sub.checkOutCondition || sub.condition || '') : (sub.condition || ''),
+        subId: sub._sid || '',
       })).filter((s: ReviewSub) => s.label || s.cond)
     }
 
@@ -219,7 +220,7 @@ export default function PropertyOverviewScreen() {
         const desc     = !isCheckOut ? (itemData?.description || '') : ''
         const subs     = buildSubs(itemData)
         const photos: string[] = itemData?._photos || []
-        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !subs.length, subs, photos })
+        items.push({ label: item.name || item.label || '', desc, cond, isEmpty: !cond && !subs.length, subs, photos, itemId: iid })
       }
       for (const extra of (rd[key]?._extra || [])) {
         if (!extra._eid || deleted.has(String(extra._eid))) continue
@@ -228,10 +229,10 @@ export default function PropertyOverviewScreen() {
         const desc     = !isCheckOut ? (merged.description || '') : ''
         const subs     = buildSubs(merged)
         const photos: string[] = merged?._photos || []
-        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos })
+        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos, itemId: String(extra._eid) })
       }
       const overviewPhotos: string[] = rd[key]?._overview?._photos || []
-      if (items.length > 0) roomMap.set(key, { name: displayName, overviewPhotos, items })
+      if (items.length > 0) roomMap.set(key, { name: displayName, sectionKey: key, overviewPhotos, items })
     }
 
     // Custom rooms
@@ -247,10 +248,10 @@ export default function PropertyOverviewScreen() {
         const desc   = !isCheckOut ? (merged.description || '') : ''
         const subs   = buildSubs(merged)
         const photos: string[] = merged?._photos || []
-        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos })
+        items.push({ label: extra.name || extra.label || 'Added item', desc, cond, isEmpty: !cond && !subs.length, subs, photos, itemId: String(extra._eid) })
       }
       const overviewPhotos: string[] = rd[cr.key]?._overview?._photos || []
-      if (items.length > 0) roomMap.set(cr.key, { name: roomNames[cr.key] ?? cr.name ?? 'Room', overviewPhotos, items })
+      if (items.length > 0) roomMap.set(cr.key, { name: roomNames[cr.key] ?? cr.name ?? 'Room', sectionKey: cr.key, overviewPhotos, items })
     }
 
     // Apply user-defined room order (_roomOrder mirrors RoomSelectionScreen drag order).
@@ -271,6 +272,21 @@ export default function PropertyOverviewScreen() {
 
     setReviewRooms(rooms)
     setShowReview(true)
+  }
+
+  // Deep-link from a Review Report row straight to that item (or sub-item) in
+  // the room editor, so a flagged/incomplete item can be fixed without hunting
+  // for it in the room's full item list.
+  function goToItem(room: ReviewRoom, itemId: string, subId?: string) {
+    setShowReview(false)
+    navigation.navigate('RoomInspection', {
+      inspectionId,
+      sectionKey: room.sectionKey,
+      sectionName: room.name,
+      sectionType: 'room',
+      focusItemKey: itemId,
+      focusSubId: subId,
+    })
   }
 
   function openSignatureFlow() {
@@ -721,12 +737,17 @@ export default function PropertyOverviewScreen() {
                     )}
                   </View>
                   {room.items.map((item, ii) => (
-                    <View
+                    <TouchableOpacity
                       key={ii}
+                      activeOpacity={0.6}
                       style={[rvStyles.itemRow, item.isEmpty && rvStyles.itemEmpty,
                                ii === room.items.length - 1 && rvStyles.itemLast]}
+                      onPress={() => goToItem(room, item.itemId)}
                     >
-                      <Text style={rvStyles.itemLabel}>{item.label}</Text>
+                      <View style={rvStyles.itemLabelRow}>
+                        <Text style={rvStyles.itemLabel}>{item.label}</Text>
+                        <Text style={rvStyles.itemEditHint}>Edit ›</Text>
+                      </View>
                       {item.isEmpty && !item.subs?.length
                         ? <Text style={rvStyles.itemMissing}>⚠ Not filled</Text>
                         : <>
@@ -745,13 +766,18 @@ export default function PropertyOverviewScreen() {
                             {item.subs && item.subs.length > 0 && (
                               <View style={rvStyles.subsBlock}>
                                 {item.subs.map((sub, si) => (
-                                  <View key={si} style={rvStyles.subRow}>
+                                  <TouchableOpacity
+                                    key={si}
+                                    activeOpacity={0.6}
+                                    style={rvStyles.subRow}
+                                    onPress={() => goToItem(room, item.itemId, sub.subId)}
+                                  >
                                     <Text style={rvStyles.subLabel}>{sub.label}</Text>
                                     {sub.cond
                                       ? <Text style={rvStyles.subCond}>{sub.cond}</Text>
                                       : <Text style={rvStyles.subMissing}>⚠ Not filled</Text>
                                     }
-                                  </View>
+                                  </TouchableOpacity>
                                 ))}
                               </View>
                             )}
@@ -764,7 +790,7 @@ export default function PropertyOverviewScreen() {
                           ))}
                         </ScrollView>
                       )}
-                    </View>
+                    </TouchableOpacity>
                   ))}
                 </View>
               ))
@@ -1126,7 +1152,9 @@ const rvStyles = StyleSheet.create({
   },
   itemLast:    { borderBottomWidth: 0 },
   itemEmpty:   { backgroundColor: '#fff5f5' },
+  itemLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   itemLabel:   { fontSize: font.sm, fontWeight: '600', color: colors.text },
+  itemEditHint: { fontSize: font.xs, fontWeight: '600', color: colors.primary },
   fieldBlock:  { marginTop: spacing.xs },
   fieldLabel:  { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
   itemDesc:    { fontSize: font.sm, color: colors.text, lineHeight: 19 },

@@ -62,7 +62,7 @@ export default function RoomInspectionScreen() {
   const navigation = useNavigation<Nav>()
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
-  const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData, sectionIndex } = route.params
+  const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData, sectionIndex, focusItemKey, focusSubId } = route.params
   const { activeInspection, loadInspection, setReportData } = useInspectionStore()
   const { user } = useAuthStore()
 
@@ -152,6 +152,11 @@ export default function RoomInspectionScreen() {
   const subContainerLayoutsRef = useRef<Map<string, number>>(new Map())
   // Y of each sub-item within its subsContainer (keyed by sub._sid).
   const subItemLayoutsRef = useRef<Map<string, number>>(new Map())
+
+  // Deep-link target from the pre-finalise Review Report overlay — briefly
+  // highlighted once scrolled into view (see the focusItemKey effect below).
+  const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
+  const [highlightSubId,  setHighlightSubId]  = useState<string | null>(null)
 
   // Overview section layout — so the floating camera can assign to Room Overview
   // when it is the majority-visible section (not just a fallback when no items show).
@@ -341,6 +346,39 @@ export default function RoomInspectionScreen() {
       setTimeout(doScroll, 260)
     }
   }
+
+  // Deep-link from the pre-finalise Review Report overlay: scroll to the
+  // requested item (or sub-item) once its layout has been measured, then
+  // briefly highlight it so it's obvious which one to edit. Item layouts are
+  // populated asynchronously via onLayout after the item list renders, so
+  // this polls briefly rather than assuming they're ready on the first frame.
+  useEffect(() => {
+    if (!focusItemKey) return
+    let cancelled = false
+    let attempts = 0
+
+    function tryScroll() {
+      if (cancelled) return
+      const itemY = itemLayoutsRef.current.get(focusItemKey!)
+      if (itemY === undefined) {
+        if (attempts++ < 30) setTimeout(tryScroll, 100)
+        return
+      }
+      const subOffset = focusSubId
+        ? (subContainerLayoutsRef.current.get(focusItemKey!) ?? 0) + (subItemLayoutsRef.current.get(focusSubId) ?? 0)
+        : 0
+      itemScrollRef.current?.scrollTo({ y: Math.max(0, itemY + subOffset - 8), animated: true })
+      setHighlightItemId(focusItemKey!)
+      setHighlightSubId(focusSubId ?? null)
+      setTimeout(() => {
+        if (cancelled) return
+        setHighlightItemId(null)
+        setHighlightSubId(null)
+      }, 2500)
+    }
+    tryScroll()
+    return () => { cancelled = true }
+  }, [focusItemKey, focusSubId, items])
 
   async function buildItems() {
     subItemLayoutsRef.current.clear()
@@ -2376,7 +2414,7 @@ export default function RoomInspectionScreen() {
         actions={itemActions}
         disabled={itemDragFrom !== null}
       >
-      <View style={[styles.itemCard, dm.surface, { borderColor: c.border }, isDragging && styles.itemCardDragging]}>
+      <View style={[styles.itemCard, dm.surface, { borderColor: c.border }, isDragging && styles.itemCardDragging, highlightItemId === item.id && styles.itemCardHighlighted]}>
         {/* Header */}
         <View style={styles.itemHeader}>
           <View style={styles.itemHeaderLeft}>
@@ -2664,7 +2702,7 @@ export default function RoomInspectionScreen() {
                 /* ── CHECK OUT sub-item: read-only CI fields + editable CO condition ── */
                 <View
                   key={sub._sid}
-                  style={styles.subItem}
+                  style={[styles.subItem, highlightSubId === sub._sid && styles.subItemHighlighted]}
                   onLayout={(e) => subItemLayoutsRef.current.set(sub._sid, e.nativeEvent.layout.y)}
                 >
                   <View style={styles.subItemHeader}>
@@ -2769,7 +2807,7 @@ export default function RoomInspectionScreen() {
                 /* ── CHECK IN sub-item: editable description + condition ── */
                 <View
                   key={sub._sid}
-                  style={styles.subItem}
+                  style={[styles.subItem, highlightSubId === sub._sid && styles.subItemHighlighted]}
                   onLayout={(e) => subItemLayoutsRef.current.set(sub._sid, e.nativeEvent.layout.y)}
                 >
                   <View style={styles.subItemHeader}>
@@ -3717,6 +3755,8 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: spacing.sm, paddingTop: spacing.sm },
   itemCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm, borderWidth: 1, borderColor: colors.border },
   itemCardDragging: { backgroundColor: '#f0f7ff', borderColor: colors.primary, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8 },
+  // Deep-link target from the pre-finalise Review Report overlay
+  itemCardHighlighted: { backgroundColor: colors.warningLight, borderColor: colors.warning, borderWidth: 2 },
   itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   itemHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
   itemName: { fontSize: font.sm, fontWeight: '700', color: colors.text, flex: 1 },
@@ -3811,6 +3851,8 @@ const styles = StyleSheet.create({
   subsContainer: { marginTop: spacing.sm },
   subsDivider: { height: 1, backgroundColor: colors.border, marginBottom: spacing.sm, borderStyle: 'dashed' },
   subItem: { backgroundColor: '#fafafa', borderRadius: radius.sm, padding: spacing.sm, marginBottom: spacing.sm, borderLeftWidth: 3, borderLeftColor: colors.primaryLight, borderWidth: 1, borderColor: colors.border },
+  // Deep-link target from the pre-finalise Review Report overlay
+  subItemHighlighted: { borderLeftColor: colors.warning, borderColor: colors.warning, backgroundColor: colors.warningLight },
   subItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   subItemTitle: { fontSize: font.md, fontWeight: '400', color: colors.textLight },
   subItemDelete: { fontSize: font.sm, color: colors.danger, padding: 4 },
