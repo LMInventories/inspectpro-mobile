@@ -371,6 +371,9 @@ export default function ItemGalleryScreen() {
           seen.add(it.key)
           return true
         })
+        // Room Overview is a valid move-to target too (rd[sectionKey]._overview._photos) —
+        // list it first so it's always reachable, not just reassignable within itself.
+        items.unshift({ key: '_overview', name: 'Room Overview' })
         rooms.push({ key: secKey, name: roomNames[secKey] || sec.name || sec.label || secKey, items })
       }
       // Include custom rooms added during inspection
@@ -383,13 +386,18 @@ export default function ItemGalleryScreen() {
         }))
         const deletedIds = new Set<string>((rd[cr.key]?._deleted || []).map(String))
         const items: ItemOption[] = extraItems.filter(it => !deletedIds.has(it.key))
+        items.unshift({ key: '_overview', name: 'Room Overview' })
         rooms.push({ key: cr.key, name: roomNames[cr.key] ?? cr.name ?? 'Room', items })
       }
 
       setAllRooms(rooms)
       const currentRoom = rooms.find(r => r.key === sectionKey) || rooms[0] || null
       setTargetRoom(currentRoom)
-      setTargetItem(currentRoom?.items[0] || null)
+      // Default to whatever this gallery is already showing (so the picker opens
+      // on a sensible "no-op" target) rather than always defaulting to the
+      // Room Overview entry now that it's first in the list.
+      const defaultItem = currentRoom?.items.find(it => it.key === itemKey) || currentRoom?.items[0] || null
+      setTargetItem(defaultItem)
     } catch { Alert.alert('Error', 'Could not load rooms.'); setShowReassign(false) }
     finally { setRoomsLoading(false) }
   }
