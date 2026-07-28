@@ -47,6 +47,7 @@ export const useSyncStore = create<SyncStore>((set) => ({
     useInspectionStore.getState().loadInspections()
 
     const succeeded = res.filter(r => r.success).length
+    const photosFailedTotal = res.reduce((sum, r) => sum + (r.photosFailed || 0), 0)
 
     // OS-level notification: dismiss progress, show completion
     showSyncComplete(succeeded, total)
@@ -55,7 +56,16 @@ export const useSyncStore = create<SyncStore>((set) => ({
     const showToast = useToastStore.getState().showToast
     if (res.length > 0) {
       if (succeeded === res.length) {
-        showToast(`✓ ${succeeded} inspection${succeeded !== 1 ? 's' : ''} synced`, 'success')
+        if (photosFailedTotal > 0) {
+          // Local files for these photos are deliberately kept (not deleted) —
+          // syncing again will retry them.
+          showToast(
+            `Synced, but ${photosFailedTotal} photo${photosFailedTotal !== 1 ? 's' : ''} `
+            + `didn't upload — sync again to retry`, 'info'
+          )
+        } else {
+          showToast(`✓ ${succeeded} inspection${succeeded !== 1 ? 's' : ''} synced`, 'success')
+        }
       } else {
         showToast(`${succeeded}/${res.length} synced — ${res.length - succeeded} failed`, 'error')
       }

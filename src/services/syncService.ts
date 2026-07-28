@@ -27,13 +27,19 @@
  *   • After a successful sync, local audio files are deleted from device storage
  *     and their DB rows are marked synced — they are no longer needed on-device.
  */
-import { getLocalInspection, getAudioRecordings, markSynced, markAudioSynced } from './database'
+import { getLocalInspection, getAudioRecordings, markSynced, markAudioSynced, updateReportData } from './database'
 import { api } from './api'
 import * as FileSystem from 'expo-file-system/legacy'
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
 import { Alert } from 'react-native'
 
-export type SyncResult = { id: number; address: string; success: boolean; error?: string; conflict?: boolean }
+export type SyncResult = {
+  id: number; address: string; success: boolean; error?: string; conflict?: boolean
+  // Count of photos that could neither upload to S3 nor encode as base64 —
+  // their local files are deliberately kept (cleanup is skipped) so they
+  // aren't lost; the clerk should retry sync to pick them up.
+  photosFailed?: number
+}
 
 export type SyncProgress = {
   phase: 'audio' | 'photos' | 'uploading' | 'retrying'
@@ -154,17 +160,36 @@ function setAtPath(rd: any, path: string[], value: string) {
 }
 
 // ── Main photo handler: S3 upload with base64 fallback ───────────────────────
+//
+// Returns { rd, unresolved, resolved }:
+//   - unresolved: count of photos that could neither upload to S3 nor encode
+//     as base64 (their setAtPath value is still the original file:// URI).
+//     The caller MUST NOT delete local photo files when unresolved > 0 —
+//     doing so was the cause of permanently lost photos: the device's local
+//     copy was wiped by cleanupPhotoFiles() even though the server never
+//     received a usable copy, leaving a dead file:// path in report_data
+//     with nothing behind it, on-device or on the server.
+//   - resolved: { path, value } pairs for every photo that DID get a real
+//     URL/data-URI. The caller must write these back into the device's own
+//     local report_data (not just the copy sent to the server) — otherwise
+//     local storage keeps the stale file:// path forever, and the next
+//     unrelated edit-and-resync from this device re-sends that stale path,
+//     silently reverting an already-working photo back to a dead local
+//     reference on the server (the file itself having long since been
+//     deleted by the FIRST sync's cleanup).
 export async function uploadPhotosToS3(
   rd: any,
   inspectionId: number,
   onProgress?: (p: SyncProgress) => void
-): Promise<any> {
+): Promise<{ rd: any; unresolved: number; resolved: Array<{ path: string[]; value: string }> }> {
   const refs = collectLocalUris(rd)
   const totalPhotos = refs.length
 
-  if (totalPhotos === 0) return rd
+  if (totalPhotos === 0) return { rd, unresolved: 0, resolved: [] }
 
   onProgress?.({ phase: 'photos', done: 0, total: totalPhotos })
+  let unresolved = 0
+  const resolved: Array<{ path: string[]; value: string }> = []
 
   // ── Request pre-signed PUT URLs from server (one batch call) ─────────────
   let presigned: Array<{ key: string; upload_url: string; final_url: string }> | null = null
@@ -190,10 +215,16 @@ export async function uploadPhotosToS3(
     for (const { path, uri } of refs) {
       const encoded = await encodeOnePhoto(uri)
       setAtPath(rd, path, encoded)
+      if (encoded.startsWith('file://')) {
+        unresolved++
+        console.warn(`[Sync] photo left unresolved (base64-only mode): ${uri}`)
+      } else {
+        resolved.push({ path, value: encoded })
+      }
       done++
       onProgress?.({ phase: 'photos', done, total: totalPhotos })
     }
-    return rd
+    return { rd, unresolved, resolved }
   }
 
   // ── S3 available: upload each photo directly ───────────────────────────────
@@ -218,17 +249,33 @@ export async function uploadPhotosToS3(
 
       if (result.status >= 200 && result.status < 300) {
         setAtPath(rd, path, slot.final_url)
+        resolved.push({ path, value: slot.final_url })
         console.log(`[Sync] photo ${i + 1}/${totalPhotos} → S3`)
       } else {
         console.warn(`[Sync] S3 upload returned ${result.status} for photo ${i + 1} — falling back to base64`)
-        setAtPath(rd, path, await encodeOnePhoto(uri))
+        const encoded = await encodeOnePhoto(uri)
+        setAtPath(rd, path, encoded)
+        if (encoded.startsWith('file://')) {
+          unresolved++
+          console.warn(`[Sync] photo left unresolved after S3+base64 both failed: ${uri}`)
+        } else {
+          resolved.push({ path, value: encoded })
+        }
       }
     } catch (uploadErr) {
       console.warn(`[Sync] S3 upload failed for photo ${i + 1} — falling back to base64:`, uploadErr)
       try {
-        setAtPath(rd, path, await encodeOnePhoto(uri))
+        const encoded = await encodeOnePhoto(uri)
+        setAtPath(rd, path, encoded)
+        if (encoded.startsWith('file://')) {
+          unresolved++
+          console.warn(`[Sync] photo left unresolved after S3+base64 both failed: ${uri}`)
+        } else {
+          resolved.push({ path, value: encoded })
+        }
       } catch (encodeErr) {
         console.warn('[Sync] base64 fallback also failed, leaving URI as-is:', encodeErr)
+        unresolved++
       }
     }
 
@@ -236,7 +283,7 @@ export async function uploadPhotosToS3(
     onProgress?.({ phase: 'photos', done, total: totalPhotos })
   }
 
-  return rd
+  return { rd, unresolved, resolved }
 }
 
 // ── Photo cleanup — delete the inspection's local photo directory after sync ──
@@ -380,11 +427,15 @@ export async function syncSingleInspection(
     }
 
     // ── Photo upload (S3 preferred, base64 fallback) ─────────────────────────
-    const rdForSync = await uploadPhotosToS3(
+    const { rd: rdForSync, unresolved: photosFailed, resolved: resolvedPhotos } = await uploadPhotosToS3(
       JSON.parse(JSON.stringify(rd)),
       id,
       onProgress
     )
+    if (photosFailed > 0) {
+      console.warn(`[Sync] ${photosFailed} photo(s) could not be uploaded or encoded for inspection ${id} — `
+        + `local files will be kept (not deleted) so nothing is lost; retry sync to pick them up`)
+    }
 
     // ── Build sync payload ───────────────────────────────────────────────────
     const payload: any = { report_data: JSON.stringify(rdForSync) }
@@ -428,8 +479,29 @@ export async function syncSingleInspection(
     // ── Upload to server (with retry) ────────────────────────────────────────
     const response = await syncWithRetry(id, payload, onProgress)
 
+    // ── Persist resolved photo URLs back into LOCAL storage ──────────────────
+    // CRITICAL: without this, the device's own report_data keeps the original
+    // file:// paths forever — only the copy just sent to the server gets the
+    // resolved URLs. Any later edit-and-resync from this same device (even to
+    // an unrelated field) would re-read those stale local file:// paths and
+    // push them back to the server, silently reverting an already-working
+    // photo to a dead reference (the local file having been deleted by this
+    // same sync's cleanup step below). Re-read the current local report_data
+    // rather than reusing `rd`, in case something else was edited locally
+    // while this sync was in flight — that must not be clobbered.
+    if (resolvedPhotos.length > 0) {
+      const latest   = getLocalInspection(id)
+      const latestRd = latest?.report_data ? JSON.parse(latest.report_data) : {}
+      for (const { path, value } of resolvedPhotos) {
+        setAtPath(latestRd, path, value)
+      }
+      updateReportData(id, JSON.stringify(latestRd))
+    }
+
     // ── Post-sync cleanup ────────────────────────────────────────────────────
     // Store the server's new updated_at so next sync can detect conflicts.
+    // Must run AFTER updateReportData above — that call sets synced=0, and
+    // this is the write that should have the final say (synced=1).
     const newServerUpdatedAt = response?.data?.updated_at ?? undefined
     markSynced(id, newServerUpdatedAt)
 
@@ -442,9 +514,19 @@ export async function syncSingleInspection(
     // Delete the entire local photo directory — photos are now on S3.
     // This covers both the inspection's own photos and any CI photos
     // cached for check-out reference (all stored under photos/{id}/).
-    await cleanupPhotoFiles(id)
+    // CRITICAL: skip this when any photo failed to resolve to a remote URL —
+    // deleting local files in that case would permanently lose them, since
+    // the server would still hold a dead file:// path with no data behind it
+    // anywhere. Leaving the files in place means the next sync attempt can
+    // still pick them up via collectLocalUris().
+    if (photosFailed > 0) {
+      console.warn(`[Sync] skipping local photo cleanup for inspection ${id} — `
+        + `${photosFailed} photo(s) still unresolved`)
+    } else {
+      await cleanupPhotoFiles(id)
+    }
 
-    return { id, address: inspection.property_address, success: true }
+    return { id, address: inspection.property_address, success: true, photosFailed }
 
   } catch (err: any) {
     // ── Conflict detected — another device edited this inspection ────────────

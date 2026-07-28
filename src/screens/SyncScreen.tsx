@@ -114,6 +114,11 @@ export default function SyncScreen() {
               <View key={r.id} style={styles.resultRow}>
                 <Text style={r.success ? styles.resultOk : styles.resultFail}>{r.success ? '✓' : '✕'} {r.address}</Text>
                 {!r.success && <Text style={styles.resultError}>{r.error}</Text>}
+                {r.success && !!r.photosFailed && (
+                  <Text style={styles.resultWarn}>
+                    ⚠ {r.photosFailed} photo{r.photosFailed !== 1 ? 's' : ''} could not be uploaded — sync again to retry
+                  </Text>
+                )}
               </View>
             ))}
             {results.some(r => !r.success) && !syncing && (() => {
@@ -278,6 +283,7 @@ const styles = StyleSheet.create({
   resultOk: { fontSize: font.sm, color: colors.success, fontWeight: '600' },
   resultFail: { fontSize: font.sm, color: colors.danger, fontWeight: '600' },
   resultError: { fontSize: font.xs, color: colors.danger, marginLeft: 18, marginTop: 2 },
+  resultWarn:  { fontSize: font.xs, color: colors.warning, marginLeft: 18, marginTop: 2 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
   sectionLabel: { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.6 },
   toggleAllText: { fontSize: font.sm, color: colors.accent, fontWeight: '600' },
