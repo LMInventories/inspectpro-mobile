@@ -1270,7 +1270,12 @@ export default function RoomInspectionScreen() {
     const roomNames: Record<string, string>              = rd._roomNames   || {}
     const customRooms: Array<{ key: string; name: string }> = rd._customRooms || []
 
-    // Build sections array from template structure + filled report_data
+    // Build sections array from template structure + filled report_data.
+    // Check-out items store their value in checkOutCondition, not condition
+    // (condition holds the read-only check-in text carried over) — read the
+    // right field so the AI condition summary actually sees what was
+    // recorded at check-out instead of silently falling back to check-in data.
+    const condOf = (d: any) => (isCheckOut_ ? (d.checkOutCondition || '') : (d.condition || ''))
     const sections: Array<{ name: string; items: any[] }> = []
 
     for (const sec of template.sections) {
@@ -1281,14 +1286,14 @@ export default function RoomInspectionScreen() {
 
       for (const item of (sec.items || [])) {
         const itemData = secData[String(item.id)] || {}
-        if (!itemData.description && !itemData.condition) continue
+        if (!itemData.description && !condOf(itemData)) continue
         secItems.push({
           name:        item.name || '',
           description: itemData.description || '',
-          condition:   itemData.condition   || '',
+          condition:   condOf(itemData),
           subs: (itemData._subs || []).map((s: any) => ({
             description: s.description || '',
-            condition:   s.condition   || '',
+            condition:   condOf(s),
           })),
         })
       }
@@ -1296,14 +1301,14 @@ export default function RoomInspectionScreen() {
       // Extra (user-added) items stored in _extra
       for (const extra of (secData._extra || [])) {
         const eData = secData[extra._eid] || {}
-        if (!eData.description && !eData.condition) continue
+        if (!eData.description && !condOf(eData)) continue
         secItems.push({
           name:        extra.name || '',
           description: eData.description || '',
-          condition:   eData.condition   || '',
+          condition:   condOf(eData),
           subs: (eData._subs || []).map((s: any) => ({
             description: s.description || '',
-            condition:   s.condition   || '',
+            condition:   condOf(s),
           })),
         })
       }
@@ -1325,14 +1330,14 @@ export default function RoomInspectionScreen() {
       for (const [itemId, rawData] of Object.entries(crData)) {
         if (itemId.startsWith('_')) continue
         const d = rawData as any
-        if (!d.description && !d.condition) continue
+        if (!d.description && !condOf(d)) continue
         crItems.push({
           name:        d._name || extraNameLookup[itemId] || itemId,
           description: d.description || '',
-          condition:   d.condition   || '',
+          condition:   condOf(d),
           subs: (d._subs || []).map((s: any) => ({
             description: s.description || '',
-            condition:   s.condition   || '',
+            condition:   condOf(s),
           })),
         })
       }
