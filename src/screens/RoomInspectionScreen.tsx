@@ -97,6 +97,31 @@ export default function RoomInspectionScreen() {
   const [movePhotos,    setMovePhotos]    = useState(true)
   const [movingItem,    setMovingItem]    = useState(false)
 
+  // Move MULTIPLE room items to a different room at once — shares
+  // moveTargetKey/moveDescs/moveConds/movePhotos/copyRoomsList with the
+  // single-item Move To modal above (mutually exclusive, never both open).
+  const [moveMultipleModal, setMoveMultipleModal]     = useState(false)
+  const [moveMultipleStep,  setMoveMultipleStep]       = useState<'select' | 'target'>('select')
+  const [moveMultipleSelected, setMoveMultipleSelected] = useState<Set<string>>(new Set())
+  const [movingMultiple,    setMovingMultiple]         = useState(false)
+
+  // Sub-item move (single via "Move To", or multiple siblings under the same
+  // parent via "Move Multiple") — target room resolved by matching the
+  // PARENT item's name in the destination room (creating it there if no
+  // item with that name exists yet), so a moved sub always lands as a
+  // sub-item again, never a standalone item.
+  const [subMoveModal, setSubMoveModal]         = useState<{ itemId: string; parentLabel: string; initialSid: string; multiSelect: boolean } | null>(null)
+  const [subMoveStep,  setSubMoveStep]           = useState<'select' | 'target'>('select')
+  const [subMoveSelected, setSubMoveSelected]     = useState<Set<string>>(new Set())
+  const [subMoveTargetKey, setSubMoveTargetKey]   = useState('')
+  const [subMoveDescs, setSubMoveDescs]           = useState(true)
+  const [subMoveConds, setSubMoveConds]           = useState(true)
+  const [movingSub, setMovingSub]                 = useState(false)
+
+  // Sub-item rearrange — lightweight up/down reorder (subs lists are short;
+  // a full drag-gesture modal like the room-item Rearrange below is overkill).
+  const [subRearrangeModal, setSubRearrangeModal] = useState<{ itemId: string; parentLabel: string; subs: any[] } | null>(null)
+
   // Rearrange modal
   const [rearrangeModal, setRearrangeModal]   = useState(false)
   const [rearrangeItems, setRearrangeItems]   = useState<any[]>([])
@@ -1641,142 +1666,69 @@ export default function RoomInspectionScreen() {
     ])
   }
 
-  async function duplicateItem(itemId: string, item: any) {
-    const newId = `extra_${Date.now()}`
-    const fresh = await getLocalInspection(inspectionId)
-    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    const existing = rd[sectionKey]?.[String(itemId)] || {}
-    if (!rd[sectionKey]) rd[sectionKey] = {}
-    rd[sectionKey][newId] = JSON.parse(JSON.stringify(existing))
-    if (!rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = []
-    const label = item.label || item.name || ''
-    const copyName = `${label} (Copy)`
-    rd[sectionKey]['_extra'].push({ _eid: newId, name: copyName })
-    await setReportData(inspectionId, rd)
-    // Build the new item with correct field shape for the section type
-    const newItem = sectionType_ === 'room'
-      ? { ...item, id: newId, label: copyName, custom: true }
-      : adaptExtraItem(newId, copyName, sectionType_)
-    setItems(prev => [...prev, newItem])
+  // ── Shared field-transfer helpers (move/copy item or sub across rooms) ────
+  // Mode-aware: check-out items store their value under inventoryCondition
+  // (read-only check-in reference) + checkOutCondition (the clerk's new
+  // value) — condition doesn't exist on a check-out item at all. Used by
+  // commitMoveItemToRoom, commitCopyItemToRoom, commitMoveMultipleToRoom,
+  // and the sub-item move/copy functions, so the check-out field mapping
+  // only needs to be right in one place.
+  function buildTransferFields(src: any, includeDescs: boolean, includeConds: boolean): any {
+    const out: any = {}
+    if (includeDescs && src.description) out.description = src.description
+    if (includeConds) {
+      if (isCheckOut_) {
+        if (src.inventoryCondition) out.inventoryCondition = src.inventoryCondition
+        if (src.checkOutCondition)  out.checkOutCondition  = src.checkOutCondition
+      } else if (src.condition) {
+        out.condition = src.condition
+      }
+    }
+    return out
   }
 
-  async function openCopyItemModal(item: any) {
-    setCopyTargetKey('')
-    setCopyDescs(true)
-    setCopyConds(true)
-    setCopyPhotos(true)
-    setCopyRoomsList([])
-    setCopyRoomsLoading(true)
-    setCopyItemModal({ itemId: item.id, item })
+  function buildTransferSubs(srcSubs: any[], includeDescs: boolean, includeConds: boolean): any[] | undefined {
+    if (!Array.isArray(srcSubs) || srcSubs.length === 0) return undefined
+    return srcSubs.map((sub: any) => {
+      const newSub: any = { _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
+      if (includeDescs && sub.description) newSub.description = sub.description
+      if (includeConds) {
+        if (isCheckOut_) {
+          // Mirrors the read-side fallback (sub.inventoryCondition || sub.condition) —
+          // copy whichever the sub actually has, plus the real checkOutCondition value.
+          if (sub.inventoryCondition) newSub.inventoryCondition = sub.inventoryCondition
+          else if (sub.condition)     newSub.condition          = sub.condition
+          if (sub.checkOutCondition)  newSub.checkOutCondition  = sub.checkOutCondition
+        } else if (sub.condition) {
+          newSub.condition = sub.condition
+        }
+      }
+      return newSub
+    })
+  }
 
-    const fresh = await getLocalInspection(inspectionId)
-    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    const hidden: string[]              = rd['_hiddenRooms'] || []
-    const roomNames: Record<string, string> = rd['_roomNames'] || {}
-    const rooms: { key: string; name: string }[] = []
-
-    // Template sections
-    if (fresh?.template_id) {
+  // Copies an item's _photos to a new set of files on disk, returning the new
+  // URIs — used whenever an item's photos need to survive a move/copy across
+  // rooms (each destination item needs its own physical copies, not shared
+  // references, so deleting one item's photos later can't affect the other).
+  async function copyItemPhotos(srcPhotos: string[] | undefined): Promise<string[]> {
+    if (!Array.isArray(srcPhotos) || srcPhotos.length === 0) return []
+    const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+    const newPhotos: string[] = []
+    for (const uri of srcPhotos) {
       try {
-        let templateData = fresh?.template || null
-        if (!templateData) {
-          const tmplRes = await api.getTemplate(fresh.template_id)
-          templateData = tmplRes.data
-        }
-        for (const s of (templateData?.sections || [])) {
-          const key = String(s.id)
-          if (!hidden.includes(key) && key !== sectionKey)
-            rooms.push({ key, name: roomNames[key] || s.name })
-        }
+        const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+        await FileSystem.copyAsync({ from: uri, to: dest })
+        newPhotos.push(dest)
       } catch {}
     }
-
-    // Custom rooms
-    for (const cr of (rd['_customRooms'] || [])) {
-      if (!hidden.includes(cr.key) && cr.key !== sectionKey)
-        rooms.push({ key: cr.key, name: cr.name })
-    }
-
-    // Apply _roomOrder
-    const order: string[] = rd['_roomOrder'] || []
-    if (order.length) {
-      const orderMap = new Map(order.map((k: string, i: number) => [k, i]))
-      rooms.sort((a, b) => {
-        const ai = orderMap.has(a.key) ? orderMap.get(a.key)! : Infinity
-        const bi = orderMap.has(b.key) ? orderMap.get(b.key)! : Infinity
-        return ai - bi
-      })
-    }
-
-    setCopyRoomsList(rooms)
-    setCopyRoomsLoading(false)
+    return newPhotos
   }
 
-  async function commitCopyItemToRoom() {
-    if (!copyItemModal || !copyTargetKey) return
-    const { itemId, item } = copyItemModal
-    setCopyingItem(true)
-    try {
-      const newId = `extra_${Date.now()}`
-      const fresh = await getLocalInspection(inspectionId)
-      const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-      const src   = rd[sectionKey]?.[String(itemId)] || {}
-      const newData: any = {}
-
-      if (copyDescs && src.description) newData.description = src.description
-      if (copyConds && src.condition)   newData.condition   = src.condition
-
-      if (copyPhotos && Array.isArray(src._photos) && src._photos.length > 0) {
-        const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
-        await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
-        const newPhotos: string[] = []
-        for (const uri of src._photos) {
-          try {
-            const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
-            await FileSystem.copyAsync({ from: uri, to: dest })
-            newPhotos.push(dest)
-          } catch {}
-        }
-        if (newPhotos.length) newData._photos = newPhotos
-      }
-
-      if (Array.isArray(src._subs) && src._subs.length > 0) {
-        newData._subs = src._subs.map((sub: any) => {
-          const newSub: any = { _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
-          if (copyDescs && sub.description) newSub.description = sub.description
-          if (copyConds && sub.condition)   newSub.condition   = sub.condition
-          return newSub
-        })
-      }
-
-      if (!rd[copyTargetKey]) rd[copyTargetKey] = {}
-      rd[copyTargetKey][newId] = newData
-      if (!rd[copyTargetKey]['_extra']) rd[copyTargetKey]['_extra'] = []
-      const label = item.label || item.name || ''
-      rd[copyTargetKey]['_extra'].push({ _eid: newId, name: label })
-
-      await setReportData(inspectionId, rd)
-      const targetName = copyRoomsList.find(r => r.key === copyTargetKey)?.name || 'room'
-      useToastStore.getState().showToast(`"${label}" copied to ${targetName}`, 'success')
-      setCopyItemModal(null)
-    } catch (e: any) {
-      Alert.alert('Copy failed', 'Could not copy item to room.')
-    } finally {
-      setCopyingItem(false)
-    }
-  }
-
-  async function openMoveItemModal(item: any) {
-    setMoveTargetKey('')
-    setMoveDescs(true)
-    setMoveConds(true)
-    setMovePhotos(true)
-    setCopyRoomsList([])
-    setCopyRoomsLoading(true)
-    setMoveItemModal({ itemId: item.id, item })
-
-    const fresh = await getLocalInspection(inspectionId)
-    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+  // Shared "which other rooms can I move/copy to" list builder — used by
+  // openMoveItemModal, openCopyItemModal, and openMoveMultipleModal alike.
+  async function fetchMovableRoomsList(fresh: any, rd: any): Promise<{ key: string; name: string }[]> {
     const hidden: string[]                   = rd['_hiddenRooms'] || []
     const roomNames: Record<string, string>  = rd['_roomNames']   || {}
     const rooms: { key: string; name: string }[] = []
@@ -1811,7 +1763,91 @@ export default function RoomInspectionScreen() {
       })
     }
 
-    setCopyRoomsList(rooms)
+    return rooms
+  }
+
+  async function duplicateItem(itemId: string, item: any) {
+    const newId = `extra_${Date.now()}`
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const existing = rd[sectionKey]?.[String(itemId)] || {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    rd[sectionKey][newId] = JSON.parse(JSON.stringify(existing))
+    if (!rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = []
+    const label = item.label || item.name || ''
+    const copyName = `${label} (Copy)`
+    rd[sectionKey]['_extra'].push({ _eid: newId, name: copyName })
+    await setReportData(inspectionId, rd)
+    // Build the new item with correct field shape for the section type
+    const newItem = sectionType_ === 'room'
+      ? { ...item, id: newId, label: copyName, custom: true }
+      : adaptExtraItem(newId, copyName, sectionType_)
+    setItems(prev => [...prev, newItem])
+  }
+
+  async function openCopyItemModal(item: any) {
+    setCopyTargetKey('')
+    setCopyDescs(true)
+    setCopyConds(true)
+    setCopyPhotos(true)
+    setCopyRoomsList([])
+    setCopyRoomsLoading(true)
+    setCopyItemModal({ itemId: item.id, item })
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
+    setCopyRoomsLoading(false)
+  }
+
+  async function commitCopyItemToRoom() {
+    if (!copyItemModal || !copyTargetKey) return
+    const { itemId, item } = copyItemModal
+    setCopyingItem(true)
+    try {
+      const newId = `extra_${Date.now()}`
+      const fresh = await getLocalInspection(inspectionId)
+      const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+      const src   = rd[sectionKey]?.[String(itemId)] || {}
+      const newData: any = buildTransferFields(src, copyDescs, copyConds)
+
+      if (copyPhotos) {
+        const newPhotos = await copyItemPhotos(src._photos)
+        if (newPhotos.length) newData._photos = newPhotos
+      }
+
+      const newSubs = buildTransferSubs(src._subs, copyDescs, copyConds)
+      if (newSubs) newData._subs = newSubs
+
+      if (!rd[copyTargetKey]) rd[copyTargetKey] = {}
+      rd[copyTargetKey][newId] = newData
+      if (!rd[copyTargetKey]['_extra']) rd[copyTargetKey]['_extra'] = []
+      const label = item.label || item.name || ''
+      rd[copyTargetKey]['_extra'].push({ _eid: newId, name: label })
+
+      await setReportData(inspectionId, rd)
+      const targetName = copyRoomsList.find(r => r.key === copyTargetKey)?.name || 'room'
+      useToastStore.getState().showToast(`"${label}" copied to ${targetName}`, 'success')
+      setCopyItemModal(null)
+    } catch (e: any) {
+      Alert.alert('Copy failed', 'Could not copy item to room.')
+    } finally {
+      setCopyingItem(false)
+    }
+  }
+
+  async function openMoveItemModal(item: any) {
+    setMoveTargetKey('')
+    setMoveDescs(true)
+    setMoveConds(true)
+    setMovePhotos(true)
+    setCopyRoomsList([])
+    setCopyRoomsLoading(true)
+    setMoveItemModal({ itemId: item.id, item })
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
     setCopyRoomsLoading(false)
   }
 
@@ -1826,56 +1862,15 @@ export default function RoomInspectionScreen() {
       const fresh  = await getLocalInspection(inspectionId)
       const rd     = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
       const src    = rd[sectionKey]?.[String(itemId)] || {}
-      const newData: any = {}
+      const newData: any = buildTransferFields(src, moveDescs, moveConds)
 
-      if (moveDescs && src.description) newData.description = src.description
-      if (moveConds) {
-        if (isCheckOut_) {
-          // Check-out items store the read-only check-in reference under
-          // inventoryCondition and the clerk's new value under checkOutCondition —
-          // condition doesn't exist on a check-out item at all. Previously this
-          // only ever copied `condition`, so a move at check-out silently
-          // dropped both fields.
-          if (src.inventoryCondition) newData.inventoryCondition = src.inventoryCondition
-          if (src.checkOutCondition)  newData.checkOutCondition  = src.checkOutCondition
-        } else if (src.condition) {
-          newData.condition = src.condition
-        }
-      }
-
-      // Copy photos before the DB write (only async part)
-      if (movePhotos && Array.isArray(src._photos) && src._photos.length > 0) {
-        const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
-        await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
-        const newPhotos: string[] = []
-        for (const uri of src._photos) {
-          try {
-            const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
-            await FileSystem.copyAsync({ from: uri, to: dest })
-            newPhotos.push(dest)
-          } catch {}
-        }
+      if (movePhotos) {
+        const newPhotos = await copyItemPhotos(src._photos)
         if (newPhotos.length) newData._photos = newPhotos
       }
 
-      if (Array.isArray(src._subs) && src._subs.length > 0) {
-        newData._subs = src._subs.map((sub: any) => {
-          const newSub: any = { _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
-          if (moveDescs && sub.description) newSub.description = sub.description
-          if (moveConds) {
-            if (isCheckOut_) {
-              // Mirrors the read-side fallback (sub.inventoryCondition || sub.condition) —
-              // copy whichever the sub actually has, plus the real checkOutCondition value.
-              if (sub.inventoryCondition) newSub.inventoryCondition = sub.inventoryCondition
-              else if (sub.condition)     newSub.condition          = sub.condition
-              if (sub.checkOutCondition)  newSub.checkOutCondition  = sub.checkOutCondition
-            } else if (sub.condition) {
-              newSub.condition = sub.condition
-            }
-          }
-          return newSub
-        })
-      }
+      const newSubs = buildTransferSubs(src._subs, moveDescs, moveConds)
+      if (newSubs) newData._subs = newSubs
 
       // ── Add to target room ───────────────────────────────────────────────
       if (!rd[moveTargetKey]) rd[moveTargetKey] = {}
@@ -1905,6 +1900,94 @@ export default function RoomInspectionScreen() {
       Alert.alert('Move failed', 'Could not move item to room.')
     } finally {
       setMovingItem(false)
+    }
+  }
+
+  async function openMoveMultipleModal(initialItemId: string) {
+    setMoveTargetKey('')
+    setMoveDescs(true)
+    setMoveConds(true)
+    setMovePhotos(true)
+    setMoveMultipleSelected(new Set([initialItemId]))
+    setMoveMultipleStep('select')
+    setCopyRoomsList([])
+    setCopyRoomsLoading(true)
+    setMoveMultipleModal(true)
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
+    setCopyRoomsLoading(false)
+  }
+
+  function toggleMoveMultipleSelected(itemId: string) {
+    setMoveMultipleSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  async function commitMoveMultipleToRoom() {
+    if (!moveTargetKey || moveMultipleSelected.size === 0) return
+    setMovingMultiple(true)
+    try {
+      // Preserve the order items currently appear in on screen — `items` is
+      // already in display order, so filtering it keeps that order intact.
+      const orderedSelected = items.filter(i => moveMultipleSelected.has(i.id))
+      const fresh = await getLocalInspection(inspectionId)
+      const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+
+      if (!rd[moveTargetKey]) rd[moveTargetKey] = {}
+      if (!rd[moveTargetKey]['_extra']) rd[moveTargetKey]['_extra'] = []
+      if (!rd[sectionKey]) rd[sectionKey] = {}
+      if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
+
+      let seq = 0
+      for (const item of orderedSelected) {
+        const itemId = item.id
+        const src    = rd[sectionKey]?.[String(itemId)] || {}
+        const newId  = `extra_${Date.now()}_${seq++}`
+        const label  = item.label || item.name || ''
+
+        const newData: any = buildTransferFields(src, moveDescs, moveConds)
+        if (movePhotos) {
+          const newPhotos = await copyItemPhotos(src._photos)
+          if (newPhotos.length) newData._photos = newPhotos
+        }
+        const newSubs = buildTransferSubs(src._subs, moveDescs, moveConds)
+        if (newSubs) newData._subs = newSubs
+
+        // ── Add to target room, in source order, appended to the bottom ────
+        rd[moveTargetKey][newId] = newData
+        rd[moveTargetKey]['_extra'].push({ _eid: newId, name: label })
+
+        // ── Remove from source room ─────────────────────────────────────────
+        delete rd[sectionKey][String(itemId)]
+        if (rd[sectionKey]['_extra']) {
+          rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
+        }
+        if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
+      }
+
+      // Single DB write for the whole batch — atomic, matches the single-item move
+      setReportData(inspectionId, rd)
+      const movedIds = new Set(orderedSelected.map(i => i.id))
+      setItems(prev => prev.filter(i => !movedIds.has(i.id)))
+      for (const id of movedIds) {
+        itemLayoutsRef.current.delete(id)
+        itemHeightsRef.current.delete(id)
+      }
+
+      const targetName = copyRoomsList.find(r => r.key === moveTargetKey)?.name || 'room'
+      const count = orderedSelected.length
+      setMoveMultipleModal(false)
+      useToastStore.getState().showToast(`${count} item${count !== 1 ? 's' : ''} moved to ${targetName}`, 'success')
+    } catch {
+      Alert.alert('Move failed', 'Could not move items to room.')
+    } finally {
+      setMovingMultiple(false)
     }
   }
 
@@ -2173,6 +2256,172 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
+  // ── Sub-item slide-menu actions ────────────────────────────────────────────
+
+  async function duplicateSubItem(itemId: string, sid: string) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const subs = rd[sectionKey]?.[String(itemId)]?._subs || []
+    const src = subs.find((s: any) => s._sid === sid)
+    if (!src) return
+    const newSub = { ...JSON.parse(JSON.stringify(src)), _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
+    subs.push(newSub)
+    rd[sectionKey][String(itemId)]._subs = subs
+    await setReportData(inspectionId, rd)
+    useToastStore.getState().showToast('Sub-item copied', 'success')
+  }
+
+  // Resolves the item to attach a moved sub-item to in the target room, by
+  // matching the source PARENT item's name (case-insensitive) — a moved sub
+  // always lands as a sub-item again, e.g. Contents > Contents, never a
+  // standalone item. Creates a new standalone item with that name in the
+  // target room if nothing there matches, so the sub always has somewhere
+  // to attach. Mutates `rd` in place when it has to create that fallback.
+  async function findOrCreateMatchingParentInRoom(rd: any, fresh: any, targetRoomKey: string, parentName: string): Promise<string> {
+    const normalizedName = parentName.trim().toLowerCase()
+    const targetSecData = rd[targetRoomKey] || {}
+
+    for (const extra of (targetSecData._extra || [])) {
+      if ((extra.name || '').trim().toLowerCase() === normalizedName) return extra._eid
+    }
+
+    try {
+      let templateData = fresh?.template || null
+      if (!templateData && fresh?.template_id) {
+        const tmplRes = await api.getTemplate(fresh.template_id)
+        templateData = tmplRes.data
+      }
+      const targetSection = (templateData?.sections || []).find((s: any) => String(s.id) === targetRoomKey)
+      const match = (targetSection?.items || []).find((it: any) => (it.name || '').trim().toLowerCase() === normalizedName)
+      if (match) return String(match.id)
+    } catch {}
+
+    const newId = `extra_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+    if (!rd[targetRoomKey]) rd[targetRoomKey] = {}
+    if (!rd[targetRoomKey][newId]) rd[targetRoomKey][newId] = {}
+    if (!rd[targetRoomKey]['_extra']) rd[targetRoomKey]['_extra'] = []
+    rd[targetRoomKey]['_extra'].push({ _eid: newId, name: parentName })
+    return newId
+  }
+
+  // multiSelect=false ("Move To"): moves just the one sub, skips the sibling
+  // picker. multiSelect=true ("Move Multiple"): starts on the sibling-select
+  // step so more subs from the SAME parent item can be brought along together.
+  async function openSubMoveModal(itemId: string, parentLabel: string, sid: string, multiSelect: boolean) {
+    setSubMoveTargetKey('')
+    setSubMoveDescs(true)
+    setSubMoveConds(true)
+    setSubMoveSelected(new Set([sid]))
+    setSubMoveStep(multiSelect ? 'select' : 'target')
+    setSubMoveModal({ itemId, parentLabel, initialSid: sid, multiSelect })
+    setCopyRoomsList([])
+    setCopyRoomsLoading(true)
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
+    setCopyRoomsLoading(false)
+  }
+
+  function toggleSubMoveSelected(sid: string) {
+    setSubMoveSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(sid)) next.delete(sid)
+      else next.add(sid)
+      return next
+    })
+  }
+
+  async function commitSubMove() {
+    if (!subMoveModal || !subMoveTargetKey || subMoveSelected.size === 0) return
+    const { itemId, parentLabel } = subMoveModal
+    setMovingSub(true)
+    try {
+      const fresh = await getLocalInspection(inspectionId)
+      const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+      const allSubs: any[] = rd[sectionKey]?.[String(itemId)]?._subs || []
+
+      // Preserve on-screen order — allSubs is already in display order.
+      const orderedSelected = allSubs.filter((s: any) => subMoveSelected.has(s._sid))
+      if (orderedSelected.length === 0) return
+
+      const targetItemId = await findOrCreateMatchingParentInRoom(rd, fresh, subMoveTargetKey, parentLabel)
+      if (!rd[subMoveTargetKey][targetItemId]) rd[subMoveTargetKey][targetItemId] = {}
+      if (!Array.isArray(rd[subMoveTargetKey][targetItemId]._subs)) rd[subMoveTargetKey][targetItemId]._subs = []
+
+      for (const sub of orderedSelected) {
+        const fields = buildTransferFields(sub, subMoveDescs, subMoveConds)
+        rd[subMoveTargetKey][targetItemId]._subs.push({
+          _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          ...fields,
+        })
+      }
+
+      // Remove moved subs from the source item
+      const movedIds = new Set(orderedSelected.map((s: any) => s._sid))
+      if (rd[sectionKey]?.[String(itemId)]?._subs) {
+        rd[sectionKey][String(itemId)]._subs = rd[sectionKey][String(itemId)]._subs.filter((s: any) => !movedIds.has(s._sid))
+      }
+
+      setReportData(inspectionId, rd)
+      const targetName = copyRoomsList.find(r => r.key === subMoveTargetKey)?.name || 'room'
+      const count = orderedSelected.length
+      setSubMoveModal(null)
+      useToastStore.getState().showToast(
+        `${count} sub-item${count !== 1 ? 's' : ''} moved to ${parentLabel} in ${targetName}`,
+        'success'
+      )
+    } catch {
+      Alert.alert('Move failed', 'Could not move sub-item(s) to room.')
+    } finally {
+      setMovingSub(false)
+    }
+  }
+
+  // Lightweight up/down reorder — sub-item lists are short enough that a full
+  // drag-gesture modal (like the room-item Rearrange above) is overkill.
+  function openSubRearrangeModal(itemId: string, parentLabel: string) {
+    const rd = getReportData()
+    const subs = rd[sectionKey]?.[String(itemId)]?._subs || []
+    setSubRearrangeModal({ itemId, parentLabel, subs: [...subs] })
+  }
+
+  function moveSubRearrangeItem(fromIdx: number, direction: -1 | 1) {
+    setSubRearrangeModal(prev => {
+      if (!prev) return prev
+      const toIdx = fromIdx + direction
+      if (toIdx < 0 || toIdx >= prev.subs.length) return prev
+      const next = [...prev.subs]
+      const [moved] = next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, moved)
+      return { ...prev, subs: next }
+    })
+  }
+
+  async function commitSubRearrange() {
+    if (!subRearrangeModal) return
+    const { itemId, subs } = subRearrangeModal
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
+    rd[sectionKey][String(itemId)]._subs = subs
+    await setReportData(inspectionId, rd)
+    setSubRearrangeModal(null)
+  }
+
+  function getSubActions(item: any, sub: any): any[] {
+    const parentLabel = item.label || item.name || 'Item'
+    return [
+      { icon: '⊕', label: 'Add Sub Item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: parentLabel, count: 1 }) },
+      { icon: '⧉', label: 'Copy',         bg: '#e0f2fe', onPress: () => duplicateSubItem(item.id, sub._sid) },
+      { icon: '↗', label: 'Move To',       bg: '#fdf4ff', onPress: () => openSubMoveModal(item.id, parentLabel, sub._sid, false) },
+      { icon: '☑', label: 'Move Multiple', bg: '#fdf4ff', onPress: () => openSubMoveModal(item.id, parentLabel, sub._sid, true) },
+      { icon: '⇅', label: 'Rearrange',     bg: '#f5f3ff', onPress: () => openSubRearrangeModal(item.id, parentLabel) },
+      { icon: '🗑', label: 'Delete',        bg: colors.dangerLight, onPress: () => removeSubItem(item.id, sub._sid) },
+    ]
+  }
+
   // ── Check-out: Actions ────────────────────────────────────────────────────
   function getItemActions(itemId: string): any[] {
     return getReportData()[sectionKey]?.[`_actions_${itemId}`] || []
@@ -2412,8 +2661,9 @@ export default function RoomInspectionScreen() {
       { icon: '⧉',  label: 'Copy',      bg: '#e0f2fe',           onPress: () => duplicateItem(item.id, item) },
       ...(isRoomItem ? [{ icon: '⤢', label: 'Copy To', bg: '#f0f9ff', onPress: () => openCopyItemModal(item) }] : []),
       ...(isRoomItem ? [{ icon: '↗', label: 'Move To', bg: '#fdf4ff', onPress: () => openMoveItemModal(item) }] : []),
+      ...(isRoomItem ? [{ icon: '☑', label: 'Move Multiple', bg: '#fdf4ff', onPress: () => openMoveMultipleModal(item.id) }] : []),
       { icon: '⇅',  label: 'Rearrange', bg: '#f5f3ff',           onPress: () => openRearrangeModal() },
-      { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteItemConfirmed(item.id, label), wide: true },
+      { icon: '🗑',  label: 'Delete',    bg: colors.dangerLight,  onPress: () => deleteItemConfirmed(item.id, label) },
     ]
 
     const isDragging  = itemDragFrom === idx
@@ -2727,8 +2977,8 @@ export default function RoomInspectionScreen() {
             {getSubs(item.id).map((sub: any, idx: number) => (
               isCheckOut_ ? (
                 /* ── CHECK OUT sub-item: read-only CI fields + editable CO condition ── */
+                <SwipeableRow key={sub._sid} actions={getSubActions(item, sub)}>
                 <View
-                  key={sub._sid}
                   style={[styles.subItem, highlightSubId === sub._sid && styles.subItemHighlighted]}
                   onLayout={(e) => subItemLayoutsRef.current.set(sub._sid, e.nativeEvent.layout.y)}
                 >
@@ -2830,10 +3080,11 @@ export default function RoomInspectionScreen() {
                     </View>
                   )}
                 </View>
+                </SwipeableRow>
               ) : (
                 /* ── CHECK IN sub-item: editable description + condition ── */
+                <SwipeableRow key={sub._sid} actions={getSubActions(item, sub)}>
                 <View
-                  key={sub._sid}
                   style={[styles.subItem, highlightSubId === sub._sid && styles.subItemHighlighted]}
                   onLayout={(e) => subItemLayoutsRef.current.set(sub._sid, e.nativeEvent.layout.y)}
                 >
@@ -2893,6 +3144,7 @@ export default function RoomInspectionScreen() {
                     </View>
                   )}
                 </View>
+                </SwipeableRow>
               )
             ))}
           </View>
@@ -3443,6 +3695,282 @@ export default function RoomInspectionScreen() {
                     ? <ActivityIndicator color="#fff" size="small" />
                     : <Text style={mStyles.confirmText}>Move Item</Text>
                   }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Move MULTIPLE items to room modal ─────────────────────────── */}
+        <Modal visible={moveMultipleModal} transparent animationType="fade" onRequestClose={() => setMoveMultipleModal(false)}>
+          <View style={mStyles.overlay}>
+            <View style={[mStyles.box, { width: '88%', maxHeight: '80%', padding: 0, overflow: 'hidden' }]}>
+              <View style={ciStyles.header}>
+                <Text style={ciStyles.title}>Move Multiple Items</Text>
+                <Text style={ciStyles.sub}>
+                  {moveMultipleSelected.size} item{moveMultipleSelected.size !== 1 ? 's' : ''} selected
+                </Text>
+              </View>
+
+              {moveMultipleStep === 'select' ? (
+                <>
+                  <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                    <View style={ciStyles.section}>
+                      <Text style={ciStyles.sectionLabel}>Select items to move</Text>
+                      {items.filter(it => it.hasDescription).map(it => {
+                        const checked = moveMultipleSelected.has(it.id)
+                        return (
+                          <TouchableOpacity
+                            key={it.id}
+                            style={ciStyles.checkRow}
+                            onPress={() => toggleMoveMultipleSelected(it.id)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[ciStyles.checkbox, checked && ciStyles.checkboxOn]}>
+                              {checked && <Text style={ciStyles.checkmark}>✓</Text>}
+                            </View>
+                            <Text style={ciStyles.checkLabel}>{it.label || it.name}</Text>
+                          </TouchableOpacity>
+                        )
+                      })}
+                    </View>
+                  </ScrollView>
+                  <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                    <TouchableOpacity style={mStyles.cancel} onPress={() => setMoveMultipleModal(false)}>
+                      <Text style={mStyles.cancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[mStyles.confirm, moveMultipleSelected.size === 0 && { backgroundColor: colors.borderDark }]}
+                      onPress={() => setMoveMultipleStep('target')}
+                      disabled={moveMultipleSelected.size === 0}
+                    >
+                      <Text style={mStyles.confirmText}>Next</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                    <View style={ciStyles.section}>
+                      <Text style={ciStyles.sectionLabel}>Include</Text>
+                      {[
+                        { label: 'Descriptions', value: moveDescs, set: setMoveDescs },
+                        { label: 'Conditions',   value: moveConds, set: setMoveConds },
+                        { label: 'Photos',       value: movePhotos, set: setMovePhotos },
+                      ].map(({ label, value, set }) => (
+                        <TouchableOpacity key={label} style={ciStyles.checkRow} onPress={() => set(!value)} activeOpacity={0.7}>
+                          <View style={[ciStyles.checkbox, value && ciStyles.checkboxOn]}>
+                            {value && <Text style={ciStyles.checkmark}>✓</Text>}
+                          </View>
+                          <Text style={ciStyles.checkLabel}>{label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    <View style={ciStyles.section}>
+                      <Text style={ciStyles.sectionLabel}>Destination Room</Text>
+                      {copyRoomsLoading ? (
+                        <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                      ) : copyRoomsList.length === 0 ? (
+                        <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                      ) : (
+                        copyRoomsList.map(room => (
+                          <TouchableOpacity
+                            key={room.key}
+                            style={[ciStyles.roomRow, moveTargetKey === room.key && ciStyles.roomRowSelected]}
+                            onPress={() => setMoveTargetKey(room.key)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[ciStyles.radio, moveTargetKey === room.key && ciStyles.radioSelected]}>
+                              {moveTargetKey === room.key && <View style={ciStyles.radioDot} />}
+                            </View>
+                            <Text style={[ciStyles.roomName, moveTargetKey === room.key && ciStyles.roomNameSelected]}>
+                              {room.name}
+                            </Text>
+                          </TouchableOpacity>
+                        ))
+                      )}
+                    </View>
+                  </ScrollView>
+                  <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                    <TouchableOpacity style={mStyles.cancel} onPress={() => setMoveMultipleStep('select')}>
+                      <Text style={mStyles.cancelText}>Back</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[mStyles.confirm, (!moveTargetKey || movingMultiple) && { backgroundColor: colors.borderDark }]}
+                      onPress={commitMoveMultipleToRoom}
+                      disabled={!moveTargetKey || movingMultiple}
+                    >
+                      {movingMultiple
+                        ? <ActivityIndicator color="#fff" size="small" />
+                        : <Text style={mStyles.confirmText}>Move {moveMultipleSelected.size} Item{moveMultipleSelected.size !== 1 ? 's' : ''}</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Move sub-item(s) to room modal ────────────────────────────── */}
+        <Modal visible={!!subMoveModal} transparent animationType="fade" onRequestClose={() => setSubMoveModal(null)}>
+          <View style={mStyles.overlay}>
+            <View style={[mStyles.box, { width: '88%', maxHeight: '80%', padding: 0, overflow: 'hidden' }]}>
+              <View style={ciStyles.header}>
+                <Text style={ciStyles.title}>{subMoveModal?.multiSelect ? 'Move Multiple Sub-items' : 'Move Sub-item'}</Text>
+                <Text style={ciStyles.sub} numberOfLines={1}>{subMoveModal?.parentLabel || 'Item'}</Text>
+              </View>
+
+              {subMoveModal?.multiSelect && subMoveStep === 'select' ? (
+                <>
+                  <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                    <View style={ciStyles.section}>
+                      <Text style={ciStyles.sectionLabel}>Select sub-items to move</Text>
+                      {getSubs(subMoveModal.itemId).map((sub: any, idx: number) => {
+                        const checked = subMoveSelected.has(sub._sid)
+                        return (
+                          <TouchableOpacity
+                            key={sub._sid}
+                            style={ciStyles.checkRow}
+                            onPress={() => toggleSubMoveSelected(sub._sid)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[ciStyles.checkbox, checked && ciStyles.checkboxOn]}>
+                              {checked && <Text style={ciStyles.checkmark}>✓</Text>}
+                            </View>
+                            <Text style={ciStyles.checkLabel} numberOfLines={1}>
+                              {sub.description ? sub.description.split('\n')[0] : `Sub-item ${idx + 1}`}
+                            </Text>
+                          </TouchableOpacity>
+                        )
+                      })}
+                    </View>
+                  </ScrollView>
+                  <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                    <TouchableOpacity style={mStyles.cancel} onPress={() => setSubMoveModal(null)}>
+                      <Text style={mStyles.cancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[mStyles.confirm, subMoveSelected.size === 0 && { backgroundColor: colors.borderDark }]}
+                      onPress={() => setSubMoveStep('target')}
+                      disabled={subMoveSelected.size === 0}
+                    >
+                      <Text style={mStyles.confirmText}>Next</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                    <View style={ciStyles.section}>
+                      <Text style={ciStyles.sectionLabel}>Include</Text>
+                      {[
+                        { label: 'Descriptions', value: subMoveDescs, set: setSubMoveDescs },
+                        { label: 'Conditions',   value: subMoveConds, set: setSubMoveConds },
+                      ].map(({ label, value, set }) => (
+                        <TouchableOpacity key={label} style={ciStyles.checkRow} onPress={() => set(!value)} activeOpacity={0.7}>
+                          <View style={[ciStyles.checkbox, value && ciStyles.checkboxOn]}>
+                            {value && <Text style={ciStyles.checkmark}>✓</Text>}
+                          </View>
+                          <Text style={ciStyles.checkLabel}>{label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+
+                    <View style={ciStyles.section}>
+                      <Text style={ciStyles.sectionLabel}>Destination Room</Text>
+                      <Text style={[ciStyles.emptyRooms, { marginBottom: 8 }]}>
+                        Attaches to "{subMoveModal?.parentLabel}" in the room you choose — created there if it doesn't already exist.
+                      </Text>
+                      {copyRoomsLoading ? (
+                        <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                      ) : copyRoomsList.length === 0 ? (
+                        <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                      ) : (
+                        copyRoomsList.map(room => (
+                          <TouchableOpacity
+                            key={room.key}
+                            style={[ciStyles.roomRow, subMoveTargetKey === room.key && ciStyles.roomRowSelected]}
+                            onPress={() => setSubMoveTargetKey(room.key)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[ciStyles.radio, subMoveTargetKey === room.key && ciStyles.radioSelected]}>
+                              {subMoveTargetKey === room.key && <View style={ciStyles.radioDot} />}
+                            </View>
+                            <Text style={[ciStyles.roomName, subMoveTargetKey === room.key && ciStyles.roomNameSelected]}>
+                              {room.name}
+                            </Text>
+                          </TouchableOpacity>
+                        ))
+                      )}
+                    </View>
+                  </ScrollView>
+                  <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                    <TouchableOpacity
+                      style={mStyles.cancel}
+                      onPress={() => (subMoveModal?.multiSelect ? setSubMoveStep('select') : setSubMoveModal(null))}
+                    >
+                      <Text style={mStyles.cancelText}>{subMoveModal?.multiSelect ? 'Back' : 'Cancel'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[mStyles.confirm, (!subMoveTargetKey || movingSub) && { backgroundColor: colors.borderDark }]}
+                      onPress={commitSubMove}
+                      disabled={!subMoveTargetKey || movingSub}
+                    >
+                      {movingSub
+                        ? <ActivityIndicator color="#fff" size="small" />
+                        : <Text style={mStyles.confirmText}>Move</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Sub-item rearrange modal ──────────────────────────────────── */}
+        <Modal visible={!!subRearrangeModal} transparent animationType="fade" onRequestClose={() => setSubRearrangeModal(null)}>
+          <View style={mStyles.overlay}>
+            <View style={[mStyles.box, { width: '88%', maxHeight: '80%', padding: 0, overflow: 'hidden' }]}>
+              <View style={ciStyles.header}>
+                <Text style={ciStyles.title}>Rearrange Sub-items</Text>
+                <Text style={ciStyles.sub} numberOfLines={1}>{subRearrangeModal?.parentLabel || 'Item'}</Text>
+              </View>
+              <ScrollView style={{ maxHeight: 400 }}>
+                <View style={ciStyles.section}>
+                  {(subRearrangeModal?.subs || []).map((sub: any, idx: number) => (
+                    <View key={sub._sid} style={[ciStyles.roomRow, { justifyContent: 'space-between' }]}>
+                      <Text style={ciStyles.roomName} numberOfLines={1}>
+                        {sub.description ? sub.description.split('\n')[0] : `Sub-item ${idx + 1}`}
+                      </Text>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity
+                          onPress={() => moveSubRearrangeItem(idx, -1)}
+                          disabled={idx === 0}
+                          style={{ opacity: idx === 0 ? 0.3 : 1, padding: 6 }}
+                        >
+                          <Text style={{ fontSize: 18 }}>▲</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => moveSubRearrangeItem(idx, 1)}
+                          disabled={idx === (subRearrangeModal?.subs.length ?? 0) - 1}
+                          style={{ opacity: idx === (subRearrangeModal?.subs.length ?? 0) - 1 ? 0.3 : 1, padding: 6 }}
+                        >
+                          <Text style={{ fontSize: 18 }}>▼</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+              <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
+                <TouchableOpacity style={mStyles.cancel} onPress={() => setSubRearrangeModal(null)}>
+                  <Text style={mStyles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={mStyles.confirm} onPress={commitSubRearrange}>
+                  <Text style={mStyles.confirmText}>Save Order</Text>
                 </TouchableOpacity>
               </View>
             </View>
