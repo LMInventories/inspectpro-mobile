@@ -18,13 +18,22 @@ export function useAudioRecorder() {
   const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
 
   const [isRecording, setIsRecording] = useState(false)
+  const [isPaused, setIsPaused]       = useState(false)
   const [isPlaying, setIsPlaying]     = useState(false)
 
-  // Track elapsed time for duration since recorder.currentTime may not be
-  // available post-stop on all platforms
-  const startTimeRef = useRef<number>(0)
-  const playerRef    = useRef<ReturnType<typeof createAudioPlayer> | null>(null)
+  // Track elapsed time for duration ourselves (rather than trusting
+  // recorder.currentTime, which may not be available post-stop on all
+  // platforms) — accumulatedMsRef holds the total across however many
+  // pause/resume cycles happened before the take was finalized; startTimeRef
+  // marks when the CURRENT active recording segment began.
+  const startTimeRef       = useRef<number>(0)
+  const accumulatedMsRef   = useRef<number>(0)
+  const playerRef          = useRef<ReturnType<typeof createAudioPlayer> | null>(null)
 
+  // Starts a brand new take (first press after idle, or after a previous
+  // take was finalized via stopRecording). Must call prepareToRecordAsync —
+  // resuming from pause must NOT call this again, or the in-progress file
+  // would be discarded and a new one started.
   const startRecording = useCallback(async (): Promise<boolean> => {
     try {
       const { granted } = await AudioModule.requestRecordingPermissionsAsync()
@@ -38,12 +47,14 @@ export function useAudioRecorder() {
         playsInSilentMode: true,
       })
 
-      // prepareToRecordAsync must be called before every record() call —
-      // the hook creates the recorder but does not auto-prepare it.
+      // prepareToRecordAsync must be called before every NEW take's first
+      // record() call — the hook creates the recorder but does not auto-prepare it.
       await recorder.prepareToRecordAsync()
       recorder.record()
       startTimeRef.current = Date.now()
+      accumulatedMsRef.current = 0
       setIsRecording(true)
+      setIsPaused(false)
       return true
     } catch (err) {
       console.error('startRecording error', err)
@@ -52,10 +63,41 @@ export function useAudioRecorder() {
     }
   }, [recorder])
 
-  const stopRecording = useCallback(async (): Promise<Recording | null> => {
-    if (!isRecording) return null
+  // Pauses the CURRENT take — the recorded file is kept open (not finalized),
+  // so a later resumeRecording() call continues appending to the same file.
+  const pauseRecording = useCallback(() => {
+    if (!isRecording) return
     try {
-      const durationMs = Date.now() - startTimeRef.current
+      recorder.pause()
+      accumulatedMsRef.current += Date.now() - startTimeRef.current
+      setIsRecording(false)
+      setIsPaused(true)
+    } catch (err) {
+      console.error('pauseRecording error', err)
+    }
+  }, [isRecording, recorder])
+
+  // Resumes a paused take — no prepareToRecordAsync call, so this continues
+  // the same underlying file rather than starting a new one.
+  const resumeRecording = useCallback(() => {
+    if (!isPaused) return
+    try {
+      recorder.record()
+      startTimeRef.current = Date.now()
+      setIsRecording(true)
+      setIsPaused(false)
+    } catch (err) {
+      console.error('resumeRecording error', err)
+    }
+  }, [isPaused, recorder])
+
+  // Finalizes the take (whether currently recording or paused) — this is
+  // the ONLY point where the file is actually closed/committed, so it's the
+  // right moment to hand the clip off for saving/transcription.
+  const stopRecording = useCallback(async (): Promise<Recording | null> => {
+    if (!isRecording && !isPaused) return null
+    try {
+      const durationMs = accumulatedMsRef.current + (isRecording ? Date.now() - startTimeRef.current : 0)
 
       // stop() is async — awaiting it ensures the native layer has finished
       // writing the file before we read recorder.uri.
@@ -70,6 +112,8 @@ export function useAudioRecorder() {
       }
 
       setIsRecording(false)
+      setIsPaused(false)
+      accumulatedMsRef.current = 0
       await AudioModule.setAudioModeAsync({ allowsRecording: false })
 
       if (!uri) {
@@ -80,9 +124,10 @@ export function useAudioRecorder() {
     } catch (err) {
       console.error('stopRecording error', err)
       setIsRecording(false)
+      setIsPaused(false)
       return null
     }
-  }, [isRecording, recorder])
+  }, [isRecording, isPaused, recorder])
 
   const playRecording = useCallback(async (uri: string) => {
     try {
@@ -135,8 +180,11 @@ export function useAudioRecorder() {
 
   return {
     isRecording,
+    isPaused,
     isPlaying,
     startRecording,
+    pauseRecording,
+    resumeRecording,
     stopRecording,
     playRecording,
     stopPlayback,
