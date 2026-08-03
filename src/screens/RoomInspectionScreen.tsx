@@ -2280,9 +2280,17 @@ export default function RoomInspectionScreen() {
   async function findOrCreateMatchingParentInRoom(rd: any, fresh: any, targetRoomKey: string, parentName: string): Promise<string> {
     const normalizedName = parentName.trim().toLowerCase()
     const targetSecData = rd[targetRoomKey] || {}
+    // Template items don't disappear from the template when deleted in a
+    // specific room — deletion is tracked separately via _deleted. A name
+    // match against a deleted item must NOT be used: writing into it would
+    // silently attach the sub to an item that never renders (that was the
+    // "nothing happens" bug — the sub landed on a still-deleted item).
+    const deletedIds: string[] = targetSecData['_deleted'] || []
 
     for (const extra of (targetSecData._extra || [])) {
-      if ((extra.name || '').trim().toLowerCase() === normalizedName) return extra._eid
+      if ((extra.name || '').trim().toLowerCase() === normalizedName && !deletedIds.includes(extra._eid)) {
+        return extra._eid
+      }
     }
 
     try {
@@ -2293,9 +2301,12 @@ export default function RoomInspectionScreen() {
       }
       const targetSection = (templateData?.sections || []).find((s: any) => String(s.id) === targetRoomKey)
       const match = (targetSection?.items || []).find((it: any) => (it.name || '').trim().toLowerCase() === normalizedName)
-      if (match) return String(match.id)
+      if (match && !deletedIds.includes(String(match.id))) return String(match.id)
     } catch {}
 
+    // Not found, or the only name match in this room was deleted — fall back
+    // to creating a fresh standalone item. It starts with zero subs, so the
+    // moved sub(s) pushed by the caller naturally become the first sub(s).
     const newId = `extra_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
     if (!rd[targetRoomKey]) rd[targetRoomKey] = {}
     if (!rd[targetRoomKey][newId]) rd[targetRoomKey][newId] = {}
