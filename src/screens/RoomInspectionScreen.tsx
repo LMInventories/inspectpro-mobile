@@ -916,8 +916,14 @@ export default function RoomInspectionScreen() {
     itemId: string,
     itemLabel: string,
     uri: string,
-    durationMs: number
+    durationMs: number,
+    forceNormalMode = false
   ) {
+    // Additional Items (Check Out) always want a real description + condition
+    // fill, never the room's actual checkOutCondition/damage-only behavior.
+    const effectiveCheckOut     = forceNormalMode ? false : isCheckOut_
+    const effectiveDamageReport = forceNormalMode ? false : isDamageReport_
+
     setAiProcessingItem(itemId)
     setTranscribingUris(prev => ({ ...prev, [itemId]: uri }))
     setAiError('')
@@ -933,8 +939,8 @@ export default function RoomInspectionScreen() {
         sectionId:      sectionKey,
         rowId:          itemId,
         sectionType:    sectionType_,
-        isCheckOut:     isCheckOut_,
-        isDamageReport: isDamageReport_,
+        isCheckOut:     effectiveCheckOut,
+        isDamageReport: effectiveDamageReport,
         inspectionId,
       })
 
@@ -1033,12 +1039,12 @@ export default function RoomInspectionScreen() {
 
       let changed = false
       if (sectionType_ === 'room') {
-        if (isDamageReport_) {
+        if (effectiveDamageReport) {
           // Damage report: AI returns condition only — write directly, no prefix
           if (shouldWrite('condition', result.condition, row.condition)) {
             row.condition = computeValue('condition', result.condition, row.condition); changed = true
           }
-        } else if (isCheckOut_) {
+        } else if (effectiveCheckOut) {
           // Check-out: AI result goes into checkOutCondition.
           // "As Inventory+" is always the first line (placeholder = no damage / matches inventory).
           // Any AI-dictated condition is appended below it.
@@ -1516,7 +1522,11 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  async function handleRecordingComplete(item: any, uri: string, durationMs: number) {
+  // forceNormalMode: used by Additional Items (Check Out) — those items always
+  // want a real description + condition fill (like a check-in item), never the
+  // room's actual checkOutCondition/damage-only behavior, even though the
+  // overall inspection is check-out.
+  async function handleRecordingComplete(item: any, uri: string, durationMs: number, forceNormalMode = false) {
     saveAudioRecording(inspectionId, sectionKey, sectionName, item.id, item.label || item.name || '', item.label || item.name || '', uri, durationMs)
     const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, item.id)
     setRecordings(prev => ({ ...prev, [item.id]: recs }))
@@ -1525,7 +1535,7 @@ export default function RoomInspectionScreen() {
     // don't fire concurrent API calls.
     if (hasAiTypist) {
       const label = item.label || item.name || ''
-      enqueueTranscription(() => transcribeItem(item.id, label, uri, durationMs))
+      enqueueTranscription(() => transcribeItem(item.id, label, uri, durationMs, forceNormalMode))
     }
   }
 
@@ -2433,6 +2443,52 @@ export default function RoomInspectionScreen() {
     ]
   }
 
+  // ── Additional Items (Check Out only) — items added to the property during
+  // tenancy, not part of the original check-in. Stored as
+  // reportData[sectionKey]._customItems = [{ _cid, name, description, checkOutCondition }].
+  // Sub-items, photos, and actions reuse the standard per-id helpers (cid as
+  // itemId) — mirrors the webapp's existing implementation exactly, so a
+  // report reads the same whichever app you view it in.
+  function getCustomItems(): any[] {
+    return getReportData()[sectionKey]?.['_customItems'] || []
+  }
+
+  async function addCustomItemEntry() {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (!rd[sectionKey]['_customItems']) rd[sectionKey]['_customItems'] = []
+    const cid = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+    rd[sectionKey]['_customItems'].push({ _cid: cid, name: '', description: '', checkOutCondition: '' })
+    await setReportData(inspectionId, rd)
+  }
+
+  async function setCustomItemField(cid: string, field: string, value: string) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const item = (rd[sectionKey]?.['_customItems'] || []).find((i: any) => i._cid === cid)
+    if (item) {
+      item[field] = value
+      await setReportData(inspectionId, rd)
+    }
+  }
+
+  async function removeCustomItemEntry(cid: string, name: string) {
+    Alert.alert(`Remove "${name || 'item'}"?`, 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: async () => {
+        const fresh = await getLocalInspection(inspectionId)
+        const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+        if (!rd[sectionKey]?.['_customItems']) return
+        rd[sectionKey]['_customItems'] = rd[sectionKey]['_customItems'].filter((i: any) => i._cid !== cid)
+        if (rd[sectionKey][cid]) delete rd[sectionKey][cid]
+        const actKey = `_actions_${cid}`
+        if (rd[sectionKey][actKey]) delete rd[sectionKey][actKey]
+        await setReportData(inspectionId, rd)
+      }},
+    ])
+  }
+
   // ── Check-out: Actions ────────────────────────────────────────────────────
   function getItemActions(itemId: string): any[] {
     return getReportData()[sectionKey]?.[`_actions_${itemId}`] || []
@@ -2656,6 +2712,173 @@ export default function RoomInspectionScreen() {
             </ScrollView>
           </NativeViewGestureHandler>
         )}
+      </View>
+    )
+  }
+
+  function renderCustomItems() {
+    const customItems = getCustomItems()
+
+    return (
+      <View style={styles.additionalItemsSection}>
+        <View style={styles.additionalItemsHeader}>
+          <Text style={styles.additionalItemsTitle}>🆕 Additional Items</Text>
+          <Text style={styles.additionalItemsSubtitle}>Items added to the property during tenancy</Text>
+        </View>
+
+        {customItems.map((ci: any) => {
+          const syntheticItem = { id: ci._cid, label: ci.name || 'Additional item' }
+          const subs = getSubs(ci._cid)
+          const actions = getItemActions(ci._cid)
+
+          return (
+            <View key={ci._cid} style={[styles.itemCard, dm.surface, { borderColor: c.border }]}>
+              <View style={styles.itemHeader}>
+                <TextInput
+                  style={[styles.itemName, dm.text, { flex: 1 }]}
+                  value={ci.name}
+                  onChangeText={v => setCustomItemField(ci._cid, 'name', v)}
+                  placeholder="Item name — e.g. Black plastic chair"
+                  placeholderTextColor={c.textLight}
+                />
+                <TouchableOpacity onPress={() => removeCustomItemEntry(ci._cid, ci.name)}>
+                  <Text style={styles.subItemDelete}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
+                <TextInput
+                  style={[styles.notesInput, dm.input]}
+                  value={ci.description || ''}
+                  onFocus={() => handleTextFocus(ci._cid)}
+                  onChangeText={v => setCustomItemField(ci._cid, 'description', v)}
+                  placeholder="Describe the item…"
+                  placeholderTextColor={c.textLight}
+                  multiline textAlignVertical="top"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
+                <TextInput
+                  style={[styles.notesInput, dm.input]}
+                  value={ci.checkOutCondition || ''}
+                  onFocus={() => handleTextFocus(ci._cid)}
+                  onChangeText={v => setCustomItemField(ci._cid, 'checkOutCondition', v)}
+                  placeholder="e.g. In good order"
+                  placeholderTextColor={c.textLight}
+                  multiline textAlignVertical="top"
+                />
+              </View>
+
+              {/* Actions / tag */}
+              <View style={styles.fieldGroup}>
+                <Text style={[styles.fieldLabel, dm.textLight]}>Actions</Text>
+                <TouchableOpacity
+                  style={[styles.actionsBtn, actions.length > 0 && styles.actionsBtnActive]}
+                  onPress={() => openActionsModal(ci._cid, ci.name || 'Additional item', ci.checkOutCondition || '')}
+                >
+                  <Text style={[styles.actionsBtnText, actions.length === 0 && styles.actionsBtnEmpty]}>
+                    {actions.length > 0
+                      ? `${actions.length} action${actions.length !== 1 ? 's' : ''} — tap to edit`
+                      : '+ Add action'}
+                  </Text>
+                </TouchableOpacity>
+                {actions.length > 0 && (
+                  <View style={styles.actionPillsRow}>
+                    {actions.map((a: any, ai: number) => {
+                      const cat = actionCatalogue.find((cc: any) => cc.id === a.actionId)
+                      const col = cat?.color || '#64748b'
+                      const key = a._id || `${a.actionId}_${ai}`
+                      return (
+                        <View key={key} style={[styles.actionPill, { backgroundColor: col + '20', borderColor: col + '60' }]}>
+                          <View style={[styles.actionPillDot, { backgroundColor: col }]} />
+                          <Text style={[styles.actionPillText, { color: col }]}>{cat?.name || String(a.actionId)}</Text>
+                          {a.responsibility ? <Text style={[styles.actionPillResp, { color: col }]}>· {a.responsibility}</Text> : null}
+                        </View>
+                      )
+                    })}
+                  </View>
+                )}
+              </View>
+
+              {renderPhotos(syntheticItem)}
+
+              {/* Voice note — forceNormalMode so the AI always fills description
+                  + condition here, regardless of the room's check-out mode. */}
+              {hasAiTypist && (
+                <View style={styles.voiceBlock}>
+                  {aiProcessingItem === ci._cid && (
+                    <View style={styles.aiProcessingBadge}>
+                      <ActivityIndicator size="small" color={colors.accent} />
+                      <Text style={styles.aiProcessingText}>AI transcribing…</Text>
+                    </View>
+                  )}
+                  <AudioRecorderWidget
+                    recordings={recordings[ci._cid] || []}
+                    onRecordingComplete={async (uri, dur) => handleRecordingComplete(syntheticItem, uri, dur, true)}
+                    onDeleteRecording={async (uri) => {
+                      setRecordings(prev => ({ ...prev, [ci._cid]: (prev[ci._cid] || []).filter((r: any) => r.file_uri !== uri) }))
+                    }}
+                    transcribingUri={transcribingUris[ci._cid] ?? null}
+                    importPrefix={`item_${inspectionId}_${ci._cid}`}
+                    compact
+                  />
+                </View>
+              )}
+
+              {/* Sub-items — same slide menu as regular items' subs */}
+              {subs.length > 0 && (
+                <View style={styles.subsContainer}>
+                  <View style={styles.subsDivider} />
+                  {subs.map((sub: any) => (
+                    <SwipeableRow key={sub._sid} actions={getSubActions(syntheticItem, sub)}>
+                      <View style={styles.subItem}>
+                        <View style={styles.subItemHeader}>
+                          <Text style={styles.subItemTitle}>—</Text>
+                          <TouchableOpacity onPress={() => removeSubItem(ci._cid, sub._sid)}>
+                            <Text style={styles.subItemDelete}>✕</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.fieldGroup}>
+                          <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
+                          <TextInput
+                            style={[styles.notesInput, dm.input]}
+                            value={sub.description}
+                            onChangeText={v => setSubField(ci._cid, sub._sid, 'description', v)}
+                            placeholder="Describe sub-item…"
+                            placeholderTextColor={c.textLight}
+                            multiline textAlignVertical="top"
+                          />
+                        </View>
+                        <View style={styles.fieldGroup}>
+                          <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
+                          <TextInput
+                            style={[styles.notesInput, dm.input]}
+                            value={sub.condition}
+                            onChangeText={v => setSubField(ci._cid, sub._sid, 'condition', v)}
+                            placeholder="e.g. Good, Fair, Worn…"
+                            placeholderTextColor={c.textLight}
+                            multiline textAlignVertical="top"
+                          />
+                        </View>
+                      </View>
+                    </SwipeableRow>
+                  ))}
+                </View>
+              )}
+
+              <TouchableOpacity style={styles.addSubItemBtn} onPress={() => addSubItem(ci._cid)}>
+                <Text style={styles.addSubItemText}>+ Add Sub Item</Text>
+              </TouchableOpacity>
+            </View>
+          )
+        })}
+
+        <TouchableOpacity style={styles.addItemBtn} onPress={addCustomItemEntry}>
+          <Text style={styles.addItemText}>+ Add Additional Item</Text>
+        </TouchableOpacity>
       </View>
     )
   }
@@ -3361,6 +3584,7 @@ export default function RoomInspectionScreen() {
             <TouchableOpacity style={styles.addItemBtn} onPress={() => setAddItemModal(true)}>
               <Text style={styles.addItemText}>+ Add Item</Text>
             </TouchableOpacity>
+            {isCheckOut_ && sectionType_ === 'room' && renderCustomItems()}
             <View style={{ height: 20 }} />
           </ScrollView>
         )}
@@ -4409,6 +4633,13 @@ const styles = StyleSheet.create({
   aiProcessingText: { fontSize: font.xs, color: '#3730a3', fontWeight: '600' },
   addItemBtn: { borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', borderRadius: radius.md, padding: spacing.sm, alignItems: 'center', marginTop: spacing.xs },
   addItemText: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
+  addSubItemBtn: { borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', borderRadius: radius.md, padding: spacing.xs, alignItems: 'center', marginTop: spacing.xs },
+  addSubItemText: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
+  // ── Additional Items (Check Out) ──────────────────────────────────────────
+  additionalItemsSection: { marginTop: spacing.md, marginBottom: spacing.xs, padding: spacing.sm, backgroundColor: '#eff6ff', borderWidth: 1.5, borderColor: '#93c5fd', borderStyle: 'dashed', borderRadius: radius.md },
+  additionalItemsHeader: { marginBottom: spacing.sm },
+  additionalItemsTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  additionalItemsSubtitle: { fontSize: font.xs, color: colors.textMid, marginTop: 2 },
   aiCondSumBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.accent, borderRadius: radius.md, paddingVertical: 13, paddingHorizontal: spacing.md, marginHorizontal: spacing.md, marginTop: spacing.md, marginBottom: spacing.xs },
   aiCondSumBtnBusy: { backgroundColor: colors.borderDark },
   aiCondSumBtnIcon: { fontSize: 16 },
