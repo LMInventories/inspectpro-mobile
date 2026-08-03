@@ -906,6 +906,24 @@ export default function RoomInspectionScreen() {
     const fresh = incoming.split('\n').filter(l => normLine(l) && !have.has(normLine(l)))
     return fresh.length ? existing + '\n' + fresh.join('\n') : existing
   }
+  // _claude_fill_room_checkout is instructed to always prepend "As Inventory+"
+  // to its own checkOutCondition output (so clerks stop having to type it by
+  // hand) — but every merge site below ALSO prepends "As Inventory+" itself
+  // when the field looks blank/placeholder. Without stripping the AI's own
+  // copy first, a fresh room-mode check-out fill doubles it up. Strip
+  // whatever the AI sent before any merge logic touches it — this file's own
+  // merge logic is the single authority on when/whether to add the prefix.
+  const AS_INVENTORY_PREFIX_RE = /^as\s+inventory\+?[,\s]*\n?/i
+  function stripAsInventoryPrefix(s: string): string {
+    return (s || '').replace(AS_INVENTORY_PREFIX_RE, '')
+  }
+  // Re-attaches the fixed "As Inventory+" prefix to whatever the clerk typed
+  // in the (stripped) editable field — the clerk's text buffer never
+  // contains the prefix at all, so there's no way to edit/remove it.
+  function withAsInventoryPrefix(rest: string): string {
+    const trimmed = (rest || '').trim()
+    return trimmed ? `As Inventory+\n${trimmed}` : 'As Inventory+'
+  }
   function isDuplicateSub(subs: any[], sub: any): boolean {
     return (subs || []).some((s: any) =>
       normLine(s.description || '') === normLine(sub.description || '') &&
@@ -1048,7 +1066,7 @@ export default function RoomInspectionScreen() {
           // Check-out: AI result goes into checkOutCondition.
           // "As Inventory+" is always the first line (placeholder = no damage / matches inventory).
           // Any AI-dictated condition is appended below it.
-          const aiCondition = result.condition || result.description
+          const aiCondition = stripAsInventoryPrefix(result.condition || result.description || '')
           if (aiCondition) {
             const existing = row.checkOutCondition || ''
             const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
@@ -1187,7 +1205,11 @@ export default function RoomInspectionScreen() {
       if (isCheckOut_) {
         // Check-out: _claude_fill_room_checkout returns checkOutCondition; fall back to
         // condition/description for any legacy or fixed-section paths.
-        const aiCondition = fields.checkOutCondition || fields.condition || fields.description
+        // The AI's own checkOutCondition already comes prefixed with "As
+        // Inventory+" (the backend prompt requires it) — strip it here so
+        // the merge logic below, which decides on its own when to add that
+        // prefix, doesn't end up doubling it.
+        const aiCondition = stripAsInventoryPrefix(fields.checkOutCondition || fields.condition || fields.description || '')
         if (aiCondition) {
           const existing = row.checkOutCondition || ''
           const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
@@ -1224,14 +1246,17 @@ export default function RoomInspectionScreen() {
         if (!row._subs) row._subs = []
         for (const sub of fields._subs) {
           if (isCheckOut_ && sub._sid) {
-            // Check-out: match by _sid, write checkOutCondition with "As Inventory+" prefix
+            // Check-out: match by _sid, write checkOutCondition with "As Inventory+" prefix.
+            // sub.checkOutCondition (from the AI) already comes pre-fixed —
+            // strip before merging so the prefix isn't doubled.
             const existing = row._subs.find((s: any) => s._sid === sub._sid)
-            if (existing && sub.checkOutCondition) {
+            const subAiCondition = stripAsInventoryPrefix(sub.checkOutCondition || '')
+            if (existing && subAiCondition) {
               const existingCO = existing.checkOutCondition || ''
               const isBlankOrPlaceholder = !existingCO.trim() || existingCO.trim() === 'As Inventory+'
               const mergedSubCO = isBlankOrPlaceholder
-                ? `As Inventory+\n${sub.checkOutCondition}`
-                : appendUnique(existingCO, sub.checkOutCondition)
+                ? `As Inventory+\n${subAiCondition}`
+                : appendUnique(existingCO, subAiCondition)
               if (mergedSubCO !== existingCO) { existing.checkOutCondition = mergedSubCO; changed = true }
             }
           } else if (!isCheckOut_) {
@@ -1580,7 +1605,7 @@ export default function RoomInspectionScreen() {
         if (isDamageReport_) {
           if (result.condition && !sub.condition) { sub.condition = result.condition; changed = true }
         } else if (isCheckOut_) {
-          const aiCondition = result.condition || result.description
+          const aiCondition = stripAsInventoryPrefix(result.condition || result.description || '')
           if (aiCondition) {
             const existingCO = sub.checkOutCondition || ''
             const isBlankOrPlaceholder = !existingCO.trim() || existingCO.trim() === 'As Inventory+'
@@ -2524,6 +2549,8 @@ export default function RoomInspectionScreen() {
       .split('\n')
       .map((l: string) => l.trim())
       .filter(Boolean)
+      // "As Inventory+" is boilerplate, never a real condition to tag
+      .filter((l: string) => !/^as\s+inventory\+?$/i.test(l))
     const normed = existing.map(normaliseAction)
     setActionsModal({
       itemId,
@@ -2966,22 +2993,21 @@ export default function RoomInspectionScreen() {
               {/* Check-In reference photos — collapsible, for visual comparison */}
               {renderCheckInPhotos(item)}
 
-              {/* Condition at Check Out — editable, one line per condition.
-                   "As Inventory+" is auto-set on first focus (means item matches check-in,
-                   any extra conditions are appended below it on new lines). */}
+              {/* Condition at Check Out — "As Inventory+" is a fixed,
+                   non-editable prefix shown as a badge (not part of the
+                   editable text at all, so it can't be edited or duplicated) —
+                   the field below only holds anything new since check-in. */}
               <View style={styles.fieldGroup}>
-                <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
+                <View style={styles.coLabelRow}>
+                  <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
+                  <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>As Inventory+</Text></View>
+                </View>
                 <TextInput
                   style={[styles.notesInput, dm.input]}
-                  value={getField(item.id, 'checkOutCondition')}
-                  onFocus={() => {
-                    handleTextFocus(item.id)
-                    if (!getField(item.id, 'checkOutCondition')) {
-                      setField(item.id, 'checkOutCondition', 'As Inventory+')
-                    }
-                  }}
-                  onChangeText={v => setField(item.id, 'checkOutCondition', v)}
-                  placeholder="As Inventory+"
+                  value={stripAsInventoryPrefix(getField(item.id, 'checkOutCondition'))}
+                  onFocus={() => handleTextFocus(item.id)}
+                  onChangeText={v => setField(item.id, 'checkOutCondition', withAsInventoryPrefix(v))}
+                  placeholder="Add any new condition since check-in…"
                   placeholderTextColor={c.textLight}
                   multiline textAlignVertical="top"
                 />
@@ -3237,18 +3263,16 @@ export default function RoomInspectionScreen() {
                     </View>
                   </View>
                   <View style={styles.fieldGroup}>
-                    <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
+                    <View style={styles.coLabelRow}>
+                      <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
+                      <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>As Inventory+</Text></View>
+                    </View>
                     <TextInput
                       style={[styles.notesInput, dm.input]}
-                      value={sub.checkOutCondition || ''}
-                      onFocus={() => {
-                        handleTextFocus(item.id, sub._sid)
-                        if (!sub.checkOutCondition) {
-                          setSubField(item.id, sub._sid, 'checkOutCondition', 'As Inventory+')
-                        }
-                      }}
-                      onChangeText={v => setSubField(item.id, sub._sid, 'checkOutCondition', v)}
-                      placeholder="As Inventory+"
+                      value={stripAsInventoryPrefix(sub.checkOutCondition || '')}
+                      onFocus={() => handleTextFocus(item.id, sub._sid)}
+                      onChangeText={v => setSubField(item.id, sub._sid, 'checkOutCondition', withAsInventoryPrefix(v))}
+                      placeholder="Add any new condition since check-in…"
                       placeholderTextColor={c.textLight}
                       multiline textAlignVertical="top"
                     />
