@@ -90,12 +90,23 @@ export default function RoomInspectionScreen() {
   const [copyingItem, setCopyingItem] = useState(false)
 
   // Move item to room modal (shares copyRoomsList/copyRoomsLoading — can't both be open)
-  const [moveItemModal, setMoveItemModal] = useState<{ itemId: string; item: any } | null>(null)
+  // isCustomSource marks a source item from the Additional Items (_customItems)
+  // section — its content/removal live in a different shape than a regular item.
+  const [moveItemModal, setMoveItemModal] = useState<{ itemId: string; item: any; isCustomSource?: boolean } | null>(null)
   const [moveTargetKey, setMoveTargetKey] = useState('')
   const [moveDescs,     setMoveDescs]     = useState(true)
   const [moveConds,     setMoveConds]     = useState(true)
   const [movePhotos,    setMovePhotos]    = useState(true)
   const [movingItem,    setMovingItem]    = useState(false)
+
+  // Destination ITEM within the destination room — lets a moved item merge
+  // into an existing item (filling it if empty, or becoming a new sub-item
+  // if it already has content) instead of always landing as a new standalone
+  // item. '' means "create as new item" (the original behaviour). Shared
+  // between the single-item Move To modal and Move Multiple's target step.
+  const [moveTargetItemId,   setMoveTargetItemId]   = useState('')
+  const [targetItemsList,    setTargetItemsList]    = useState<{ id: string; name: string; hasContent: boolean }[]>([])
+  const [targetItemsLoading, setTargetItemsLoading] = useState(false)
 
   // Move MULTIPLE room items to a different room at once — shares
   // moveTargetKey/moveDescs/moveConds/movePhotos/copyRoomsList with the
@@ -1763,7 +1774,9 @@ export default function RoomInspectionScreen() {
 
   // Shared "which other rooms can I move/copy to" list builder — used by
   // openMoveItemModal, openCopyItemModal, and openMoveMultipleModal alike.
-  async function fetchMovableRoomsList(fresh: any, rd: any): Promise<{ key: string; name: string }[]> {
+  // includeCurrent=true also includes the CURRENT room (labelled distinctly),
+  // for flows that support merging into an item in the same room.
+  async function fetchMovableRoomsList(fresh: any, rd: any, includeCurrent: boolean = false): Promise<{ key: string; name: string }[]> {
     const hidden: string[]                   = rd['_hiddenRooms'] || []
     const roomNames: Record<string, string>  = rd['_roomNames']   || {}
     const rooms: { key: string; name: string }[] = []
@@ -1777,15 +1790,17 @@ export default function RoomInspectionScreen() {
         }
         for (const s of (templateData?.sections || [])) {
           const key = String(s.id)
-          if (!hidden.includes(key) && key !== sectionKey)
-            rooms.push({ key, name: roomNames[key] || s.name })
+          if (!hidden.includes(key) && (includeCurrent || key !== sectionKey)) {
+            const name = roomNames[key] || s.name
+            rooms.push({ key, name: key === sectionKey ? `${name} (this room)` : name })
+          }
         }
       } catch {}
     }
 
     for (const cr of (rd['_customRooms'] || [])) {
-      if (!hidden.includes(cr.key) && cr.key !== sectionKey)
-        rooms.push({ key: cr.key, name: cr.name })
+      if (!hidden.includes(cr.key) && (includeCurrent || cr.key !== sectionKey))
+        rooms.push({ key: cr.key, name: cr.key === sectionKey ? `${cr.name} (this room)` : cr.name })
     }
 
     const order: string[] = rd['_roomOrder'] || []
@@ -1799,6 +1814,139 @@ export default function RoomInspectionScreen() {
     }
 
     return rooms
+  }
+
+  // An item "has content" once it has anything beyond the fixed "As
+  // Inventory+" placeholder (check-out) or a real description/condition
+  // (check-in). Drives the merge rule below: merging into an item that
+  // already has content creates a new sub-item instead of overwriting it.
+  function itemHasContent(data: any): boolean {
+    if (!data) return false
+    if (isCheckOut_) return !!stripAsInventoryPrefix(data.checkOutCondition || '').trim()
+    return !!((data.description && data.description.trim()) || (data.condition && data.condition.trim()))
+  }
+
+  // Lists every item (template + _extra, excluding deleted) in a given room,
+  // for the "which item should this merge into" picker — a sibling to
+  // fetchMovableRoomsList, but one level down (items within a room, not rooms
+  // within the report).
+  async function fetchRoomItemsList(fresh: any, rd: any, roomKey: string): Promise<{ id: string; name: string; hasContent: boolean }[]> {
+    const secData = rd[roomKey] || {}
+    const deletedIds: string[] = secData['_deleted'] || []
+    const result: { id: string; name: string; hasContent: boolean }[] = []
+
+    try {
+      let templateData = fresh?.template || null
+      if (!templateData && fresh?.template_id) {
+        const tmplRes = await api.getTemplate(fresh.template_id)
+        templateData = tmplRes.data
+      }
+      const section = (templateData?.sections || []).find((s: any) => String(s.id) === roomKey)
+      for (const it of (section?.items || [])) {
+        const id = String(it.id)
+        if (deletedIds.includes(id)) continue
+        result.push({ id, name: it.name || '', hasContent: itemHasContent(secData[id]) })
+      }
+    } catch {}
+
+    for (const extra of (secData['_extra'] || [])) {
+      if (deletedIds.includes(extra._eid)) continue
+      result.push({ id: extra._eid, name: extra.name || '', hasContent: itemHasContent(secData[extra._eid]) })
+    }
+
+    return result
+  }
+
+  // Merges a moved item's fields into an existing target item within a room.
+  // If the target is still empty, the moved content fills it in place; if the
+  // target already has content, the moved content becomes a NEW sub-item
+  // instead, so existing content on the target is never overwritten. Called
+  // repeatedly (once per moved item) is exactly how Move Multiple's "each
+  // becomes its own sub-item, in order" rule falls out naturally — the first
+  // call fills an empty target, every call after that sees content already
+  // there and pushes a sub. Photos always land on the target's own _photos
+  // (sub-items don't support photos); any subs the SOURCE item already had
+  // are flattened in alongside (subs can't nest).
+  function mergeItemIntoTarget(
+    rd: any,
+    targetRoomKey: string,
+    targetItemId: string,
+    newData: any,
+    newSubs: any[] | undefined,
+    newPhotos: string[] | undefined,
+  ) {
+    if (!rd[targetRoomKey]) rd[targetRoomKey] = {}
+    if (!rd[targetRoomKey][targetItemId]) rd[targetRoomKey][targetItemId] = {}
+    const targetData = rd[targetRoomKey][targetItemId]
+    const targetHadContent = itemHasContent(targetData)
+
+    if (newPhotos && newPhotos.length) {
+      targetData._photos = [...(targetData._photos || []), ...newPhotos]
+    }
+
+    if (targetHadContent) {
+      if (!Array.isArray(targetData._subs)) targetData._subs = []
+      targetData._subs.push({ _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, ...newData })
+      if (newSubs) targetData._subs.push(...newSubs)
+    } else {
+      Object.assign(targetData, newData)
+      if (newSubs) {
+        if (!Array.isArray(targetData._subs)) targetData._subs = []
+        targetData._subs.push(...newSubs)
+      }
+    }
+  }
+
+  // Reads a move source's transferable data. Additional Items (_customItems)
+  // store name/description/checkOutCondition inline on the _customItems array
+  // entry itself, while their _subs/_photos live at rd[sectionKey][cid] like
+  // any other item — this stitches both halves together so buildTransferFields
+  // / buildTransferSubs / copyItemPhotos can treat it like a regular item.
+  function resolveMoveSrc(rd: any, itemId: string, isCustomSource: boolean): any {
+    if (isCustomSource) {
+      const ci    = (rd[sectionKey]?.['_customItems'] || []).find((c: any) => c._cid === itemId) || {}
+      const extra = rd[sectionKey]?.[String(itemId)] || {}
+      return { ...ci, _subs: extra._subs, _photos: extra._photos }
+    }
+    return rd[sectionKey]?.[String(itemId)] || {}
+  }
+
+  // Removes a moved item from its source room — branches because a regular
+  // item is hidden via _extra/_deleted (template items never truly vanish),
+  // while an Additional Item is fully removed from _customItems along with
+  // its data and actions (nothing template-backed to preserve).
+  function removeMoveSource(rd: any, itemId: string, isCustomSource: boolean) {
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (isCustomSource) {
+      if (rd[sectionKey]['_customItems']) {
+        rd[sectionKey]['_customItems'] = rd[sectionKey]['_customItems'].filter((c: any) => c._cid !== itemId)
+      }
+      delete rd[sectionKey][String(itemId)]
+      delete rd[sectionKey][`_actions_${itemId}`]
+    } else {
+      delete rd[sectionKey][String(itemId)]
+      if (rd[sectionKey]['_extra']) {
+        rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
+      }
+      if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
+      if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
+    }
+  }
+
+  // Selects a destination room within the move-to-item flows and loads that
+  // room's items for the "merge into" picker — excludeIds keeps any item(s)
+  // currently being moved out of their own destination list (only matters
+  // when the destination room is the current room).
+  async function selectMoveTargetRoom(key: string, excludeIds: string[]) {
+    setMoveTargetKey(key)
+    setMoveTargetItemId('')
+    setTargetItemsList([])
+    setTargetItemsLoading(true)
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const list  = await fetchRoomItemsList(fresh, rd, key)
+    setTargetItemsList(list.filter(it => !excludeIds.includes(it.id)))
+    setTargetItemsLoading(false)
   }
 
   async function duplicateItem(itemId: string, item: any) {
@@ -1871,56 +2019,57 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  async function openMoveItemModal(item: any) {
+  async function openMoveItemModal(item: any, isCustomSource: boolean = false) {
     setMoveTargetKey('')
+    setMoveTargetItemId('')
+    setTargetItemsList([])
     setMoveDescs(true)
     setMoveConds(true)
     setMovePhotos(true)
     setCopyRoomsList([])
     setCopyRoomsLoading(true)
-    setMoveItemModal({ itemId: item.id, item })
+    setMoveItemModal({ itemId: item.id, item, isCustomSource })
 
     const fresh = await getLocalInspection(inspectionId)
     const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd, true))
     setCopyRoomsLoading(false)
   }
 
   async function commitMoveItemToRoom() {
     if (!moveItemModal || !moveTargetKey) return
-    const { itemId, item } = moveItemModal
+    const { itemId, item, isCustomSource } = moveItemModal
     setMovingItem(true)
     try {
-      const newId  = `extra_${Date.now()}`
       const label  = item.label || item.name || ''
       // Read fresh once — all mutations below happen on this single snapshot
       const fresh  = await getLocalInspection(inspectionId)
       const rd     = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-      const src    = rd[sectionKey]?.[String(itemId)] || {}
+      const src    = resolveMoveSrc(rd, itemId, !!isCustomSource)
       const newData: any = buildTransferFields(src, moveDescs, moveConds)
-
-      if (movePhotos) {
-        const newPhotos = await copyItemPhotos(src._photos)
-        if (newPhotos.length) newData._photos = newPhotos
-      }
-
+      const newPhotos = movePhotos ? await copyItemPhotos(src._photos) : []
       const newSubs = buildTransferSubs(src._subs, moveDescs, moveConds)
-      if (newSubs) newData._subs = newSubs
 
-      // ── Add to target room ───────────────────────────────────────────────
-      if (!rd[moveTargetKey]) rd[moveTargetKey] = {}
-      rd[moveTargetKey][newId] = newData
-      if (!rd[moveTargetKey]['_extra']) rd[moveTargetKey]['_extra'] = []
-      rd[moveTargetKey]['_extra'].push({ _eid: newId, name: label })
+      // Never allow targeting the item being moved itself (only possible when
+      // moving within the same room) — falls back to creating a new item.
+      const targetId = (moveTargetItemId && moveTargetItemId !== itemId) ? moveTargetItemId : ''
+
+      if (targetId) {
+        // ── Merge into an existing item (fills it, or becomes a sub-item) ───
+        mergeItemIntoTarget(rd, moveTargetKey, targetId, newData, newSubs, newPhotos)
+      } else {
+        // ── Create as a new standalone item (original behaviour) ───────────
+        const newId = `extra_${Date.now()}`
+        if (newPhotos.length) newData._photos = newPhotos
+        if (newSubs) newData._subs = newSubs
+        if (!rd[moveTargetKey]) rd[moveTargetKey] = {}
+        rd[moveTargetKey][newId] = newData
+        if (!rd[moveTargetKey]['_extra']) rd[moveTargetKey]['_extra'] = []
+        rd[moveTargetKey]['_extra'].push({ _eid: newId, name: label })
+      }
 
       // ── Remove from source room (atomic with the add above) ──────────────
-      if (!rd[sectionKey]) rd[sectionKey] = {}
-      delete rd[sectionKey][String(itemId)]
-      if (rd[sectionKey]['_extra']) {
-        rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
-      }
-      if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
-      if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
+      removeMoveSource(rd, itemId, !!isCustomSource)
 
       // Single DB write — item can never exist in both rooms simultaneously
       setReportData(inspectionId, rd)
@@ -1929,8 +2078,12 @@ export default function RoomInspectionScreen() {
       itemHeightsRef.current.delete(itemId)
 
       const targetName = copyRoomsList.find(r => r.key === moveTargetKey)?.name || 'room'
+      const destLabel = targetId ? (targetItemsList.find(it => it.id === targetId)?.name || 'item') : null
       setMoveItemModal(null)
-      useToastStore.getState().showToast(`"${label}" moved to ${targetName}`, 'success')
+      useToastStore.getState().showToast(
+        destLabel ? `"${label}" moved into "${destLabel}" in ${targetName}` : `"${label}" moved to ${targetName}`,
+        'success'
+      )
     } catch {
       Alert.alert('Move failed', 'Could not move item to room.')
     } finally {
@@ -1940,6 +2093,8 @@ export default function RoomInspectionScreen() {
 
   async function openMoveMultipleModal(initialItemId: string) {
     setMoveTargetKey('')
+    setMoveTargetItemId('')
+    setTargetItemsList([])
     setMoveDescs(true)
     setMoveConds(true)
     setMovePhotos(true)
@@ -1951,7 +2106,7 @@ export default function RoomInspectionScreen() {
 
     const fresh = await getLocalInspection(inspectionId)
     const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd, true))
     setCopyRoomsLoading(false)
   }
 
@@ -1979,24 +2134,34 @@ export default function RoomInspectionScreen() {
       if (!rd[sectionKey]) rd[sectionKey] = {}
       if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
 
+      // Never allow targeting an item that's itself being moved in this batch
+      // (only possible when moving within the same room) — falls back to
+      // creating new items instead.
+      const selectedIds = new Set(orderedSelected.map(i => i.id))
+      const targetId = (moveTargetItemId && !selectedIds.has(moveTargetItemId)) ? moveTargetItemId : ''
+
       let seq = 0
       for (const item of orderedSelected) {
         const itemId = item.id
         const src    = rd[sectionKey]?.[String(itemId)] || {}
-        const newId  = `extra_${Date.now()}_${seq++}`
         const label  = item.label || item.name || ''
 
         const newData: any = buildTransferFields(src, moveDescs, moveConds)
-        if (movePhotos) {
-          const newPhotos = await copyItemPhotos(src._photos)
-          if (newPhotos.length) newData._photos = newPhotos
-        }
+        const newPhotos = movePhotos ? await copyItemPhotos(src._photos) : []
         const newSubs = buildTransferSubs(src._subs, moveDescs, moveConds)
-        if (newSubs) newData._subs = newSubs
 
-        // ── Add to target room, in source order, appended to the bottom ────
-        rd[moveTargetKey][newId] = newData
-        rd[moveTargetKey]['_extra'].push({ _eid: newId, name: label })
+        if (targetId) {
+          // ── Merge into the same target item, in order — the first item to
+          // land fills it if still empty, every one after becomes a sub-item ──
+          mergeItemIntoTarget(rd, moveTargetKey, targetId, newData, newSubs, newPhotos)
+        } else {
+          // ── Add to target room, in source order, appended to the bottom ──
+          const newId = `extra_${Date.now()}_${seq++}`
+          if (newPhotos.length) newData._photos = newPhotos
+          if (newSubs) newData._subs = newSubs
+          rd[moveTargetKey][newId] = newData
+          rd[moveTargetKey]['_extra'].push({ _eid: newId, name: label })
+        }
 
         // ── Remove from source room ─────────────────────────────────────────
         delete rd[sectionKey][String(itemId)]
@@ -2016,9 +2181,15 @@ export default function RoomInspectionScreen() {
       }
 
       const targetName = copyRoomsList.find(r => r.key === moveTargetKey)?.name || 'room'
+      const destLabel = targetId ? (targetItemsList.find(it => it.id === targetId)?.name || 'item') : null
       const count = orderedSelected.length
       setMoveMultipleModal(false)
-      useToastStore.getState().showToast(`${count} item${count !== 1 ? 's' : ''} moved to ${targetName}`, 'success')
+      useToastStore.getState().showToast(
+        destLabel
+          ? `${count} item${count !== 1 ? 's' : ''} moved into "${destLabel}" in ${targetName}`
+          : `${count} item${count !== 1 ? 's' : ''} moved to ${targetName}`,
+        'success'
+      )
     } catch {
       Alert.alert('Move failed', 'Could not move items to room.')
     } finally {
@@ -2758,7 +2929,13 @@ export default function RoomInspectionScreen() {
           const actions = getItemActions(ci._cid)
 
           return (
-            <View key={ci._cid} style={[styles.itemCard, dm.surface, { borderColor: c.border }]}>
+            <SwipeableRow
+              key={ci._cid}
+              actions={[
+                { icon: '↗', label: 'Move To', bg: '#fdf4ff', onPress: () => openMoveItemModal(syntheticItem, true) },
+              ]}
+            >
+            <View style={[styles.itemCard, dm.surface, { borderColor: c.border }]}>
               <View style={styles.itemHeader}>
                 <TextInput
                   style={[styles.itemName, dm.text, { flex: 1 }]}
@@ -2898,6 +3075,7 @@ export default function RoomInspectionScreen() {
                 <Text style={styles.addSubItemText}>+ Add Sub Item</Text>
               </TouchableOpacity>
             </View>
+            </SwipeableRow>
           )
         })}
 
@@ -3917,13 +4095,13 @@ export default function RoomInspectionScreen() {
                   {copyRoomsLoading ? (
                     <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
                   ) : copyRoomsList.length === 0 ? (
-                    <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                    <Text style={ciStyles.emptyRooms}>No rooms available.</Text>
                   ) : (
                     copyRoomsList.map(room => (
                       <TouchableOpacity
                         key={room.key}
                         style={[ciStyles.roomRow, moveTargetKey === room.key && ciStyles.roomRowSelected]}
-                        onPress={() => setMoveTargetKey(room.key)}
+                        onPress={() => selectMoveTargetRoom(room.key, moveItemModal ? [moveItemModal.itemId] : [])}
                         activeOpacity={0.7}
                       >
                         <View style={[ciStyles.radio, moveTargetKey === room.key && ciStyles.radioSelected]}>
@@ -3936,6 +4114,47 @@ export default function RoomInspectionScreen() {
                     ))
                   )}
                 </View>
+
+                {/* Destination item picker — merge into an existing item, or create new */}
+                {!!moveTargetKey && (
+                  <View style={ciStyles.section}>
+                    <Text style={ciStyles.sectionLabel}>Destination Item</Text>
+                    <Text style={[ciStyles.emptyRooms, { marginBottom: 8 }]}>
+                      Merging into an item that already has content adds this as a new sub-item instead of replacing it.
+                    </Text>
+                    <TouchableOpacity
+                      style={[ciStyles.roomRow, !moveTargetItemId && ciStyles.roomRowSelected]}
+                      onPress={() => setMoveTargetItemId('')}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[ciStyles.radio, !moveTargetItemId && ciStyles.radioSelected]}>
+                        {!moveTargetItemId && <View style={ciStyles.radioDot} />}
+                      </View>
+                      <Text style={[ciStyles.roomName, !moveTargetItemId && ciStyles.roomNameSelected]}>
+                        + Create as new item
+                      </Text>
+                    </TouchableOpacity>
+                    {targetItemsLoading ? (
+                      <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                    ) : (
+                      targetItemsList.map(it => (
+                        <TouchableOpacity
+                          key={it.id}
+                          style={[ciStyles.roomRow, moveTargetItemId === it.id && ciStyles.roomRowSelected]}
+                          onPress={() => setMoveTargetItemId(it.id)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={[ciStyles.radio, moveTargetItemId === it.id && ciStyles.radioSelected]}>
+                            {moveTargetItemId === it.id && <View style={ciStyles.radioDot} />}
+                          </View>
+                          <Text style={[ciStyles.roomName, moveTargetItemId === it.id && ciStyles.roomNameSelected]} numberOfLines={1}>
+                            {it.name}{it.hasContent ? ' (has content — becomes a sub-item)' : ' (empty)'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))
+                    )}
+                  </View>
+                )}
               </ScrollView>
 
               {/* Actions */}
@@ -4029,13 +4248,13 @@ export default function RoomInspectionScreen() {
                       {copyRoomsLoading ? (
                         <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
                       ) : copyRoomsList.length === 0 ? (
-                        <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                        <Text style={ciStyles.emptyRooms}>No rooms available.</Text>
                       ) : (
                         copyRoomsList.map(room => (
                           <TouchableOpacity
                             key={room.key}
                             style={[ciStyles.roomRow, moveTargetKey === room.key && ciStyles.roomRowSelected]}
-                            onPress={() => setMoveTargetKey(room.key)}
+                            onPress={() => selectMoveTargetRoom(room.key, Array.from(moveMultipleSelected))}
                             activeOpacity={0.7}
                           >
                             <View style={[ciStyles.radio, moveTargetKey === room.key && ciStyles.radioSelected]}>
@@ -4048,6 +4267,47 @@ export default function RoomInspectionScreen() {
                         ))
                       )}
                     </View>
+
+                    {/* Destination item picker — merge all selected items into one existing item, or create new */}
+                    {!!moveTargetKey && (
+                      <View style={ciStyles.section}>
+                        <Text style={ciStyles.sectionLabel}>Destination Item</Text>
+                        <Text style={[ciStyles.emptyRooms, { marginBottom: 8 }]}>
+                          If it already has content, the first item fills it and the rest land as new sub-items, in order.
+                        </Text>
+                        <TouchableOpacity
+                          style={[ciStyles.roomRow, !moveTargetItemId && ciStyles.roomRowSelected]}
+                          onPress={() => setMoveTargetItemId('')}
+                          activeOpacity={0.7}
+                        >
+                          <View style={[ciStyles.radio, !moveTargetItemId && ciStyles.radioSelected]}>
+                            {!moveTargetItemId && <View style={ciStyles.radioDot} />}
+                          </View>
+                          <Text style={[ciStyles.roomName, !moveTargetItemId && ciStyles.roomNameSelected]}>
+                            + Create as new items
+                          </Text>
+                        </TouchableOpacity>
+                        {targetItemsLoading ? (
+                          <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                        ) : (
+                          targetItemsList.map(it => (
+                            <TouchableOpacity
+                              key={it.id}
+                              style={[ciStyles.roomRow, moveTargetItemId === it.id && ciStyles.roomRowSelected]}
+                              onPress={() => setMoveTargetItemId(it.id)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={[ciStyles.radio, moveTargetItemId === it.id && ciStyles.radioSelected]}>
+                                {moveTargetItemId === it.id && <View style={ciStyles.radioDot} />}
+                              </View>
+                              <Text style={[ciStyles.roomName, moveTargetItemId === it.id && ciStyles.roomNameSelected]} numberOfLines={1}>
+                                {it.name}{it.hasContent ? ' (has content — becomes a sub-item)' : ' (empty)'}
+                              </Text>
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </View>
+                    )}
                   </ScrollView>
                   <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
                     <TouchableOpacity style={mStyles.cancel} onPress={() => setMoveMultipleStep('select')}>
