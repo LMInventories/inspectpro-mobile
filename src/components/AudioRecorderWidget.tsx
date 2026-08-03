@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Animated, Alert,
+  ActivityIndicator, Animated,
 } from 'react-native'
 import { useAudioRecorder } from '../hooks/useAudioRecorder'
 import { colors, font, radius, spacing } from '../utils/theme'
-import { pickAndImportAudioClip } from '../services/importAudioClip'
-import { useToastStore } from '../stores/toastStore'
 
 interface Props {
   recordings: { id?: number; uri: string; durationMs: number; transcription?: string }[]
@@ -16,8 +14,6 @@ interface Props {
   /** URI of the recording currently being transcribed — drives the pulsing state */
   transcribingUri?: string | null
   compact?: boolean
-  /** Used to namespace the imported file's on-device filename */
-  importPrefix?: string
 }
 
 export default function AudioRecorderWidget({
@@ -26,15 +22,17 @@ export default function AudioRecorderWidget({
   onDeleteRecording,
   transcribingUri,
   compact,
-  importPrefix = 'item',
 }: Props) {
   const {
     isRecording, isPaused, startRecording, pauseRecording, resumeRecording,
     stopRecording, playRecording, stopPlayback, formatDuration,
   } = useAudioRecorder()
   const [saving, setSaving]       = useState(false)
-  const [importing, setImporting] = useState(false)
   const [playingUri, setPlayingUri] = useState<string | null>(null)
+  // Collapsed by default — tapping the clips button (replaces the old
+  // attach-existing-file button) reveals the list so a clerk can find and
+  // delete a specific clip without it always taking up screen space.
+  const [clipsExpanded, setClipsExpanded] = useState(false)
 
   // Pulse animation — runs while any recording is being transcribed
   const pulseAnim = useRef(new Animated.Value(1)).current
@@ -83,23 +81,6 @@ export default function AudioRecorderWidget({
     setSaving(false)
   }
 
-  // Insert an existing audio file — stand-in for when the mic/API drops out.
-  async function handleInsert() {
-    if (hasActiveTake || isTranscribing || importing) return
-    setImporting(true)
-    try {
-      const imported = await pickAndImportAudioClip(importPrefix)
-      if (!imported) return  // user cancelled
-      await onRecordingComplete(imported.uri, imported.durationMs)
-      useToastStore.getState().showToast(`Inserted "${imported.name}"`, 'info')
-    } catch (err) {
-      console.error('[AudioRecorderWidget] insert error:', err)
-      Alert.alert('Insert failed', 'Could not add the selected audio file.')
-    } finally {
-      setImporting(false)
-    }
-  }
-
   async function handlePlay(uri: string) {
     if (playingUri === uri) {
       await stopPlayback()
@@ -127,7 +108,7 @@ export default function AudioRecorderWidget({
 
   return (
     <View style={styles.container}>
-      {/* Record/Pause + Transcribe-now + Insert-existing-file buttons */}
+      {/* Record/Pause + Transcribe-now + Clips-list-toggle buttons */}
       <View style={styles.recordRow}>
         <Animated.View style={{ flex: 3, transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
           <TouchableOpacity
@@ -173,31 +154,36 @@ export default function AudioRecorderWidget({
         {/* Transcribe now — finalizes whatever's been recorded across any
             pause/resume cycles (the "full audio") and submits it immediately,
             instead of waiting for the clerk to stop. Roughly 1/4 the width
-            of the record button. */}
+            of the record button. Same ✨ icon as the AI Transcribe button in
+            AI By Room mode. */}
         <TouchableOpacity
           style={[styles.transcribeBtn, !hasActiveTake && styles.transcribeBtnDisabled]}
           onPress={handleTranscribeNow}
           disabled={!hasActiveTake || saving || isTranscribing}
           activeOpacity={0.8}
         >
-          <Text style={styles.transcribeBtnText}>✓</Text>
+          <Text style={styles.transcribeBtnText}>✨</Text>
         </TouchableOpacity>
 
+        {/* Clips list toggle — replaces the old attach-existing-file button.
+            Shows the recorded-clip count; tapping expands/collapses the list
+            below so a clerk can find and delete a specific clip without it
+            always taking up space on screen. */}
         <TouchableOpacity
-          style={styles.insertBtn}
-          onPress={handleInsert}
-          disabled={hasActiveTake || isTranscribing || saving || importing}
+          style={[styles.clipsBtn, recordings.length === 0 && styles.clipsBtnEmpty]}
+          onPress={() => setClipsExpanded(v => !v)}
+          disabled={recordings.length === 0}
           activeOpacity={0.8}
         >
-          {importing
-            ? <ActivityIndicator color={colors.primary} size="small" />
-            : <Text style={styles.insertBtnText}>📎</Text>
-          }
+          <Text style={styles.clipsBtnIcon}>🎵</Text>
+          <Text style={[styles.clipsBtnCount, recordings.length === 0 && styles.clipsBtnCountEmpty]}>
+            {recordings.length}
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Recordings list */}
-      {recordings.length > 0 && (
+      {/* Recordings list — collapsed by default */}
+      {clipsExpanded && recordings.length > 0 && (
         <View style={styles.list}>
           {recordings.map((rec, i) => (
             <View key={rec.uri} style={styles.recRow}>
@@ -280,7 +266,9 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
   },
-  insertBtn: {
+  // Clips list toggle — shows recorded-clip count, expands/collapses the
+  // list below. Dimmed and non-interactive when there are no clips yet.
+  clipsBtn: {
     width: 46,
     borderRadius: radius.md,
     borderWidth: 1.5,
@@ -288,8 +276,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 1,
   },
-  insertBtnText: { fontSize: 18 },
+  clipsBtnEmpty: { opacity: 0.4 },
+  clipsBtnIcon: { fontSize: 15 },
+  clipsBtnCount: { fontSize: font.xs, fontWeight: '700', color: colors.text },
+  clipsBtnCountEmpty: { color: colors.textLight },
   recordBtnRecording: {
     backgroundColor: colors.danger,
   },

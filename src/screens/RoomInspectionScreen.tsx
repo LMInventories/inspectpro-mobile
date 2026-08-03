@@ -2697,7 +2697,6 @@ export default function RoomInspectionScreen() {
             setRecordings(prev => ({ ...prev, [item.id]: (prev[item.id] || []).filter((r: any) => r.file_uri !== uri) }))
           }}
           transcribingUri={transcribingUris[item.id] ?? null}
-          importPrefix={`item_${inspectionId}_${item.id}`}
           compact
         />
       </View>
@@ -2849,7 +2848,6 @@ export default function RoomInspectionScreen() {
                       setRecordings(prev => ({ ...prev, [ci._cid]: (prev[ci._cid] || []).filter((r: any) => r.file_uri !== uri) }))
                     }}
                     transcribingUri={transcribingUris[ci._cid] ?? null}
-                    importPrefix={`item_${inspectionId}_${ci._cid}`}
                     compact
                   />
                 </View>
