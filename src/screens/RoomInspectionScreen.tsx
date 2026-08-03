@@ -1829,7 +1829,19 @@ export default function RoomInspectionScreen() {
       const newData: any = {}
 
       if (moveDescs && src.description) newData.description = src.description
-      if (moveConds && src.condition)   newData.condition   = src.condition
+      if (moveConds) {
+        if (isCheckOut_) {
+          // Check-out items store the read-only check-in reference under
+          // inventoryCondition and the clerk's new value under checkOutCondition —
+          // condition doesn't exist on a check-out item at all. Previously this
+          // only ever copied `condition`, so a move at check-out silently
+          // dropped both fields.
+          if (src.inventoryCondition) newData.inventoryCondition = src.inventoryCondition
+          if (src.checkOutCondition)  newData.checkOutCondition  = src.checkOutCondition
+        } else if (src.condition) {
+          newData.condition = src.condition
+        }
+      }
 
       // Copy photos before the DB write (only async part)
       if (movePhotos && Array.isArray(src._photos) && src._photos.length > 0) {
@@ -1850,7 +1862,17 @@ export default function RoomInspectionScreen() {
         newData._subs = src._subs.map((sub: any) => {
           const newSub: any = { _sid: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
           if (moveDescs && sub.description) newSub.description = sub.description
-          if (moveConds && sub.condition)   newSub.condition   = sub.condition
+          if (moveConds) {
+            if (isCheckOut_) {
+              // Mirrors the read-side fallback (sub.inventoryCondition || sub.condition) —
+              // copy whichever the sub actually has, plus the real checkOutCondition value.
+              if (sub.inventoryCondition) newSub.inventoryCondition = sub.inventoryCondition
+              else if (sub.condition)     newSub.condition          = sub.condition
+              if (sub.checkOutCondition)  newSub.checkOutCondition  = sub.checkOutCondition
+            } else if (sub.condition) {
+              newSub.condition = sub.condition
+            }
+          }
           return newSub
         })
       }
