@@ -25,6 +25,11 @@ import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../ser
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
 import FloatingCameraPreview from '../components/FloatingCameraPreview'
+
+// Slim landscape sidebar for the AI Instant camera toggle — just wide enough
+// for the button itself, unlike RoomDictationRecorder's full-width sidebar
+// (DICTATION_SIDEBAR_W = 88), since AI Instant has no recorder to house.
+const AI_INSTANT_CAM_SIDEBAR_W = 48
 import Header from '../components/Header'
 import { colors, useColors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
@@ -1014,6 +1019,36 @@ export default function RoomInspectionScreen() {
           })
           await setReportData(inspectionId, rdAfterDelete)
         }
+        return
+      }
+
+      // ── "Additional Item" — create a brand-new custom item box in this
+      // room and fill it, rather than filling whichever item's mic was
+      // actually tapped to say the trigger phrase ────────────────────────────
+      if (result.createAdditionalItem) {
+        const freshCi = await getLocalInspection(inspectionId)
+        const rdCi = freshCi?.report_data ? JSON.parse(freshCi.report_data) : {}
+        if (!rdCi[sectionKey]) rdCi[sectionKey] = {}
+        if (!rdCi[sectionKey]['_customItems']) rdCi[sectionKey]['_customItems'] = []
+        const cid = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+        rdCi[sectionKey]['_customItems'].push({
+          _cid: cid,
+          description: result.description || '',
+          checkOutCondition: result.condition || '',
+        })
+        if (result.transcript) {
+          if (!rdCi._transcriptionLog) rdCi._transcriptionLog = []
+          rdCi._transcriptionLog.push({
+            mode:       'instant',
+            timestamp:  new Date().toISOString(),
+            room:       sectionName,
+            item:       itemLabel,
+            transcript: result.transcript,
+            command:    'create_additional_item',
+            filled:     { description: result.description, condition: result.condition },
+          })
+        }
+        await setReportData(inspectionId, rdCi)
         return
       }
 
@@ -3845,6 +3880,26 @@ export default function RoomInspectionScreen() {
           />
         )}
 
+        {/* AI Instant has no RoomDictationRecorder (no room-wide recorder), so it
+            gets its own slim sidebar just for the camera hide/show toggle — same
+            button style/position as the recording module's, but only as wide as
+            the button itself rather than the full recorder sidebar. */}
+        {typistMode_ === 'ai_instant' && showFloatingCamera && (
+          <View style={[aiInstantCamSidebar.wrap, {
+            paddingBottom: Math.max(insets.bottom, 8),
+            paddingRight: Math.max(insets.right, 0),
+            width: AI_INSTANT_CAM_SIDEBAR_W + Math.max(insets.right, 0),
+          }]}>
+            <TouchableOpacity
+              style={[aiInstantCamSidebar.btn, cameraPreviewVisible && aiInstantCamSidebar.btnActive]}
+              onPress={() => setCameraPreviewVisible(v => !v)}
+              activeOpacity={0.7}
+            >
+              <Text style={[aiInstantCamSidebar.btnText, cameraPreviewVisible && aiInstantCamSidebar.btnTextActive]}>📷</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Floating camera preview — landscape + floating option only */}
         {showFloatingCamera && cameraPreviewVisible && (
           <FloatingCameraPreview
@@ -5028,6 +5083,30 @@ const actStyles = StyleSheet.create({
   footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
   detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
+})
+
+const aiInstantCamSidebar = StyleSheet.create({
+  wrap: {
+    width: AI_INSTANT_CAM_SIDEBAR_W,
+    backgroundColor: '#1a1a2e',
+    borderLeftWidth: 1,
+    borderLeftColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+  },
+  btn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  btnActive: {
+    backgroundColor: 'rgba(14,165,233,0.25)',
+    borderColor: 'rgba(14,165,233,0.6)',
+  },
+  btnText: { fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: '700', lineHeight: 16 },
+  btnTextActive: { opacity: 1 },
 })
 
 const ciLbStyles = StyleSheet.create({
