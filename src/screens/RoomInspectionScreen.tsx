@@ -1068,7 +1068,21 @@ export default function RoomInspectionScreen() {
 
       let changed = false
       if (sectionType_ === 'room') {
-        if (effectiveDamageReport) {
+        if (forceNormalMode) {
+          // Additional Items — description/checkOutCondition live inline on the
+          // _customItems entry itself, not on the per-id shadow row (rd[sectionKey][itemId])
+          // that regular room items use. Sub-items/photos still use the shadow row via
+          // getSubs()/getPhotoArr(), so only description/condition need redirecting here.
+          const ci = (rd[sectionKey]['_customItems'] || []).find((c: any) => c._cid === itemId)
+          if (ci) {
+            if (shouldWrite('description', result.description, ci.description)) {
+              ci.description = computeValue('description', result.description, ci.description); changed = true
+            }
+            if (shouldWrite('checkOutCondition', result.condition, ci.checkOutCondition)) {
+              ci.checkOutCondition = computeValue('checkOutCondition', result.condition, ci.checkOutCondition); changed = true
+            }
+          }
+        } else if (effectiveDamageReport) {
           // Damage report: AI returns condition only — write directly, no prefix
           if (shouldWrite('condition', result.condition, row.condition)) {
             row.condition = computeValue('condition', result.condition, row.condition); changed = true
@@ -2641,7 +2655,9 @@ export default function RoomInspectionScreen() {
 
   // ── Additional Items (Check Out only) — items added to the property during
   // tenancy, not part of the original check-in. Stored as
-  // reportData[sectionKey]._customItems = [{ _cid, name, description, checkOutCondition }].
+  // reportData[sectionKey]._customItems = [{ _cid, description, checkOutCondition }].
+  // No name field — every entry is labelled "Additional Item"; the clerk
+  // describes what it is instead, adding sub-items for extra pieces.
   // Sub-items, photos, and actions reuse the standard per-id helpers (cid as
   // itemId) — mirrors the webapp's existing implementation exactly, so a
   // report reads the same whichever app you view it in.
@@ -2655,7 +2671,7 @@ export default function RoomInspectionScreen() {
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey]['_customItems']) rd[sectionKey]['_customItems'] = []
     const cid = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-    rd[sectionKey]['_customItems'].push({ _cid: cid, name: '', description: '', checkOutCondition: '' })
+    rd[sectionKey]['_customItems'].push({ _cid: cid, description: '', checkOutCondition: '' })
     await setReportData(inspectionId, rd)
   }
 
@@ -2924,7 +2940,7 @@ export default function RoomInspectionScreen() {
         </View>
 
         {customItems.map((ci: any) => {
-          const syntheticItem = { id: ci._cid, label: ci.name || 'Additional item' }
+          const syntheticItem = { id: ci._cid, label: 'Additional Item' }
           const subs = getSubs(ci._cid)
           const actions = getItemActions(ci._cid)
 
@@ -2937,14 +2953,8 @@ export default function RoomInspectionScreen() {
             >
             <View style={[styles.itemCard, dm.surface, { borderColor: c.border }]}>
               <View style={styles.itemHeader}>
-                <TextInput
-                  style={[styles.itemName, dm.text, { flex: 1 }]}
-                  value={ci.name}
-                  onChangeText={v => setCustomItemField(ci._cid, 'name', v)}
-                  placeholder="Item name — e.g. Black plastic chair"
-                  placeholderTextColor={c.textLight}
-                />
-                <TouchableOpacity onPress={() => removeCustomItemEntry(ci._cid, ci.name)}>
+                <Text style={[styles.itemName, dm.text, { flex: 1 }]}>Additional Item</Text>
+                <TouchableOpacity onPress={() => removeCustomItemEntry(ci._cid, 'Additional Item')}>
                   <Text style={styles.subItemDelete}>✕</Text>
                 </TouchableOpacity>
               </View>
@@ -2980,7 +2990,7 @@ export default function RoomInspectionScreen() {
                 <Text style={[styles.fieldLabel, dm.textLight]}>Actions</Text>
                 <TouchableOpacity
                   style={[styles.actionsBtn, actions.length > 0 && styles.actionsBtnActive]}
-                  onPress={() => openActionsModal(ci._cid, ci.name || 'Additional item', ci.checkOutCondition || '')}
+                  onPress={() => openActionsModal(ci._cid, 'Additional Item', ci.checkOutCondition || '')}
                 >
                   <Text style={[styles.actionsBtnText, actions.length === 0 && styles.actionsBtnEmpty]}>
                     {actions.length > 0
