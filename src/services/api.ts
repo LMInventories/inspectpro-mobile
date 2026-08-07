@@ -137,6 +137,9 @@ export const api = {
   getInspection: (id: number) =>
     http.get(`/api/inspections/${id}`),
 
+  getPreviousReportPdfs: (id: number) =>
+    http.get(`/api/inspections/${id}/previous-report-pdfs`),
+
   updateInspection: (id: number, data: any) =>
     http.put(`/api/inspections/${id}`, data),
 

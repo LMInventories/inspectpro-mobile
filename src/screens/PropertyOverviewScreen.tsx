@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useNavigation, useRoute } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImagePicker from 'expo-image-picker'
+import { MaterialCommunityIcons } from '@expo/vector-icons'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption } from '../services/database'
@@ -60,7 +61,26 @@ export default function PropertyOverviewScreen() {
   const [clerkSig, setClerkSig] = useState<string | null>(null)
   const [tenantSig, setTenantSig] = useState<string | null>(null)
 
+  type PrevPdf = { label: string; url: string }
+  type PrevInfo = {
+    previous_inspection: { id: number; inspection_type: string; conduct_date: string | null } | null
+    pdfs: PrevPdf[]
+  }
+  const [prevInfo, setPrevInfo] = useState<PrevInfo | null>(null)
+  const [prevLoading, setPrevLoading] = useState(false)
+  const [showPrevPdfs, setShowPrevPdfs] = useState(false)
+
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
+
+  useEffect(() => {
+    let cancelled = false
+    setPrevLoading(true)
+    api.getPreviousReportPdfs(inspectionId)
+      .then(res => { if (!cancelled) setPrevInfo(res.data) })
+      .catch(() => { if (!cancelled) setPrevInfo(null) }) // offline or no previous inspection — just hide the row's PDF icon
+      .finally(() => { if (!cancelled) setPrevLoading(false) })
+    return () => { cancelled = true }
+  }, [inspectionId])
 
   const c  = useColors()
   const dm = {
@@ -516,6 +536,23 @@ export default function PropertyOverviewScreen() {
           <DetailRow label="Type"       value={TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} />
           <DetailRow label="Date"       value={formatDate(inspection.conduct_date)} />
           <DetailRow label="Time"       value={formatTime(inspection.conduct_time_preference)} />
+          <View style={[drStyles.row, { borderBottomColor: c.border }]}>
+            <Text style={[drStyles.label, { color: c.textMid }]}>Previous Inspection Date</Text>
+            <View style={styles.prevRowRight}>
+              <Text style={[drStyles.value, { color: c.text, flex: 0, marginLeft: 0 }]}>
+                {prevLoading
+                  ? '…'
+                  : prevInfo?.previous_inspection
+                    ? formatDate(prevInfo.previous_inspection.conduct_date)
+                    : '—'}
+              </Text>
+              {!!prevInfo?.pdfs?.length && (
+                <TouchableOpacity onPress={() => setShowPrevPdfs(true)} style={styles.prevPdfBtn} hitSlop={8}>
+                  <MaterialCommunityIcons name="file-pdf-box" size={18} color={colors.primary} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
           <DetailRow label="Inspector"  value={inspection.inspector_name || '—'} />
           <DetailRow label="Typist"     value={inspection.typist_name || '—'} />
         </View>
@@ -817,6 +854,25 @@ export default function PropertyOverviewScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Previous Inspection PDFs popup */}
+      <Modal visible={showPrevPdfs} transparent animationType="slide" onRequestClose={() => setShowPrevPdfs(false)}>
+        <TouchableOpacity style={pdfStyles.backdrop} activeOpacity={1} onPress={() => setShowPrevPdfs(false)} />
+        <View style={[pdfStyles.sheet, { paddingBottom: insets.bottom + spacing.md }]}>
+          <View style={pdfStyles.handle} />
+          <Text style={pdfStyles.title}>Previous Inspection PDFs</Text>
+          {(prevInfo?.pdfs || []).map((pdf, i) => (
+            <TouchableOpacity
+              key={i}
+              style={pdfStyles.option}
+              onPress={() => { setShowPrevPdfs(false); Linking.openURL(pdf.url) }}
+            >
+              <MaterialCommunityIcons name="file-pdf-box" size={20} color={colors.primary} />
+              <Text style={pdfStyles.optionText}>{pdf.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -843,8 +899,52 @@ const drStyles = StyleSheet.create({
   value: { fontSize: font.sm, color: colors.text, flex: 1, textAlign: 'right', marginLeft: spacing.sm },
 })
 
+const pdfStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  handle: {
+    width: 40, height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.borderDark,
+    alignSelf: 'center',
+    marginBottom: spacing.md,
+  },
+  title: {
+    fontSize: font.md,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: spacing.sm,
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  option: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  optionText: {
+    fontSize: font.md,
+    color: colors.text,
+  },
+})
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  prevRowRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flex: 1, marginLeft: spacing.sm },
+  prevPdfBtn: { marginLeft: 6, padding: 2 },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   scroll: { paddingBottom: 40 },
   photoArea: { position: 'relative', height: 220, backgroundColor: colors.muted },
