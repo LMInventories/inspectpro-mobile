@@ -4,23 +4,33 @@ Adapted from the original 16-phase / 10-milestone plan, with this codebase's act
 existing patterns to reuse, and blockers called out against the milestones they affect. See
 `ARCHITECTURE.md` in this directory for the full findings this plan is based on.
 
-**Status: Phase 0 (this document) only. No scanner code, dependencies, or data model changes have
-been made. Milestone 1 has not started.**
+**Status: Phase 0 complete. Blockers 1 and 2 spiked and resolved (see below). No scanner code or
+data model changes have been made. Milestone 1 has not started.**
 
 ## Blockers to resolve before Milestone 1
 
-These are not yet resolved — each names the milestone(s) it blocks.
+Blockers 1 and 2 have been spiked and resolved (see below); the rest are still open — each names
+the milestone(s) it blocks.
 
-1. **Prebuild-destructive CI** (blocks Milestone 1). `expo prebuild --clean` runs on every CI
-   build and wipes `android/` from scratch. The ARCore native module must ship as an **Expo config
-   plugin** (extending `plugins/withKotlinBuildFix.js`'s pattern) that injects the ARCore Gradle
-   dependency, native module registration, and manifest entries at prebuild time. Hand-editing the
-   committed `android/` folder will not survive a CI build.
-2. **No working dev-client loop** (blocks Milestone 1). `expo-dev-client` isn't installed, and CI
-   never calls `eas build`. As-is, testing a native module change means: push → wait for the full
-   CI build → download the APK from GitHub Releases → sideload. That's an impractical iteration
-   loop for native development. Install `expo-dev-client` and validate a real dev-client build
-   (EAS or local `./gradlew installDebug` with a debug variant) before writing ARCore code.
+1. ~~**Prebuild-destructive CI**~~ — **RESOLVED.** Spiked with a throwaway config plugin
+   (`withFloorPlanArCoreSpike.js`, since removed) that injected a native Kotlin source file and the
+   real ARCore `AndroidManifest.xml` `<meta-data>` entry. Ran `expo prebuild --platform android
+   --clean` twice in a row; both injections survived identically both times alongside the existing
+   `withKotlinBuildFix.js`, with no conflicts. **Confirmed**: the ARCore native module can ship as
+   an Expo config plugin using the same `@expo/config-plugins` primitives (`withDangerousMod`,
+   `withAndroidManifest`, etc.) `withKotlinBuildFix.js` already uses, and it will reliably survive
+   CI's wipe-and-regenerate prebuild step.
+2. ~~**No working dev-client loop**~~ — **RESOLVED** (as far as verifiable without a physical
+   device). Installed `expo-dev-client` (`~55.0.37`, via `npx expo install` for SDK-55
+   compatibility). Confirmed: `postinstall` Gradle patches and `expo prebuild --clean` both still
+   succeed with it present, and Expo's native autolinking resolver (`npx expo-modules-autolinking
+   resolve --platform android`) correctly detects `expo-dev-client`, `expo-dev-launcher`,
+   `expo-dev-menu`, and `expo-dev-menu-interface` as linkable modules. Added
+   `.github/workflows/build-dev-client.yml` — an on-demand (`workflow_dispatch`-only) build
+   mirroring `build-android.yml` exactly but producing a debug/dev-client APK published as a
+   marked prerelease. **Not yet done**: nobody has triggered that workflow and sideloaded the
+   result to a real device to confirm the dev-client menu actually connects to a local Metro
+   bundler — do that before relying on this loop for real native-module iteration.
 3. **Camera session hand-off** (blocks Milestone 2 onward — needed as soon as scanning UI exists).
    `react-native-vision-camera` owns the camera today; ARCore needs exclusive access during a scan.
    No existing precedent for releasing/re-acquiring a camera session in this app.
@@ -140,7 +150,10 @@ absolute/percentage error) before any precision claims are made.
 
 ## Next step
 
-Review the blockers above and decide: (a) resolve blockers 1-2 (config-plugin approach + working
-dev-client loop) as a standalone spike before Milestone 1 begins, and (b) confirm test device
-availability. Milestone 1 should not start until at least the dev-client loop is validated —
-otherwise every native-code iteration costs a full CI cycle.
+Blockers 1 and 2 are resolved. Before Milestone 1 begins: (a) trigger
+`.github/workflows/build-dev-client.yml` and sideload the result to a real device to confirm the
+dev-client loop actually works end-to-end (not just "prebuild succeeds"), and (b) confirm test
+device availability (blocker 5) and check ARCore SDK compatibility against this project's pinned
+Gradle 8.13 / AGP 8.9.1 / Kotlin 2.0.21 (blocker 6) — neither has been done yet. Blockers 3
+(camera hand-off) and 4 (Play Store / ARCore availability check) remain design questions for
+Milestone 1-2, not yet started.
