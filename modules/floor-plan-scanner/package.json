@@ -1,0 +1,14 @@
+{
+  "name": "floor-plan-scanner",
+  "version": "0.1.0",
+  "description": "Native ARCore scanning module for InspectPro floor-plan capture (Milestone 1). Local module, not published — see docs/floor-plan/IMPLEMENTATION_PLAN.md.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "expo-modules-core": "*"
+  },
+  "peerDependencies": {
+    "expo": "*"
+  }
+}

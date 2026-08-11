@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'uk.co.lminventories.inspectpro.floorplanscanner'
+version = '0.1.0'
+
+android {
+  namespace "uk.co.lminventories.inspectpro.floorplanscanner"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  // ARCore SDK for Android. Version pin below is a placeholder — verify
+  // against the latest at https://developers.google.com/ar/develop/downloads
+  // before Milestone 1 is considered done; this was not checked live.
+  implementation "com.google.ar:core:1.49.0"
+}

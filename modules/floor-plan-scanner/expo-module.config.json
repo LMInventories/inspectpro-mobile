@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["uk.co.lminventories.inspectpro.floorplanscanner.FloorPlanScannerModule"]
+  }
+}

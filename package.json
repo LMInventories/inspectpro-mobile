@@ -36,6 +36,7 @@
     "expo-sharing": "~55.0.4",
     "expo-sqlite": "~55.0.11",
     "expo-task-manager": "~55.0.0",
+    "floor-plan-scanner": "file:./modules/floor-plan-scanner",
     "react": "19.2.0",
     "react-native": "0.83.2",
     "react-native-gesture-handler": "~2.30.0",

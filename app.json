@@ -41,6 +41,7 @@
     },
     "plugins": [
       "./plugins/withKotlinBuildFix",
+      "./plugins/withArCoreManifest",
       [
         "expo-build-properties",
         {
