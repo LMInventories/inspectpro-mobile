@@ -23,6 +23,7 @@ import { useAuthStore } from '../stores/authStore'
 import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, updateTranscription } from '../services/database'
 import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
+import ReportTextInput from '../components/ReportTextInput'
 import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
 import FloatingCameraPreview from '../components/FloatingCameraPreview'
 
@@ -965,6 +966,10 @@ export default function RoomInspectionScreen() {
       // Read file as base64 — use the statically imported FileSystem (expo-file-system/legacy)
       const audioB64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
 
+      // Full room item list — lets the backend resolve "Return to [item name], ..."
+      // commands to the right item even though this mic is bound to a different row.
+      const allItems = items.map((it: any) => ({ id: String(it.id), name: it.label || it.name || '' }))
+
       const response = await api.transcribeItem({
         audio:          audioB64,
         mimeType:       mimeTypeForUri(uri),
@@ -976,6 +981,7 @@ export default function RoomInspectionScreen() {
         isCheckOut:     effectiveCheckOut,
         isDamageReport: effectiveDamageReport,
         inspectionId,
+        allItems,
       })
 
       const result = response.data
@@ -997,7 +1003,7 @@ export default function RoomInspectionScreen() {
       if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
       const row = rd[sectionKey][String(itemId)]
 
-      const editMode  = result.editMode  || 'normal'   // 'normal' | 'overwrite' | 'append' | 'delete' | 'add_sub'
+      const editMode  = result.editMode  || 'normal'   // 'normal' | 'overwrite' | 'append' | 'delete' | 'add_sub' | 'return_to'
       const editField = result.editField || null        // 'description' | 'condition' | null
 
       // ── "Not Applicable" — delete item ────────────────────────────────────
@@ -1083,6 +1089,59 @@ export default function RoomInspectionScreen() {
             })
           }
           await setReportData(inspectionId, rd2)
+        }
+        return
+      }
+
+      // ── "Return to [item]" — redirect to a DIFFERENT item's fields, not
+      // whichever mic was actually tapped. Matches AI Room mode's "Return to
+      // [item], amend/add/add sub item, ..." commands. ────────────────────────
+      if (editMode === 'return_to') {
+        const targetId = result.redirectItemId
+        if (targetId) {
+          const freshRt = await getLocalInspection(inspectionId)
+          const rdRt = freshRt?.report_data ? JSON.parse(freshRt.report_data) : {}
+          if (!rdRt[sectionKey]) rdRt[sectionKey] = {}
+          if (!rdRt[sectionKey][String(targetId)]) rdRt[sectionKey][String(targetId)] = {}
+          const targetRow = rdRt[sectionKey][String(targetId)]
+
+          const incomingSubs: any[] = result._subs || []
+          let rtChanged = false
+
+          if (incomingSubs.length > 0) {
+            if (!targetRow._subs) targetRow._subs = []
+            for (const sub of incomingSubs) {
+              if (isDuplicateSub(targetRow._subs, sub)) continue
+              const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+              targetRow._subs.push({ _sid: sid, description: sub.description || '', condition: sub.condition || '' })
+              rtChanged = true
+            }
+          } else {
+            const applyField = (fieldName: 'description' | 'condition', newVal: string, action?: string) => {
+              if (!newVal) return
+              const existing = targetRow[fieldName] || ''
+              targetRow[fieldName] = (action === 'append' && existing) ? appendUnique(existing, newVal) : newVal
+              rtChanged = true
+            }
+            applyField('description', result.description, result._descAction)
+            applyField('condition',   result.condition,   result._condAction)
+          }
+
+          if (rtChanged && result.transcript) {
+            if (!rdRt._transcriptionLog) rdRt._transcriptionLog = []
+            rdRt._transcriptionLog.push({
+              mode:       'instant',
+              timestamp:  new Date().toISOString(),
+              room:       sectionName,
+              item:       itemLabel,
+              transcript: result.transcript,
+              command:    'return_to',
+              filled:     { targetItemId: targetId, description: result.description, condition: result.condition, _subs: incomingSubs },
+            })
+          }
+          if (rtChanged) await setReportData(inspectionId, rdRt)
+        } else {
+          setAiError(`Couldn't match a "Return to" item in "${(result.transcript || '').slice(0, 60)}"`)
         }
         return
       }
@@ -1635,6 +1694,7 @@ export default function RoomInspectionScreen() {
     setAiError('')
     try {
       const audioB64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
+      const allItems = items.map((it: any) => ({ id: String(it.id), name: it.label || it.name || '' }))
       const response = await api.transcribeItem({
         audio:          audioB64,
         mimeType:       'audio/m4a',
@@ -1646,6 +1706,7 @@ export default function RoomInspectionScreen() {
         isCheckOut:     isCheckOut_,
         isDamageReport: isDamageReport_,
         inspectionId,
+        allItems,
       })
       const result = response.data
 
@@ -1654,6 +1715,43 @@ export default function RoomInspectionScreen() {
         const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, sid)
         const match = recs.find((r: any) => r.file_uri === uri)
         if (match?.id) updateTranscription(match.id, result.transcript)
+      }
+
+      // ── "Return to [item]" spoken on a sub-item's mic — same redirect as
+      // the top-level item mic, matching AI Room mode's parity everywhere. ──
+      if (result.editMode === 'return_to') {
+        const targetId = result.redirectItemId
+        if (targetId) {
+          const freshRt = await getLocalInspection(inspectionId)
+          const rdRt = freshRt?.report_data ? JSON.parse(freshRt.report_data) : {}
+          if (!rdRt[sectionKey]) rdRt[sectionKey] = {}
+          if (!rdRt[sectionKey][String(targetId)]) rdRt[sectionKey][String(targetId)] = {}
+          const targetRow = rdRt[sectionKey][String(targetId)]
+          const incomingSubs: any[] = result._subs || []
+          let rtChanged = false
+          if (incomingSubs.length > 0) {
+            if (!targetRow._subs) targetRow._subs = []
+            for (const s of incomingSubs) {
+              if (isDuplicateSub(targetRow._subs, s)) continue
+              const newSid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+              targetRow._subs.push({ _sid: newSid, description: s.description || '', condition: s.condition || '' })
+              rtChanged = true
+            }
+          } else {
+            const applyField = (fieldName: 'description' | 'condition', newVal: string, action?: string) => {
+              if (!newVal) return
+              const existing = targetRow[fieldName] || ''
+              targetRow[fieldName] = (action === 'append' && existing) ? appendUnique(existing, newVal) : newVal
+              rtChanged = true
+            }
+            applyField('description', result.description, result._descAction)
+            applyField('condition',   result.condition,   result._condAction)
+          }
+          if (rtChanged) await setReportData(inspectionId, rdRt)
+        } else {
+          setAiError(`Couldn't match a "Return to" item in "${(result.transcript || '').slice(0, 60)}"`)
+        }
+        return
       }
 
       const fresh = await getLocalInspection(inspectionId)
@@ -2996,7 +3094,7 @@ export default function RoomInspectionScreen() {
 
               <View style={styles.fieldGroup}>
                 <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
-                <TextInput
+                <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={ci.description || ''}
                   onFocus={() => handleTextFocus(ci._cid)}
@@ -3009,7 +3107,7 @@ export default function RoomInspectionScreen() {
 
               <View style={styles.fieldGroup}>
                 <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
-                <TextInput
+                <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={ci.checkOutCondition || ''}
                   onFocus={() => handleTextFocus(ci._cid)}
@@ -3090,7 +3188,7 @@ export default function RoomInspectionScreen() {
                         </View>
                         <View style={styles.fieldGroup}>
                           <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
-                          <TextInput
+                          <ReportTextInput
                             style={[styles.notesInput, dm.input]}
                             value={sub.description}
                             onChangeText={v => setSubField(ci._cid, sub._sid, 'description', v)}
@@ -3101,7 +3199,7 @@ export default function RoomInspectionScreen() {
                         </View>
                         <View style={styles.fieldGroup}>
                           <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
-                          <TextInput
+                          <ReportTextInput
                             style={[styles.notesInput, dm.input]}
                             value={sub.condition}
                             onChangeText={v => setSubField(ci._cid, sub._sid, 'condition', v)}
@@ -3223,7 +3321,7 @@ export default function RoomInspectionScreen() {
                   <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                   <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>As Inventory+</Text></View>
                 </View>
-                <TextInput
+                <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={stripAsInventoryPrefix(getField(item.id, 'checkOutCondition'))}
                   onFocus={() => handleTextFocus(item.id)}
@@ -3270,7 +3368,7 @@ export default function RoomInspectionScreen() {
               {!isDamageReport_ && (
                 <View style={styles.fieldGroup}>
                   <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
-                  <TextInput
+                  <ReportTextInput
                     style={[styles.notesInput, dm.input]}
                     value={getField(item.id, 'description')}
                     onFocus={() => handleTextFocus(item.id)}
@@ -3306,7 +3404,7 @@ export default function RoomInspectionScreen() {
                       })}
                     </View>
                   ) : (
-                    <TextInput
+                    <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={getField(item.id, 'condition')}
                       onFocus={() => handleTextFocus(item.id)}
@@ -3326,7 +3424,7 @@ export default function RoomInspectionScreen() {
         {item.hasConditionText && (
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
-            <TextInput
+            <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'condition')}
               onFocus={() => handleTextFocus(item.id)}
@@ -3350,7 +3448,7 @@ export default function RoomInspectionScreen() {
         {item.hasNotes && (
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Notes</Text>
-            <TextInput
+            <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'notes')}
               onFocus={() => handleTextFocus(item.id)}
@@ -3381,7 +3479,7 @@ export default function RoomInspectionScreen() {
         {item.hasCleanlinessNotes && (
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Additional Notes</Text>
-            <TextInput
+            <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'cleanlinessNotes')}
               onFocus={() => handleTextFocus(item.id)}
@@ -3396,7 +3494,7 @@ export default function RoomInspectionScreen() {
         {item.hasDescription && sectionType_ !== 'room' && (
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
-            <TextInput
+            <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'description')}
               onFocus={() => handleTextFocus(item.id)}
@@ -3412,7 +3510,7 @@ export default function RoomInspectionScreen() {
         {item.hasLocationSerial && (
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Location / Serial</Text>
-            <TextInput
+            <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'locationSerial')}
               onFocus={() => handleTextFocus(item.id)}
@@ -3428,7 +3526,7 @@ export default function RoomInspectionScreen() {
         {item.hasReading && (
           <View style={styles.fieldGroup}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Reading</Text>
-            <TextInput
+            <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'reading')}
               onFocus={() => handleTextFocus(item.id)}
@@ -3488,7 +3586,7 @@ export default function RoomInspectionScreen() {
                       <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                       <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>As Inventory+</Text></View>
                     </View>
-                    <TextInput
+                    <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={stripAsInventoryPrefix(sub.checkOutCondition || '')}
                       onFocus={() => handleTextFocus(item.id, sub._sid)}
@@ -3575,7 +3673,7 @@ export default function RoomInspectionScreen() {
                   </View>
                   <View style={styles.fieldGroup}>
                     <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
-                    <TextInput
+                    <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={sub.description}
                       onFocus={() => handleTextFocus(item.id, sub._sid)}
@@ -3587,7 +3685,7 @@ export default function RoomInspectionScreen() {
                   </View>
                   <View style={styles.fieldGroup}>
                     <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
-                    <TextInput
+                    <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={sub.condition}
                       onFocus={() => handleTextFocus(item.id, sub._sid)}
