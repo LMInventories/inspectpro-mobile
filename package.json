@@ -4,8 +4,8 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "prebuild": "expo prebuild",
     "postprebuild": "node scripts/eas-gradle-patch.js",
     "postinstall": "node scripts/eas-gradle-patch.js",
@@ -21,6 +21,7 @@
     "expo-audio": "~55.0.9",
     "expo-background-fetch": "~55.0.0",
     "expo-build-properties": "~55.0.10",
+    "expo-dev-client": "~55.0.37",
     "expo-document-picker": "~55.0.15",
     "expo-file-system": "~55.0.11",
     "expo-image-manipulator": "~55.0.11",
