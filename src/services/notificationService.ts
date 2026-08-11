@@ -14,13 +14,26 @@ import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
 
 const PROGRESS_ID = 'inspectpro-sync-progress'
-const CHANNEL_ID  = 'sync'
+
+// Two channels, not one: progress updates (per-inspection, per-photo, per-audio
+// clip) must never buzz — only the final "sync complete" notification should.
+// Android notification channels are effectively immutable after first creation
+// (changing enableVibrate on an existing channel ID silently does nothing on
+// most devices/OEM skins), so the old shared 'sync' channel kept vibrating on
+// every update even after enableVibrate was set to false here — the channel
+// had already been created (vibrating) by an earlier build. New channel IDs
+// below force a fresh, correctly-configured channel on every device.
+const PROGRESS_CHANNEL_ID = 'inspectpro-sync-progress-v2'
+const COMPLETE_CHANNEL_ID = 'inspectpro-sync-complete-v2'
 
 // Configures how notifications are displayed while the app is in the foreground.
+// Sound/haptic (via content.sound) is only ever set on the "complete" notification
+// itself (see showSyncComplete) — allowing it here just lets that per-notification
+// setting take effect; progress notifications never request sound in the first place.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert:  true,
-    shouldPlaySound:  false,
+    shouldPlaySound:  true,
     shouldSetBadge:   false,
   }),
 })
@@ -30,11 +43,20 @@ Notifications.setNotificationHandler({
 export async function setupNotifications(): Promise<boolean> {
   try {
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-        name:                 'Sync',
-        importance:           Notifications.AndroidImportance.DEFAULT,
+      await Notifications.setNotificationChannelAsync(PROGRESS_CHANNEL_ID, {
+        name:                 'Sync progress',
+        importance:           Notifications.AndroidImportance.LOW,  // no sound, no vibrate, no heads-up
         showBadge:            false,
         enableVibrate:        false,
+        enableLights:         false,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      })
+      await Notifications.setNotificationChannelAsync(COMPLETE_CHANNEL_ID, {
+        name:                 'Sync complete',
+        importance:           Notifications.AndroidImportance.DEFAULT,
+        showBadge:            false,
+        enableVibrate:        true,
+        vibrationPattern:     [0, 200],
         enableLights:         false,
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       })
@@ -72,9 +94,10 @@ export async function showSyncProgress(
         title: `Syncing ${current}/${total}…`,
         body:  `Inspection ${current} of ${total}${detail}`,
         sticky: true,   // Android: stays until dismissed programmatically
+        sound: false,   // never buzz/chime per photo/audio clip — only showSyncComplete does
         data:  {},
         ...(Platform.OS === 'android' && {
-          android: { channelId: CHANNEL_ID },
+          android: { channelId: PROGRESS_CHANNEL_ID },
         }),
       },
       trigger: null,
@@ -102,9 +125,10 @@ export async function showSyncComplete(
         body: allOk
           ? `${succeeded} inspection${succeeded !== 1 ? 's' : ''} synced successfully.`
           : `${succeeded}/${total} synced. Open InspectPro to retry the rest.`,
+        sound: true,   // the only point in a sync where a haptic/chime should fire
         data: {},
         ...(Platform.OS === 'android' && {
-          android: { channelId: CHANNEL_ID },
+          android: { channelId: COMPLETE_CHANNEL_ID },
         }),
       },
       trigger: null,
