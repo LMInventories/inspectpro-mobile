@@ -26,12 +26,14 @@ import ItemGalleryScreen from './src/screens/ItemGalleryScreen'
 import SyncScreen from './src/screens/SyncScreen'
 import CameraScreen from './src/screens/CameraScreen'
 import AdminPanelScreen from './src/screens/AdminPanelScreen'
+import FloorPlanScreen from './src/screens/FloorPlanScreen'
 
 export type RootStackParamList = {
   Login: undefined
   InspectionList: undefined
   FetchInspections: undefined
   PropertyOverview: { inspectionId: number }
+  FloorPlan: { inspectionId: number }
   RoomSelection: { inspectionId: number }
   RoomInspection: {
     inspectionId: number
@@ -200,6 +202,7 @@ export default function App() {
                 <Stack.Screen name="InspectionList"    component={InspectionListScreen} />
                 <Stack.Screen name="FetchInspections"  component={FetchInspectionsScreen} />
                 <Stack.Screen name="PropertyOverview"  component={PropertyOverviewScreen} />
+                <Stack.Screen name="FloorPlan"          component={FloorPlanScreen} />
                 <Stack.Screen name="RoomSelection"     component={RoomSelectionScreen} />
                 <Stack.Screen name="RoomInspection"    component={RoomInspectionScreen} />
                 <Stack.Screen name="ItemGallery"       component={ItemGalleryScreen} />

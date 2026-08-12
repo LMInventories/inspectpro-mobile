@@ -519,6 +519,16 @@ export default function PropertyOverviewScreen() {
                   }
                 </TouchableOpacity>
               )}
+
+              {/* Milestone 9 (not yet built): toggles to "View Floorplan" once a
+                  FloorPlan record is saved for this inspection. For now this
+                  always opens the capability-check screen from Milestone 1. */}
+              <TouchableOpacity
+                style={styles.btnSecondary}
+                onPress={() => navigation.navigate('FloorPlan', { inspectionId })}
+              >
+                <Text style={styles.btnSecondaryText}>Create Floorplan</Text>
+              </TouchableOpacity>
             </>
           ) : (
             <TouchableOpacity style={styles.btnPrimary} onPress={handleStartInspection} disabled={starting}>
