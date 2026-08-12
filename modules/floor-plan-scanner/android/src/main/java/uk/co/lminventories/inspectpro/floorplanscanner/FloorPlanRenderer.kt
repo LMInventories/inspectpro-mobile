@@ -16,24 +16,20 @@ import javax.microedition.khronos.opengles.GL10
 
 private const val TAG = "FloorPlanRenderer"
 private const val PROGRESS_THROTTLE_MS = 500L
-private const val DEPTH_PROBE_INTERVAL_MS = 2000L
+private const val CAPTURE_INTERVAL_MS = 500L
 
 /**
  * Minimal ARCore render loop — creates the external camera texture ARCore
  * requires, calls session.update() every frame, and surfaces tracking state
  * + detected-wall count as throttled events via FloorPlanSessionHolder.listener.
+ * Also hands a throttled pose+depth sample to FloorPlanSessionHolder.recorder
+ * (if a scan is active), which persists it as the local scan package.
  *
  * Deliberately does NOT render the camera passthrough to screen (no shader /
  * BackgroundRenderer) — Milestone 1 targets pose/tracking/depth data capture,
  * not the scanning UI's visual polish, and shader-based texture rendering is
  * one more moving part that's better added once the data pipeline itself is
  * confirmed working on a device.
- *
- * Deliberately does NOT persist depth frames yet — Phase 4 (local scan
- * package) is the next increment, not this one. Depth images are acquired
- * periodically, logged, and closed immediately (they hold native buffers and
- * MUST be closed after use) purely to prove depth capture works on a device
- * that supports it.
  */
 class FloorPlanRenderer : GLSurfaceView.Renderer {
   private var textureId = -1
@@ -42,7 +38,7 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
   private var lastConfiguredSession: Session? = null
   private var lastTrackingState: TrackingState? = null
   private var lastProgressAt = 0L
-  private var lastDepthProbeAt = 0L
+  private var lastCaptureAt = 0L
 
   override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
     GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -103,14 +99,35 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
       FloorPlanSessionHolder.listener?.onScanProgress(wallCount)
     }
 
-    if (now - lastDepthProbeAt >= DEPTH_PROBE_INTERVAL_MS) {
-      lastDepthProbeAt = now
+    // Only meaningful to persist a sample while actually tracking — a pose
+    // captured mid-relocalisation (LIMITED/NOT_TRACKING) is not usable data.
+    val recorder = FloorPlanSessionHolder.recorder
+    if (recorder != null && trackingState == TrackingState.TRACKING && now - lastCaptureAt >= CAPTURE_INTERVAL_MS) {
+      lastCaptureAt = now
+
+      var depthBytes: ByteArray? = null
+      var depthWidth = 0
+      var depthHeight = 0
+      var depthRowStride = 0
       try {
         val depthImage = frame.acquireDepthImage16Bits()
-        Log.d(TAG, "Depth image available: ${depthImage.width}x${depthImage.height}")
-        depthImage.close()
+        try {
+          val plane = depthImage.planes[0]
+          val buffer = plane.buffer
+          depthBytes = ByteArray(buffer.remaining())
+          buffer.get(depthBytes)
+          depthWidth = depthImage.width
+          depthHeight = depthImage.height
+          depthRowStride = plane.rowStride
+        } finally {
+          // Must close promptly regardless of outcome above — ARCore limits
+          // how many depth images can be outstanding at once and throws
+          // ResourceExhaustedException on future acquires if these leak.
+          depthImage.close()
+        }
       } catch (e: NotYetAvailableException) {
         // Normal during the first second or so of tracking — not an error.
+        // Fall through and record the pose alone (depthBytes stays null).
       } catch (e: DeadlineExceededException) {
         Log.w(TAG, "Depth image not ready in time", e)
       } catch (e: ResourceExhaustedException) {
@@ -118,6 +135,8 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
       } catch (e: Exception) {
         Log.w(TAG, "Depth image unavailable on this device", e)
       }
+
+      recorder.recordFrame(frame, now, depthBytes, depthWidth, depthHeight, depthRowStride)
     }
   }
 

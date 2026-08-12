@@ -127,9 +127,22 @@ export default function FloorPlanScreen() {
   }
 
   async function handleStopScan() {
-    FloorPlanScanner.stopScan()
     setScanning(false)
     setTrackingState(null)
+    try {
+      const result = await FloorPlanScanner.stopScan()
+      if (result.frameCount > 0) {
+        Alert.alert(
+          'Scan saved locally',
+          `${result.frameCount} frame${result.frameCount !== 1 ? 's' : ''} captured. ` +
+          `Nothing is uploaded yet — this is only a local package (Phase 4/5 upload isn't built).`
+        )
+      } else {
+        Alert.alert('No usable data captured', 'Tracking likely never reached a stable state — try again.')
+      }
+    } catch (err: any) {
+      Alert.alert('Error finishing scan', err.message || 'Unknown error')
+    }
   }
 
   const supported    = availability === 'SUPPORTED_INSTALLED'

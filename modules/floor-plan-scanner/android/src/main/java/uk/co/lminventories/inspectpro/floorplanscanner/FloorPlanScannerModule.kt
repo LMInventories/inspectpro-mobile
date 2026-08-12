@@ -20,19 +20,21 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * compile-and-run verified (CI build eb6c578).
  *
  * startScan()/pauseScan()/resumeScan()/stopScan()/cancelScan(): real ARCore
- * Session lifecycle, added in this increment. NOT yet verified on a device —
- * CI compiling this proves the Kotlin/ARCore API usage is at least
- * syntactically correct, but Session/GL/camera-thread behaviour (timing,
- * lifecycle ordering, resource leaks) can only be confirmed by actually
- * running this. See FloorPlanRenderer.kt for the render-loop half of this.
+ * Session lifecycle (CI build 31608661033) plus local scan package
+ * persistence via FloorPlanScanRecorder (Phase 4 — pose+depth samples
+ * written to internal app storage as the scan runs; nothing is uploaded
+ * anywhere yet, Phase 5 doesn't exist). stopScan() returns
+ * {scanId, path, frameCount}; cancelScan() discards the package instead.
+ * NOT yet verified on a device — CI compiling this proves the Kotlin/ARCore/
+ * file-I/O API usage is at least syntactically correct, but Session/GL/
+ * camera-thread/background-executor behaviour (timing, lifecycle ordering,
+ * resource leaks) can only be confirmed by actually running this. See
+ * FloorPlanRenderer.kt for the render-loop half and FloorPlanScanRecorder.kt
+ * for the persistence half.
  *
  * Camera permission: this module checks (via ContextCompat) but does not
- * request it — requesting should reuse whatever permission flow the rest of
- * the app already uses (react-native-vision-camera) rather than duplicating
- * one here. FloorPlanScreen.tsx must ensure permission is granted before
- * calling startScan(); right now it does not do this yet, so startScan()
- * will reject with a clear PERMISSION error on a device where it hasn't
- * already been granted for some other reason.
+ * request it — requesting reuses react-native-vision-camera's existing
+ * permission flow from FloorPlanScreen.tsx instead of duplicating one here.
  */
 class ArCoreUnavailableException(cause: Throwable) :
   CodedException(message = "ARCore availability check failed: ${cause.message}", cause = cause)
@@ -124,6 +126,7 @@ class FloorPlanScannerModule : Module() {
         }
       }
 
+      FloorPlanSessionHolder.recorder = FloorPlanScanRecorder(context)
       FloorPlanSessionHolder.session = session
     }
 
@@ -139,16 +142,30 @@ class FloorPlanScannerModule : Module() {
       }
     }
 
-    Function("stopScan") {
+    // Async, not a plain Function: finalizeScan() waits for outstanding
+    // background depth-file writes and writes manifest.json — real (if
+    // brief) file I/O that shouldn't run on the JS-blocking sync path.
+    AsyncFunction("stopScan") {
+      val recorder = FloorPlanSessionHolder.recorder
+      val frameCount = recorder?.finalizeScan() ?: 0
+      val scanId = recorder?.scanId
+      val path = recorder?.scanDir?.absolutePath
+
       FloorPlanSessionHolder.session?.close()
       FloorPlanSessionHolder.session = null
       FloorPlanSessionHolder.listener = null
+      FloorPlanSessionHolder.recorder = null
+
+      mapOf("scanId" to scanId, "path" to path, "frameCount" to frameCount)
     }
 
-    Function("cancelScan") {
+    AsyncFunction("cancelScan") {
+      FloorPlanSessionHolder.recorder?.discard()
+
       FloorPlanSessionHolder.session?.close()
       FloorPlanSessionHolder.session = null
       FloorPlanSessionHolder.listener = null
+      FloorPlanSessionHolder.recorder = null
     }
 
     View(FloorPlanScanView::class) { }

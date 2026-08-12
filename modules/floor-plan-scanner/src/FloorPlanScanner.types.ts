@@ -17,10 +17,18 @@ export type ArCoreAvailability =
 export type ArCoreInstallStatus = 'INSTALLED' | 'INSTALL_REQUESTED'
 
 /**
- * Event payload shapes. Scan lifecycle events (progress/tracking/warning/
- * complete/failed) are stubbed in this increment — see FloorPlanScannerModule.kt.
- * Shapes are defined now so the JS side (Milestone 2's entry point screen) can
- * be built against a stable contract ahead of the real Session/camera work.
+ * Result of stopScan() — the local scan package that was written to the
+ * device's internal storage (nothing uploaded yet, see FloorPlanScannerModule.kt).
+ * scanId/path are null if no scan was actually in progress when called.
+ */
+export interface StopScanResult {
+  scanId: string | null
+  path: string | null
+  frameCount: number
+}
+
+/**
+ * Event payload shapes.
  */
 export interface ScanProgressEvent {
   roomsScanned: number

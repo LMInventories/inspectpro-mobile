@@ -21,6 +21,9 @@ object FloorPlanSessionHolder {
 
   @Volatile
   var listener: FloorPlanFrameListener? = null
+
+  @Volatile
+  var recorder: FloorPlanScanRecorder? = null
 }
 
 interface FloorPlanFrameListener {
