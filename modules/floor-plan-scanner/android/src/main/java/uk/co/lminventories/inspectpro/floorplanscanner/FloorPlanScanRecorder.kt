@@ -9,20 +9,25 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 private const val TAG = "FloorPlanScanRecorder"
 
 /**
  * Writes a scan's captured frames to local storage as it happens — the
  * "local scan package" from Phase 4 of docs/floor-plan/IMPLEMENTATION_PLAN.md.
- * Nothing is uploaded from here (Phase 5, not yet built); this only produces
- * the on-device package a future upload step will read.
+ * Nothing is uploaded from here — that's the caller's job (FloorPlanScreen.tsx
+ * calling the Phase 5 backend endpoints in lmsoftware/backend/routes/floorplans.py)
+ * once finalizeScan() hands back a ready-to-upload zipFile.
  *
- * Package layout, under context.filesDir/floorplan-scans/{scanId}/ (internal
- * app storage, not cache — must survive until an upload step consumes it,
- * which doesn't exist yet):
+ * Package layout while a scan is in progress, under
+ * context.filesDir/floorplan-scans/{scanId}/ (internal app storage, not
+ * cache — must survive until upload consumes it):
  *   manifest.json   — scan metadata + per-frame pose/depth-file references
  *   depth/{n}.raw   — raw 16-bit depth buffer bytes for frames that had depth
+ * finalizeScan() zips this directory to {scanId}.zip and deletes the raw
+ * copy — from that point on the zip is what exists on disk.
  *
  * recordFrame() is called from FloorPlanRenderer on the GL thread. Per-frame
  * work there is limited to a fast ByteBuffer→ByteArray copy (so the ARCore
@@ -38,6 +43,10 @@ class FloorPlanScanRecorder(context: Context, val scanId: String = UUID.randomUU
   private val frames = JSONArray()
   private var intrinsicsRecorded = false
   private var frameCount = 0
+
+  /** Set by finalizeScan() once the package has been zipped. Null until then (or if zipping failed). */
+  var zipFile: File? = null
+    private set
 
   init {
     scanDir.mkdirs()
@@ -125,13 +134,16 @@ class FloorPlanScanRecorder(context: Context, val scanId: String = UUID.randomUU
   }
 
   /**
-   * Writes manifest.json and shuts down the background executor, waiting for
-   * any outstanding depth-file writes to finish first. Call exactly once,
-   * when the scan ends (whether stopped normally or cancelled).
+   * Writes manifest.json, zips the whole package, and shuts down the
+   * background executor, waiting for any outstanding depth-file writes to
+   * finish first. Call exactly once, when the scan ends normally (not for
+   * cancellation — see discard()).
    *
    * Returns the frame count actually written — callers should treat 0 as
    * "nothing usable was captured" (e.g. tracking never succeeded) rather
-   * than a hard error.
+   * than a hard error. Check zipFile afterward for the upload-ready package;
+   * it stays null if zipping itself failed (frameCount can still be > 0 in
+   * that case — the raw directory just wasn't cleaned up, so it's not lost).
    */
   fun finalizeScan(): Int {
     executor.shutdown()
@@ -151,12 +163,41 @@ class FloorPlanScanRecorder(context: Context, val scanId: String = UUID.randomUU
     } catch (e: Exception) {
       Log.e(TAG, "Failed writing manifest.json", e)
     }
+
+    zipFile = try {
+      zipScanDir()
+    } catch (e: Exception) {
+      Log.e(TAG, "Failed zipping scan package", e)
+      null
+    }
+
     return frameCount
+  }
+
+  /**
+   * Compresses scanDir into {scanId}.zip alongside it (Phase 4's "compress
+   * it" requirement), then deletes the raw directory — the zip is the only
+   * copy kept from this point on, so upload doesn't duplicate on-device
+   * storage while it's pending.
+   */
+  private fun zipScanDir(): File {
+    val zip = File(scanDir.parentFile, "$scanId.zip")
+    ZipOutputStream(zip.outputStream().buffered()).use { zos ->
+      scanDir.walkTopDown().filter { it.isFile }.forEach { file ->
+        val entryName = file.relativeTo(scanDir).path
+        zos.putNextEntry(ZipEntry(entryName))
+        file.inputStream().use { it.copyTo(zos) }
+        zos.closeEntry()
+      }
+    }
+    scanDir.deleteRecursively()
+    return zip
   }
 
   /** Discards everything captured so far — used by cancelScan(). */
   fun discard() {
     executor.shutdownNow()
     scanDir.deleteRecursively()
+    zipFile?.delete()
   }
 }

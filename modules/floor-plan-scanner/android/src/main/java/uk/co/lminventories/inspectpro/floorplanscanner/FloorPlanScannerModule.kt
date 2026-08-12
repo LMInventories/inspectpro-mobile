@@ -149,7 +149,10 @@ class FloorPlanScannerModule : Module() {
       val recorder = FloorPlanSessionHolder.recorder
       val frameCount = recorder?.finalizeScan() ?: 0
       val scanId = recorder?.scanId
-      val path = recorder?.scanDir?.absolutePath
+      // Path to the zipped package (ready to upload), not the raw directory —
+      // finalizeScan() deletes the raw copy once zipping succeeds. Null if
+      // zipping itself failed (see FloorPlanScanRecorder.finalizeScan() doc).
+      val path = recorder?.zipFile?.absolutePath
 
       FloorPlanSessionHolder.session?.close()
       FloorPlanSessionHolder.session = null

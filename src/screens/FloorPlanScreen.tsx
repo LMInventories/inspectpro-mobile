@@ -5,8 +5,10 @@ import type { StackNavigationProp } from '@react-navigation/stack'
 import type { RouteProp } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useCameraPermission } from 'react-native-vision-camera'
+import * as FileSystem from 'expo-file-system/legacy'
 import type { RootStackParamList } from '../../App'
 import Header from '../components/Header'
+import { api } from '../services/api'
 import FloorPlanScanner, { FloorPlanScanNativeView } from '../../modules/floor-plan-scanner'
 import type { ArCoreAvailability, TrackingState } from '../../modules/floor-plan-scanner'
 import { colors, font, spacing, radius } from '../utils/theme'
@@ -15,21 +17,22 @@ type Nav = StackNavigationProp<RootStackParamList, 'FloorPlan'>
 type Route = RouteProp<RootStackParamList, 'FloorPlan'>
 
 /**
- * Milestone 1 — ARCore capability check (Phase 2, verified working: CI
- * build eb6c578) plus the real scan lifecycle (Session/GL renderer, added
- * after that — NOT yet verified on a device, see FloorPlanScannerModule.kt's
- * class doc for exactly what "compiles" does and doesn't prove here).
+ * Milestone 1 — ARCore capability check (Phase 2, device-confirmed: app
+ * launches, scan screen reachable) plus the real scan lifecycle (Session/GL
+ * renderer + camera passthrough, plus local scan package persistence and
+ * Phase 5 upload to the backend). See FloorPlanScannerModule.kt's class doc
+ * for exactly what's been device-tested vs. only CI-compiled so far.
  *
  * There is no floor-plan output yet — geometry reconstruction (Milestone 2)
- * and beyond aren't built. This screen currently only proves the capture
- * pipeline runs: tracking state and a live wall count from ARCore's plane
- * detection, while a scan is active.
+ * and beyond aren't built. A successful "Scan uploaded" alert here just
+ * confirms the full on-device-capture → zip → S3 round trip works; nothing
+ * downstream processes the upload yet.
  */
 export default function FloorPlanScreen() {
   const navigation = useNavigation<Nav>()
   const route = useRoute<Route>()
   const insets = useSafeAreaInsets()
-  void route.params.inspectionId // not yet used — will key the saved FloorPlan record (Milestone 9)
+  const { inspectionId } = route.params
 
   const { hasPermission, requestPermission } = useCameraPermission()
 
@@ -44,6 +47,7 @@ export default function FloorPlanScreen() {
   const [trackingReason, setTrackingReason] = useState<string | undefined>(undefined)
   const [wallsDetected, setWallsDetected] = useState(0)
   const [scanError, setScanError] = useState('')
+  const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
     runCheck()
@@ -131,17 +135,53 @@ export default function FloorPlanScreen() {
     setTrackingState(null)
     try {
       const result = await FloorPlanScanner.stopScan()
-      if (result.frameCount > 0) {
-        Alert.alert(
-          'Scan saved locally',
-          `${result.frameCount} frame${result.frameCount !== 1 ? 's' : ''} captured. ` +
-          `Nothing is uploaded yet — this is only a local package (Phase 4/5 upload isn't built).`
-        )
-      } else {
+      if (result.frameCount === 0 || !result.path || !result.scanId) {
         Alert.alert('No usable data captured', 'Tracking likely never reached a stable state — try again.')
+        return
       }
+      await uploadScan(result.scanId, result.path, result.frameCount)
     } catch (err: any) {
       Alert.alert('Error finishing scan', err.message || 'Unknown error')
+    }
+  }
+
+  /**
+   * Phase 5 — uploads the zipped local scan package to S3 via the backend's
+   * pre-signed URL, mirroring how photo uploads already work
+   * (routes/photos.py) but through the new floorplans endpoints. Nothing
+   * downstream consumes an uploaded scan yet (no processing pipeline exists
+   * — Milestone 2+), so a successful upload just confirms the round trip.
+   */
+  async function uploadScan(scanUuid: string, zipPath: string, frameCount: number) {
+    setUploading(true)
+    let scanRecordId: number | null = null
+    try {
+      const created = await api.createFloorPlanScan(inspectionId, scanUuid, frameCount)
+      scanRecordId = created.data.id
+      const uploadUrl = created.data.uploadUrl as string
+
+      await FileSystem.uploadAsync(uploadUrl, zipPath, {
+        httpMethod: 'PUT',
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers: { 'Content-Type': 'application/zip' },
+      })
+
+      await api.updateFloorPlanScan(scanRecordId!, 'UPLOADED')
+      Alert.alert(
+        'Scan uploaded',
+        `${frameCount} frame${frameCount !== 1 ? 's' : ''} captured and uploaded. ` +
+        `There's no processing pipeline yet — nothing further happens to it at this point.`
+      )
+    } catch (err: any) {
+      const message = err.message || 'Unknown error'
+      if (scanRecordId) {
+        // Best-effort — if this also fails, the record is left at UPLOADING,
+        // which is at least an honest reflection of what actually happened.
+        api.updateFloorPlanScan(scanRecordId, 'FAILED', message).catch(() => {})
+      }
+      Alert.alert('Upload failed', `${message}\n\nThe scan is still saved locally at:\n${zipPath}`)
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -219,11 +259,18 @@ export default function FloorPlanScreen() {
                 (tracking + wall detection) ahead of geometry reconstruction being built.
               </Text>
               {scanError ? <Text style={styles.statusTextError}>{scanError}</Text> : null}
-              <TouchableOpacity style={styles.btnSecondary} onPress={handleStartScan} disabled={starting}>
-                {starting
-                  ? <ActivityIndicator color={colors.primary} />
-                  : <Text style={styles.btnSecondaryText}>Start Scan</Text>}
-              </TouchableOpacity>
+              {uploading ? (
+                <View style={styles.center}>
+                  <ActivityIndicator color={colors.primary} />
+                  <Text style={styles.statusText}>Uploading scan…</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.btnSecondary} onPress={handleStartScan} disabled={starting}>
+                  {starting
+                    ? <ActivityIndicator color={colors.primary} />
+                    : <Text style={styles.btnSecondaryText}>Start Scan</Text>}
+                </TouchableOpacity>
+              )}
             </View>
           ) : (
             <View style={styles.center}>

@@ -224,6 +224,13 @@ export const api = {
   deletePhoto: (key: string) =>
     http.post('/api/photos/delete', { key }),
 
+  // ── Floor plan scan uploads (Milestone 1 / Phase 5) ─────────────────────────
+  createFloorPlanScan: (inspectionId: number, scanUuid: string, frameCount: number) =>
+    http.post(`/api/floorplans/${inspectionId}/scans`, { scanUuid, frameCount }),
+
+  updateFloorPlanScan: (scanId: number, status: 'UPLOADED' | 'FAILED', errorMessage?: string) =>
+    http.patch(`/api/floorplans/scans/${scanId}`, { status, errorMessage }),
+
   // Action catalogue (for check-out inspections)
   getActions: () =>
     http.get('/api/actions'),
