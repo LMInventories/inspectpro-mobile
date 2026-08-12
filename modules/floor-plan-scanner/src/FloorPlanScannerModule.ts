@@ -1,7 +1,23 @@
-import { requireNativeModule } from 'expo-modules-core'
-import type { ArCoreAvailability, ArCoreInstallStatus } from './FloorPlanScanner.types'
+import { requireNativeModule, NativeModule } from 'expo-modules-core'
+import type {
+  ArCoreAvailability,
+  ArCoreInstallStatus,
+  ScanProgressEvent,
+  TrackingStateEvent,
+  ScanWarningEvent,
+  ScanCompleteEvent,
+  ScanFailedEvent,
+} from './FloorPlanScanner.types'
 
-interface FloorPlanScannerModuleType {
+type FloorPlanScannerEvents = {
+  onScanProgress: (event: ScanProgressEvent) => void
+  onTrackingStateChanged: (event: TrackingStateEvent) => void
+  onScanWarning: (event: ScanWarningEvent) => void
+  onScanComplete: (event: ScanCompleteEvent) => void
+  onScanFailed: (event: ScanFailedEvent) => void
+}
+
+declare class FloorPlanScannerModuleType extends NativeModule<FloorPlanScannerEvents> {
   /**
    * Runtime capability check — required before offering the scan entry point.
    * Do not assume identical ARCore/depth support across target devices
@@ -18,11 +34,14 @@ interface FloorPlanScannerModuleType {
    */
   requestInstall(): Promise<ArCoreInstallStatus>
 
-  // ── Scan lifecycle — NOT YET IMPLEMENTED ──────────────────────────────
-  // startScan currently always rejects; pause/resume/stop/cancel are no-ops.
+  // ── Scan lifecycle ──────────────────────────────────────────────────────
   // Real ARCore Session creation, camera texture binding, and frame/pose/
-  // depth capture are the next increment once this scaffold is confirmed to
-  // compile, link, and pass checkAvailability() on a real device.
+  // depth capture are implemented natively (FloorPlanScannerModule.kt +
+  // FloorPlanRenderer.kt) but NOT YET VERIFIED ON A DEVICE — only confirmed
+  // to compile against the real ARCore SDK in CI. Caller must ensure camera
+  // permission is granted before calling startScan(); it rejects with a
+  // clear error if not (see useCameraPermission from react-native-vision-camera,
+  // already used elsewhere in this app for the same permission).
   startScan(): Promise<void>
   pauseScan(): void
   resumeScan(): void

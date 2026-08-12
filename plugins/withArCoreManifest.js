@@ -15,9 +15,29 @@ const { withAndroidManifest } = require('@expo/config-plugins')
 
 module.exports = function withArCoreManifest(config) {
   return withAndroidManifest(config, (config) => {
-    const app = config.modResults.manifest.application?.[0]
+    const manifest = config.modResults.manifest
+
+    // <uses-feature> — top-level manifest child, sibling of <application>.
+    // required="false" for the same "AR Optional" reasoning as the meta-data below.
+    if (!manifest['uses-feature']) manifest['uses-feature'] = []
+    const hasArFeature = manifest['uses-feature'].find(
+      (f) => f.$?.['android:name'] === 'android.hardware.camera.ar'
+    )
+    if (!hasArFeature) {
+      manifest['uses-feature'].push({
+        $: {
+          'android:name':     'android.hardware.camera.ar',
+          'android:required': 'false',
+        },
+      })
+      console.log('[withArCoreManifest] Injected android.hardware.camera.ar uses-feature (required=false)')
+    } else {
+      console.log('[withArCoreManifest] android.hardware.camera.ar uses-feature already present — skipping')
+    }
+
+    const app = manifest.application?.[0]
     if (!app) {
-      console.warn('[withArCoreManifest] No <application> tag found — skipping manifest patch')
+      console.warn('[withArCoreManifest] No <application> tag found — skipping meta-data patch')
       return config
     }
     if (!app['meta-data']) app['meta-data'] = []
