@@ -1,6 +1,5 @@
 package uk.co.lminventories.inspectpro.floorplanscanner
 
-import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.util.Log
@@ -19,20 +18,14 @@ private const val PROGRESS_THROTTLE_MS = 500L
 private const val CAPTURE_INTERVAL_MS = 500L
 
 /**
- * Minimal ARCore render loop — creates the external camera texture ARCore
- * requires, calls session.update() every frame, and surfaces tracking state
- * + detected-wall count as throttled events via FloorPlanSessionHolder.listener.
- * Also hands a throttled pose+depth sample to FloorPlanSessionHolder.recorder
- * (if a scan is active), which persists it as the local scan package.
- *
- * Deliberately does NOT render the camera passthrough to screen (no shader /
- * BackgroundRenderer) — Milestone 1 targets pose/tracking/depth data capture,
- * not the scanning UI's visual polish, and shader-based texture rendering is
- * one more moving part that's better added once the data pipeline itself is
- * confirmed working on a device.
+ * ARCore render loop — draws the camera passthrough via BackgroundRenderer,
+ * calls session.update() every frame, and surfaces tracking state + detected-
+ * wall count as throttled events via FloorPlanSessionHolder.listener. Also
+ * hands a throttled pose+depth sample to FloorPlanSessionHolder.recorder (if
+ * a scan is active), which persists it as the local scan package.
  */
 class FloorPlanRenderer : GLSurfaceView.Renderer {
-  private var textureId = -1
+  private val backgroundRenderer = BackgroundRenderer()
   private var viewportWidth = 0
   private var viewportHeight = 0
   private var lastConfiguredSession: Session? = null
@@ -42,7 +35,7 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
 
   override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
     GLES20.glClearColor(0f, 0f, 0f, 1f)
-    textureId = createExternalTexture()
+    backgroundRenderer.createOnGlThread()
     // Deliberately NOT calling session.setCameraTextureName() here — the
     // session may not exist yet if startScan() hasn't been called (the view
     // can mount before or after that JS call). onDrawFrame binds the texture
@@ -60,10 +53,10 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
     val session = FloorPlanSessionHolder.session ?: return
-    if (textureId == -1 || viewportWidth == 0 || viewportHeight == 0) return
+    if (backgroundRenderer.textureId == -1 || viewportWidth == 0 || viewportHeight == 0) return
 
     if (session !== lastConfiguredSession) {
-      session.setCameraTextureName(textureId)
+      session.setCameraTextureName(backgroundRenderer.textureId)
       lastConfiguredSession = session
     }
 
@@ -77,6 +70,8 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
       Log.e(TAG, "session.update() failed", e)
       return
     }
+
+    backgroundRenderer.draw(frame)
 
     val trackingState = frame.camera.trackingState
     if (trackingState != lastTrackingState) {
@@ -138,17 +133,5 @@ class FloorPlanRenderer : GLSurfaceView.Renderer {
 
       recorder.recordFrame(frame, now, depthBytes, depthWidth, depthHeight, depthRowStride)
     }
-  }
-
-  private fun createExternalTexture(): Int {
-    val textures = IntArray(1)
-    GLES20.glGenTextures(1, textures, 0)
-    val id = textures[0]
-    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, id)
-    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-    return id
   }
 }
