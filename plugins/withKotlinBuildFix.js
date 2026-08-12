@@ -126,9 +126,21 @@ function setProp(props, key, value) {
 function mergeJvmArgs(existing, ...toAdd) {
   let base = existing || '-Xmx4096m -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8'
   for (const arg of toAdd) {
-    const keyMatch = arg.match(/^-D([^=]+)/)
-    if (keyMatch && base.includes(`-D${keyMatch[1]}`)) {
-      base = base.replace(new RegExp(`-D${keyMatch[1]}=[^\\s]*`), arg)
+    // -D flags and JVM memory flags (-Xmx.../-XX:Key=value) both get replaced
+    // in place if the same key already exists, rather than appended as a
+    // second (possibly conflicting) copy — matters because Expo's generated
+    // android/gradle.properties often already ships its own smaller
+    // org.gradle.jvmargs (e.g. -XX:MaxMetaspaceSize=512m), which becomes
+    // `existing` here and would otherwise silently win over our larger value.
+    const dMatch   = arg.match(/^-D([^=]+)/)
+    const xxMatch  = arg.match(/^-XX:([^=]+)/)
+    const xmxMatch = arg.match(/^-Xmx/)
+    if (dMatch && base.includes(`-D${dMatch[1]}`)) {
+      base = base.replace(new RegExp(`-D${dMatch[1]}=[^\\s]*`), arg)
+    } else if (xxMatch && base.includes(`-XX:${xxMatch[1]}`)) {
+      base = base.replace(new RegExp(`-XX:${xxMatch[1]}=[^\\s]*`), arg)
+    } else if (xmxMatch && /-Xmx[^\s]*/.test(base)) {
+      base = base.replace(/-Xmx[^\s]*/, arg)
     } else if (!base.includes(arg)) {
       base = `${base} ${arg}`
     }
@@ -215,6 +227,14 @@ module.exports = function withKotlinBuildFix(config) {
       existing?.value,
       '-Dkotlin.compiler.execution.strategy=in-process',
       '-Dkotlin.daemon.enabled=false',
+      // In-process Kotlin compilation (forced above, to work around the
+      // Gradle/KGP version mismatch this file exists for) shares one JVM's
+      // Metaspace across every module's compilation in the build. Adding the
+      // floor-plan-scanner native module (see docs/floor-plan/) pushed this
+      // over Expo's smaller generated default (often 512m) and caused
+      // `OutOfMemoryError: Metaspace` in CI (build 31607203885) — bump it
+      // explicitly rather than trusting whatever the template shipped.
+      '-XX:MaxMetaspaceSize=2048m',
     ))
 
     return config
