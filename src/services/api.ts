@@ -237,6 +237,14 @@ export const api = {
   getFloorPlanScanRender: (scanId: number) =>
     http.get<string>(`/api/floorplans/scans/${scanId}/render`, { responseType: 'text' }),
 
+  // ── Manual floor plan tool (measure-and-draw, replaces ARCore scanning as
+  // the default path — see routes/floorplan_manual.py) ────────────────────────
+  getFloorPlanManual: (inspectionId: number) =>
+    http.get(`/api/floorplan-manual/${inspectionId}`),
+
+  saveFloorPlanManual: (inspectionId: number, corners: [number, number][]) =>
+    http.put(`/api/floorplan-manual/${inspectionId}`, { corners }),
+
   // Action catalogue (for check-out inspections)
   getActions: () =>
     http.get('/api/actions'),

@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Image, Alert, ActivityIndicator, Platform, Linking, Modal,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
-import { useNavigation, useRoute } from '@react-navigation/native'
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImagePicker from 'expo-image-picker'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
@@ -69,8 +69,19 @@ export default function PropertyOverviewScreen() {
   const [prevInfo, setPrevInfo] = useState<PrevInfo | null>(null)
   const [prevLoading, setPrevLoading] = useState(false)
   const [showPrevPdfs, setShowPrevPdfs] = useState(false)
+  const [hasFloorPlan, setHasFloorPlan] = useState(false)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
+
+  // Re-checked on focus (not just mount) so returning from the draw screen
+  // after saving immediately flips "Create Floorplan" to "View Floorplan".
+  useFocusEffect(useCallback(() => {
+    let cancelled = false
+    api.getFloorPlanManual(inspectionId)
+      .then(() => { if (!cancelled) setHasFloorPlan(true) })
+      .catch(() => { if (!cancelled) setHasFloorPlan(false) }) // 404 = none saved yet
+    return () => { cancelled = true }
+  }, [inspectionId]))
 
   useEffect(() => {
     let cancelled = false
@@ -520,14 +531,18 @@ export default function PropertyOverviewScreen() {
                 </TouchableOpacity>
               )}
 
-              {/* Milestone 9 (not yet built): toggles to "View Floorplan" once a
-                  FloorPlan record is saved for this inspection. For now this
-                  always opens the capability-check screen from Milestone 1. */}
+              {/* Manual measure-and-draw tool (replaces ARCore scanning as the
+                  default path — see FloorPlanDrawScreen.tsx). Toggles to
+                  "View Floorplan" once a plan has been saved for this
+                  inspection; the draw screen itself handles both create and
+                  edit, since it prefills from any existing saved plan. */}
               <TouchableOpacity
                 style={styles.btnSecondary}
-                onPress={() => navigation.navigate('FloorPlan', { inspectionId })}
+                onPress={() => navigation.navigate('FloorPlanDraw', { inspectionId })}
               >
-                <Text style={styles.btnSecondaryText}>Create Floorplan</Text>
+                <Text style={styles.btnSecondaryText}>
+                  {hasFloorPlan ? 'View Floorplan' : 'Create Floorplan'}
+                </Text>
               </TouchableOpacity>
             </>
           ) : (
