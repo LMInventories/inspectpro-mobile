@@ -75,11 +75,17 @@ export default function PropertyOverviewScreen() {
 
   // Re-checked on focus (not just mount) so returning from the draw screen
   // after saving immediately flips "Create Floorplan" to "View Floorplan".
+  // v2: "has a floor plan" means at least one floor (level) with at least
+  // one room exists — GET .../levels returns [] (not 404) when none do.
   useFocusEffect(useCallback(() => {
     let cancelled = false
-    api.getFloorPlanManual(inspectionId)
-      .then(() => { if (!cancelled) setHasFloorPlan(true) })
-      .catch(() => { if (!cancelled) setHasFloorPlan(false) }) // 404 = none saved yet
+    api.getFloorPlanLevels(inspectionId)
+      .then((res) => {
+        if (cancelled) return
+        const levels = res.data as { rooms: unknown[] }[]
+        setHasFloorPlan(levels.some((l) => l.rooms.length > 0))
+      })
+      .catch(() => { if (!cancelled) setHasFloorPlan(false) })
     return () => { cancelled = true }
   }, [inspectionId]))
 

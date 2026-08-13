@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
 import * as SecureStore from 'expo-secure-store'
+import type { FloorPlanSymbol } from '../utils/floorPlanPolygon'
 
 // Set EXPO_PUBLIC_API_URL in your .env or EAS secrets to override.
 export const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://lmsoftware-production.up.railway.app'
@@ -237,13 +238,36 @@ export const api = {
   getFloorPlanScanRender: (scanId: number) =>
     http.get<string>(`/api/floorplans/scans/${scanId}/render`, { responseType: 'text' }),
 
-  // ── Manual floor plan tool (measure-and-draw, replaces ARCore scanning as
-  // the default path — see routes/floorplan_manual.py) ────────────────────────
-  getFloorPlanManual: (inspectionId: number) =>
-    http.get(`/api/floorplan-manual/${inspectionId}`),
+  // ── Manual floor plan tool v2: multi-floor, multi-room, symbols
+  // (measure-and-draw, replaces ARCore scanning as the default path —
+  // see routes/floorplan_manual.py) ─────────────────────────────────────────
+  getFloorPlanLevels: (inspectionId: number) =>
+    http.get(`/api/floorplan-manual/${inspectionId}/levels`),
 
-  saveFloorPlanManual: (inspectionId: number, corners: [number, number][]) =>
-    http.put(`/api/floorplan-manual/${inspectionId}`, { corners }),
+  createFloorPlanLevel: (inspectionId: number, name: string, copyFromLevelId?: number) =>
+    http.post(`/api/floorplan-manual/${inspectionId}/levels`, { name, copyFromLevelId }),
+
+  renameFloorPlanLevel: (levelId: number, name: string) =>
+    http.patch(`/api/floorplan-manual/levels/${levelId}`, { name }),
+
+  deleteFloorPlanLevel: (levelId: number) =>
+    http.delete(`/api/floorplan-manual/levels/${levelId}`),
+
+  createFloorPlanRoom: (levelId: number, name: string, corners: [number, number][], symbols: FloorPlanSymbol[] = []) =>
+    http.post(`/api/floorplan-manual/levels/${levelId}/rooms`, { name, corners, symbols }),
+
+  updateFloorPlanRoom: (
+    roomId: number,
+    changes: { name?: string; corners?: [number, number][]; symbols?: FloorPlanSymbol[] }
+  ) => http.put(`/api/floorplan-manual/rooms/${roomId}`, changes),
+
+  deleteFloorPlanRoom: (roomId: number) =>
+    http.delete(`/api/floorplan-manual/rooms/${roomId}`),
+
+  // Returns raw SVG text — see getFloorPlanScanRender above for the same
+  // responseType:'text' pattern.
+  getFloorPlanLevelRender: (levelId: number) =>
+    http.get<string>(`/api/floorplan-manual/levels/${levelId}/render`, { responseType: 'text' }),
 
   // Action catalogue (for check-out inspections)
   getActions: () =>
