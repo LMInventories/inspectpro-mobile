@@ -100,7 +100,14 @@ class FloorPlanScanRecorder(context: Context, val scanId: String = UUID.randomUU
 
   private fun recordIntrinsicsAsync(frame: Frame) {
     try {
-      val intrinsics = frame.camera.imageIntrinsics
+      // textureIntrinsics (GPU texture), NOT imageIntrinsics (CPU image) —
+      // confirmed against Google's own official raw-depth sample
+      // (PointCloudHelper.convertRawDepthImagesTo3dPointBuffer in the
+      // arcore-android-sdk repo), which backprojects depth pixels using
+      // textureIntrinsics scaled per-axis to the depth image's own
+      // resolution. Using imageIntrinsics here would silently produce a
+      // wrong-but-plausible-looking point cloud.
+      val intrinsics = frame.camera.textureIntrinsics
       val focal = intrinsics.focalLength
       val principal = intrinsics.principalPoint
       val dims = intrinsics.imageDimensions
