@@ -6,6 +6,7 @@ import type { RouteProp } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useCameraPermission } from 'react-native-vision-camera'
 import * as FileSystem from 'expo-file-system/legacy'
+import { SvgXml } from 'react-native-svg'
 import type { RootStackParamList } from '../../App'
 import Header from '../components/Header'
 import { api } from '../services/api'
@@ -48,6 +49,9 @@ export default function FloorPlanScreen() {
   const [wallsDetected, setWallsDetected] = useState(0)
   const [scanError, setScanError] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [renderSvg, setRenderSvg] = useState<string | null>(null)
+  const [renderLoading, setRenderLoading] = useState(false)
+  const [renderNote, setRenderNote] = useState('')
 
   useEffect(() => {
     runCheck()
@@ -122,6 +126,8 @@ export default function FloorPlanScreen() {
     setScanError('')
     setTrackingState(null)
     setWallsDetected(0)
+    setRenderSvg(null)
+    setRenderNote('')
     setScanning(true) // mounts the native GL view before startScan() so its
                        // surface exists by the time the session needs a texture
     try {
@@ -152,9 +158,11 @@ export default function FloorPlanScreen() {
   /**
    * Phase 5 — uploads the zipped local scan package to S3 via the backend's
    * pre-signed URL, mirroring how photo uploads already work
-   * (routes/photos.py) but through the new floorplans endpoints. Nothing
-   * downstream consumes an uploaded scan yet (no processing pipeline exists
-   * — Milestone 2+), so a successful upload just confirms the round trip.
+   * (routes/photos.py) but through the new floorplans endpoints. Once
+   * uploaded, fetches a diagnostic render of whatever walls/corners the
+   * backend's geometry pipeline found — real room-polygon closure isn't
+   * reliable yet (see routes/floorplans.py's render_scan docstring), so this
+   * is explicitly a preview of detected geometry, not a finished floor plan.
    */
   async function uploadScan(scanUuid: string, zipPath: string, frameCount: number) {
     setUploading(true)
@@ -173,9 +181,9 @@ export default function FloorPlanScreen() {
       await api.updateFloorPlanScan(scanRecordId!, 'UPLOADED')
       Alert.alert(
         'Scan uploaded',
-        `${frameCount} frame${frameCount !== 1 ? 's' : ''} captured and uploaded. ` +
-        `There's no processing pipeline yet — nothing further happens to it at this point.`
+        `${frameCount} frame${frameCount !== 1 ? 's' : ''} captured and uploaded.`
       )
+      await fetchRender(scanRecordId!)
     } catch (err: any) {
       const message = err.message || 'Unknown error'
       if (scanRecordId) {
@@ -186,6 +194,29 @@ export default function FloorPlanScreen() {
       Alert.alert('Upload failed', `${message}\n\nThe scan is still saved locally at:\n${zipPath}`)
     } finally {
       setUploading(false)
+    }
+  }
+
+  /**
+   * Best-effort — the render is a diagnostic preview, not a guaranteed
+   * output. A 422 ("not enough geometry") is a normal, expected result for
+   * a scan that didn't find usable walls, not a failure to surface as an error.
+   */
+  async function fetchRender(scanRecordId: number) {
+    setRenderLoading(true)
+    setRenderNote('')
+    try {
+      const res = await api.getFloorPlanScanRender(scanRecordId)
+      setRenderSvg(res.data)
+    } catch (err: any) {
+      setRenderSvg(null)
+      if (err.response?.status === 422) {
+        setRenderNote('Not enough geometry detected in this scan to preview — try scanning more slowly, covering all walls.')
+      } else {
+        setRenderNote('Could not load a preview of this scan.')
+      }
+    } finally {
+      setRenderLoading(false)
     }
   }
 
@@ -259,8 +290,8 @@ export default function FloorPlanScreen() {
               <Text style={styles.statusIcon}>✓</Text>
               <Text style={styles.statusTitle}>This device supports floor plan scanning</Text>
               <Text style={styles.statusText}>
-                There's no floor-plan output yet — this confirms the capture pipeline runs
-                (tracking + wall detection) ahead of geometry reconstruction being built.
+                Detected walls and corners get previewed below after a scan uploads — this is a
+                diagnostic preview of what the scan found, not a finished floor plan.
               </Text>
               {scanError ? <Text style={styles.statusTextError}>{scanError}</Text> : null}
               {uploading ? (
@@ -275,6 +306,23 @@ export default function FloorPlanScreen() {
                     : <Text style={styles.btnSecondaryText}>Start Scan</Text>}
                 </TouchableOpacity>
               )}
+
+              {renderLoading ? (
+                <View style={styles.center}>
+                  <ActivityIndicator color={colors.primary} />
+                  <Text style={styles.statusText}>Analysing scan…</Text>
+                </View>
+              ) : renderSvg ? (
+                <View style={styles.previewCard}>
+                  <Text style={styles.previewLabel}>Scan preview</Text>
+                  <SvgXml xml={renderSvg} width="100%" height={260} />
+                  <Text style={styles.previewCaption}>
+                    Solid lines: confident walls. Dashed orange: uncertain position. Red dots: detected corners.
+                  </Text>
+                </View>
+              ) : renderNote ? (
+                <Text style={styles.statusText}>{renderNote}</Text>
+              ) : null}
             </View>
           ) : (
             <View style={styles.center}>
@@ -295,6 +343,17 @@ const styles = StyleSheet.create({
   statusTitle: { fontSize: font.lg, fontWeight: '700', color: colors.text, textAlign: 'center' },
   statusText:  { fontSize: font.sm, color: colors.textMid, textAlign: 'center', lineHeight: 20 },
   statusTextError: { fontSize: font.sm, color: colors.danger, textAlign: 'center' },
+  previewCard: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  previewLabel: { fontSize: font.sm, fontWeight: '700', color: colors.text, marginBottom: spacing.xs },
+  previewCaption: { fontSize: font.xs, color: colors.textMid, marginTop: spacing.xs, textAlign: 'center' },
   btnPrimary: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,

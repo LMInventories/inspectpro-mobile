@@ -231,6 +231,12 @@ export const api = {
   updateFloorPlanScan: (scanId: number, status: 'UPLOADED' | 'FAILED', errorMessage?: string) =>
     http.patch(`/api/floorplans/scans/${scanId}`, { status, errorMessage }),
 
+  // Diagnostic SVG render of a scan's detected walls/corners — see
+  // routes/floorplans.py's render_scan. responseType 'text' since this
+  // returns image/svg+xml, not JSON.
+  getFloorPlanScanRender: (scanId: number) =>
+    http.get<string>(`/api/floorplans/scans/${scanId}/render`, { responseType: 'text' }),
+
   // Action catalogue (for check-out inspections)
   getActions: () =>
     http.get('/api/actions'),
