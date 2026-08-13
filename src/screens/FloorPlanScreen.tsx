@@ -62,7 +62,11 @@ export default function FloorPlanScreen() {
         setTrackingReason(e.reason)
       }),
       FloorPlanScanner.addListener('onScanProgress', (e) => {
-        setWallsDetected(e.wallsDetected)
+        // ARCore's live plane-tracking count can dip mid-scan (occlusion,
+        // fast pans, corner ambiguity between adjacent walls) even after
+        // a wall has already been detected — show the peak seen, not
+        // whatever happens to be tracked at the last progress tick.
+        setWallsDetected((prev) => Math.max(prev, e.wallsDetected))
       }),
       FloorPlanScanner.addListener('onScanFailed', (e) => {
         setScanError(e.message)
