@@ -11,7 +11,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption } from '../services/database'
+import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption, getLocalInspection } from '../services/database'
 import { api } from '../services/api'
 import { SyncProgress } from '../services/syncService'
 import { useSyncStore } from '../stores/syncStore'
@@ -73,20 +73,20 @@ export default function PropertyOverviewScreen() {
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
 
-  // Re-checked on focus (not just mount) so returning from the draw screen
-  // after saving immediately flips "Create Floorplan" to "View Floorplan".
-  // v2: "has a floor plan" means at least one floor (level) with at least
-  // one room exists — GET .../levels returns [] (not 404) when none do.
+  // Re-checked on focus (not just mount) so returning from the floor plan
+  // image screen after adding an image immediately flips "Create Floorplan"
+  // to "View Floorplan". v3: floor plan images live in report_data locally
+  // (report_data._floorplan.images), so this is a synchronous local read —
+  // no network round-trip needed, unlike the old draw-tool's levels lookup.
   useFocusEffect(useCallback(() => {
-    let cancelled = false
-    api.getFloorPlanLevels(inspectionId)
-      .then((res) => {
-        if (cancelled) return
-        const levels = res.data as { rooms: unknown[] }[]
-        setHasFloorPlan(levels.some((l) => l.rooms.length > 0))
-      })
-      .catch(() => { if (!cancelled) setHasFloorPlan(false) })
-    return () => { cancelled = true }
+    const inspection = getLocalInspection(inspectionId)
+    try {
+      const rd = inspection?.report_data ? JSON.parse(inspection.report_data) : {}
+      const images = rd._floorplan?.images || []
+      setHasFloorPlan(images.length > 0)
+    } catch {
+      setHasFloorPlan(false)
+    }
   }, [inspectionId]))
 
   useEffect(() => {
@@ -537,14 +537,15 @@ export default function PropertyOverviewScreen() {
                 </TouchableOpacity>
               )}
 
-              {/* Manual measure-and-draw tool (replaces ARCore scanning as the
-                  default path — see FloorPlanDrawScreen.tsx). Toggles to
-                  "View Floorplan" once a plan has been saved for this
-                  inspection; the draw screen itself handles both create and
-                  edit, since it prefills from any existing saved plan. */}
+              {/* Floor plan images, exported from a 3rd-party floor plan app and
+                  uploaded here (one image per floor) — see
+                  FloorPlanImagesScreen.tsx. Toggles to "View Floorplan" once at
+                  least one image has been added. The old in-house drawing tool
+                  (FloorPlanDrawScreen.tsx) and ARCore scanner (FloorPlanScreen.tsx)
+                  remain in the codebase, unreachable, in case they're revisited. */}
               <TouchableOpacity
                 style={styles.btnSecondary}
-                onPress={() => navigation.navigate('FloorPlanDraw', { inspectionId })}
+                onPress={() => navigation.navigate('FloorPlanImages', { inspectionId })}
               >
                 <Text style={styles.btnSecondaryText}>
                   {hasFloorPlan ? 'View Floorplan' : 'Create Floorplan'}

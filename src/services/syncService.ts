@@ -50,6 +50,13 @@ export type SyncProgress = {
 
 const MAX_PHOTO_PX    = 1400   // longest edge in pixels
 const SYNC_QUALITY    = 0.72   // JPEG quality (0 = worst, 1 = lossless)
+
+// Floor plan exports are line art + small text, not photographs — the photo
+// profile above blurs them illegibly once printed full-page in the PDF, so
+// they get their own, higher-fidelity profile.
+const FLOORPLAN_MAX_PX = 2200
+const FLOORPLAN_QUALITY = 0.85
+
 const MAX_SYNC_RETRIES = 3     // max upload attempts (1 initial + 2 retries)
 
 // Status codes that are safe to retry (transient server / network issues)
@@ -61,12 +68,14 @@ function sleep(ms: number) {
 }
 
 // ── Compress a photo to a local temp JPEG, returns its URI ───────────────────
-async function compressPhoto(uri: string): Promise<string> {
+async function compressPhoto(uri: string, profile: 'photo' | 'floorplan' = 'photo'): Promise<string> {
+  const maxPx   = profile === 'floorplan' ? FLOORPLAN_MAX_PX : MAX_PHOTO_PX
+  const quality = profile === 'floorplan' ? FLOORPLAN_QUALITY : SYNC_QUALITY
   try {
     const compressed = await manipulateAsync(
       uri,
-      [{ resize: { width: MAX_PHOTO_PX } }],
-      { compress: SYNC_QUALITY, format: SaveFormat.JPEG }
+      [{ resize: { width: maxPx } }],
+      { compress: quality, format: SaveFormat.JPEG }
     )
     return compressed.uri
   } catch (e) {
@@ -82,11 +91,11 @@ async function compressPhoto(uri: string): Promise<string> {
 // Hermes JS engine which has a ~530 MB string limit.
 // We compress to max 1400 px / 72 % JPEG before encoding (~120–200 KB each).
 //
-async function encodeOnePhoto(uri: string): Promise<string> {
+async function encodeOnePhoto(uri: string, profile: 'photo' | 'floorplan' = 'photo'): Promise<string> {
   if (uri.startsWith('data:'))  return uri
   if (uri.startsWith('https:')) return uri   // already an S3 URL — leave as-is
   try {
-    const compressedUri = await compressPhoto(uri)
+    const compressedUri = await compressPhoto(uri, profile)
     const b64 = await FileSystem.readAsStringAsync(compressedUri, {
       encoding: FileSystem.EncodingType.Base64,
     })
@@ -113,7 +122,7 @@ async function encodeOnePhoto(uri: string): Promise<string> {
 // Returns [{path: ['sectionKey','itemKey','_photos','0'], uri: 'file://...'}, ...]
 // Path is an array of keys / numeric-string indices so we can write back later.
 //
-type UriRef = { path: string[]; uri: string }
+type UriRef = { path: string[]; uri: string; kind?: 'photo' | 'floorplan' }
 
 function collectLocalUris(rd: any): UriRef[] {
   const refs: UriRef[] = []
@@ -122,6 +131,18 @@ function collectLocalUris(rd: any): UriRef[] {
   const overviewUri = (rd['_overview'] as any)?.items?.photo?.uri
   if (overviewUri && overviewUri.startsWith('file://')) {
     refs.push({ path: ['_overview', 'items', 'photo', 'uri'], uri: overviewUri })
+  }
+
+  // Floor plan images — one per floor, uploaded from Property Overview's
+  // Floorplan button (see FloorPlanImagesScreen.tsx). Compressed with the
+  // higher-fidelity 'floorplan' profile (line art/text, not a photograph).
+  const fpImages = (rd['_floorplan'] as any)?.images
+  if (Array.isArray(fpImages)) {
+    fpImages.forEach((img: any, idx: number) => {
+      if (img?.uri && typeof img.uri === 'string' && img.uri.startsWith('file://')) {
+        refs.push({ path: ['_floorplan', 'images', String(idx), 'uri'], uri: img.uri, kind: 'floorplan' })
+      }
+    })
   }
 
   // Section / item photos
@@ -212,8 +233,8 @@ export async function uploadPhotosToS3(
   // ── No S3: encode everything as base64 ────────────────────────────────────
   if (!presigned) {
     let done = 0
-    for (const { path, uri } of refs) {
-      const encoded = await encodeOnePhoto(uri)
+    for (const { path, uri, kind } of refs) {
+      const encoded = await encodeOnePhoto(uri, kind)
       setAtPath(rd, path, encoded)
       if (encoded.startsWith('file://')) {
         unresolved++
@@ -230,11 +251,11 @@ export async function uploadPhotosToS3(
   // ── S3 available: upload each photo directly ───────────────────────────────
   let done = 0
   for (let i = 0; i < refs.length; i++) {
-    const { path, uri } = refs[i]
+    const { path, uri, kind } = refs[i]
     const slot = presigned[i]
 
     try {
-      const compressedUri = await compressPhoto(uri)
+      const compressedUri = await compressPhoto(uri, kind)
 
       const result = await FileSystem.uploadAsync(slot.upload_url, compressedUri, {
         httpMethod:   'PUT',
@@ -253,7 +274,7 @@ export async function uploadPhotosToS3(
         console.log(`[Sync] photo ${i + 1}/${totalPhotos} → S3`)
       } else {
         console.warn(`[Sync] S3 upload returned ${result.status} for photo ${i + 1} — falling back to base64`)
-        const encoded = await encodeOnePhoto(uri)
+        const encoded = await encodeOnePhoto(uri, kind)
         setAtPath(rd, path, encoded)
         if (encoded.startsWith('file://')) {
           unresolved++
@@ -265,7 +286,7 @@ export async function uploadPhotosToS3(
     } catch (uploadErr) {
       console.warn(`[Sync] S3 upload failed for photo ${i + 1} — falling back to base64:`, uploadErr)
       try {
-        const encoded = await encodeOnePhoto(uri)
+        const encoded = await encodeOnePhoto(uri, kind)
         setAtPath(rd, path, encoded)
         if (encoded.startsWith('file://')) {
           unresolved++
