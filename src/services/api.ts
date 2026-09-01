@@ -144,6 +144,12 @@ export const api = {
   updateInspection: (id: number, data: any) =>
     http.put(`/api/inspections/${id}`, data),
 
+  // Logs a 'fetched' activity event for the inspection's Activity Log (web
+  // InspectionDetailView.vue) — call once after a successful offline download,
+  // not on every getInspection() read.
+  markInspectionFetched: (id: number) =>
+    http.post(`/api/inspections/${id}/mark-fetched`, {}),
+
   // Use the long-timeout sync instance for large payloads (photos + audio)
   syncInspection: (id: number, data: any) =>
     httpSync.put(`/api/inspections/${id}`, data),

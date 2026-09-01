@@ -372,6 +372,9 @@ export default function FetchInspectionsScreen() {
         const userCameraDefault  = storeUser?.camera_option  ?? null
         const userTypistDefault  = storeUser?.typist_mode    ?? null
         await saveInspection(normalised, userCameraDefault, userTypistDefault)
+        // Fire-and-forget — the download already succeeded locally; a failed
+        // activity-log call must never fail the fetch itself.
+        api.markInspectionFetched(id).catch(() => {})
         res.push({ id, address: normalised.property_address, success: true })
       } catch (err: any) {
         res.push({ id, address: inspection.property_address, success: false, error: err.message || 'Network error' })
