@@ -1006,7 +1006,7 @@ export default function RoomInspectionScreen() {
       const editMode  = result.editMode  || 'normal'   // 'normal' | 'overwrite' | 'append' | 'delete' | 'add_sub' | 'return_to'
       const editField = result.editField || null        // 'description' | 'condition' | null
 
-      // ── "Not Applicable" — delete item ────────────────────────────────────
+      // ── "Please Delete" — delete item ────────────────────────────────────
       if (editMode === 'delete') {
         await deleteItemImmediate(itemId)
         // Log after deletion — re-read so we don't overwrite the now-deleted item
@@ -1268,13 +1268,12 @@ export default function RoomInspectionScreen() {
   // Called by RoomDictationRecorder when AI returns filled fields.
   // filled = { itemId: { description?, condition?, _subs?: [{description, condition}] } }
   // _subs is created when the AI detects multiple distinct elements within one item chapter.
-  // Phrases that mean the item is not present — triggers auto-deletion.
-  // Only matches when the phrase IS essentially the entire content (exact match),
-  // so embedded uses like "serial number not seen" are left as dictation.
-  const NONE_SEEN_PHRASES = [
-    'delete item', 'none seen', 'not applicable', 'not present', 'none present',
-    'not found', 'n/a', 'none', 'not seen',
-  ]
+  // "Please delete" is the ONLY phrase that triggers auto-deletion — deliberately
+  // narrow so ordinary dictation (including phrases like "not present" or "n/a"
+  // spoken as genuine content) is never misread as a delete command. Only matches
+  // when the phrase IS essentially the entire content (exact match), so embedded
+  // uses like "serial number not seen" are left as dictation either way.
+  const NONE_SEEN_PHRASES = ['please delete']
   function isNoneSeen(fields: Record<string, any>): boolean {
     const text = [fields.description, fields.condition].filter(Boolean).join(' ').toLowerCase().trim()
     return NONE_SEEN_PHRASES.some(p => text === p)
@@ -1292,7 +1291,7 @@ export default function RoomInspectionScreen() {
     const deletedItems: string[] = []
 
     for (const [itemId, fields] of Object.entries(filled)) {
-      // Explicit delete — clerk said "[item] Not Applicable" (AI sets _delete: true)
+      // Explicit delete — clerk said "[item] Please Delete" (AI sets _delete: true)
       // Also catches auto-detection via isNoneSeen for legacy compatibility.
       // Handle inline within rd so the single setReportData at the end captures
       // deletions alongside any other fills — avoids a second write overwriting _deleted.
