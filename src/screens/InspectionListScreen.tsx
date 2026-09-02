@@ -92,6 +92,11 @@ export default function InspectionListScreen() {
 
   function renderItem({ item }: { item: any }) {
     const isSynced = item.synced
+    // Once synced, a card is normally inert (nothing left to do on-device) — but
+    // admins/managers still need to reach PropertyOverview to Reopen to Active or
+    // Share Report on a completed inspection, so the tap-through and dimmed
+    // styling are skipped for them specifically.
+    const isDimmed = isSynced && !isAM
     // overview_photo is stored in the full inspection data under property.overview_photo
     const overviewPhoto = (() => {
       try {
@@ -102,9 +107,9 @@ export default function InspectionListScreen() {
 
     return (
       <TouchableOpacity
-        style={[styles.card, dm.surface, { borderColor: c.border }, isSynced && styles.cardSynced]}
-        onPress={() => !isSynced && navigation.navigate('PropertyOverview', { inspectionId: item.id })}
-        activeOpacity={isSynced ? 1 : 0.75}
+        style={[styles.card, dm.surface, { borderColor: c.border }, isDimmed && styles.cardSynced]}
+        onPress={() => (!isSynced || isAM) && navigation.navigate('PropertyOverview', { inspectionId: item.id })}
+        activeOpacity={isDimmed ? 1 : 0.75}
       >
         {/* Property photo strip */}
         {overviewPhoto ? (
@@ -145,9 +150,13 @@ export default function InspectionListScreen() {
             </TouchableOpacity>
 
             {isSynced ? (
-              <View style={styles.syncedBanner}>
-                <Text style={styles.syncedBannerText}>✓ Synced</Text>
-              </View>
+              isAM ? (
+                <Text style={[styles.tapHint, dm.textLight]}>✓ Synced · Tap to manage →</Text>
+              ) : (
+                <View style={styles.syncedBanner}>
+                  <Text style={styles.syncedBannerText}>✓ Synced</Text>
+                </View>
+              )
             ) : (
               <Text style={[styles.tapHint, dm.textLight]}>Tap to open →</Text>
             )}
