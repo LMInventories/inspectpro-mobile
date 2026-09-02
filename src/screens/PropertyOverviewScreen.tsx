@@ -18,6 +18,7 @@ import { useSyncStore } from '../stores/syncStore'
 import { useAuthStore } from '../stores/authStore'
 import Header from '../components/Header'
 import SignaturePad from '../components/SignaturePad'
+import ShareReportModal from '../components/ShareReportModal'
 import { colors, useColors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav = StackNavigationProp<RootStackParamList, 'PropertyOverview'>
@@ -51,6 +52,8 @@ export default function PropertyOverviewScreen() {
   const { user } = useAuthStore()
   const { startSync, progress: storeProgress } = useSyncStore()
   const [starting, setStarting]     = useState(false)
+  const [reopening, setReopening]   = useState(false)
+  const [showShareModal, setShowShareModal] = useState(false)
   const [finalising, setFinalising] = useState(false)
   const [localSyncing, setLocalSyncing] = useState(false)
   const [showReview, setShowReview] = useState(false)
@@ -185,6 +188,37 @@ export default function PropertyOverviewScreen() {
     )
   }
 
+  // Admin/manager only — moves a completed inspection back to Active so an edit can be
+  // made, without re-fetching (mirrors handleStartInspection's flip-status pattern).
+  // Unlike Start Inspection, this has no offline fallback: a status change that only
+  // happens locally, silently unsynced, would be actively misleading here — the whole
+  // point is reaching the server, so a failure surfaces as an alert instead.
+  async function handleReopenToActive() {
+    Alert.alert(
+      'Reopen to Active',
+      'This will move the inspection back to Active and it will no longer be marked Complete. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reopen',
+          onPress: async () => {
+            setReopening(true)
+            try {
+              await api.updateInspection(inspectionId, { status: 'active' })
+              updateInspectionServerStatus(inspectionId, 'active')
+              updateLocalStatus(inspectionId, 'active')
+              await loadInspection(inspectionId)
+            } catch (e: any) {
+              Alert.alert('Could Not Reopen', e.response?.data?.error || 'Check your connection and try again.')
+            } finally {
+              setReopening(false)
+            }
+          },
+        },
+      ]
+    )
+  }
+
   function formatDate(str: string | null) {
     if (!str) return '—'
     return new Date(str).toLocaleDateString('en-GB', {
@@ -211,6 +245,10 @@ export default function PropertyOverviewScreen() {
   const isAiMode = (inspection as any).typist_is_ai ||
                    (inspection as any).typist_mode === 'ai_instant' ||
                    (inspection as any).typist_mode === 'ai_room'
+  const isAM       = user?.role === 'admin' || user?.role === 'manager'
+  const isComplete = inspection.status === 'complete'
+  const clientEmail = (inspection as any).client_email_override || (inspection as any).client?.email || null
+  const tenantEmail = (inspection as any).tenant_email || null
 
   function openReview() {
     const rd = inspection.report_data ? JSON.parse(inspection.report_data) : {}
@@ -550,6 +588,18 @@ export default function PropertyOverviewScreen() {
                 <Text style={styles.btnSecondaryText}>
                   {hasFloorPlan ? 'View Floorplan' : 'Create Floorplan'}
                 </Text>
+              </TouchableOpacity>
+            </>
+          ) : isComplete && isAM ? (
+            <>
+              <TouchableOpacity style={styles.btnPrimary} onPress={() => setShowShareModal(true)}>
+                <Text style={styles.btnPrimaryText}>Share Report</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.btnSecondary} onPress={handleReopenToActive} disabled={reopening}>
+                {reopening
+                  ? <ActivityIndicator color={colors.primary} size="small" />
+                  : <Text style={styles.btnSecondaryText}>↺ Reopen to Active</Text>
+                }
               </TouchableOpacity>
             </>
           ) : (
@@ -905,6 +955,14 @@ export default function PropertyOverviewScreen() {
           ))}
         </View>
       </Modal>
+
+      <ShareReportModal
+        visible={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        inspectionId={inspectionId}
+        clientEmail={clientEmail}
+        tenantEmail={tenantEmail}
+      />
     </View>
   )
 }

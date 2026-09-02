@@ -150,6 +150,13 @@ export const api = {
   markInspectionFetched: (id: number) =>
     http.post(`/api/inspections/${id}/mark-fetched`, {}),
 
+  // Emails the completed report PDF to the given addresses. Mirrors the web
+  // client's sharePdf() (frontend/src/services/api.js). The endpoint queues
+  // PDF generation + send server-side and returns immediately — the default
+  // (short-timeout) http instance is correct here, not httpSync.
+  sharePdf: (id: number, emails: string[], notes: string = '') =>
+    http.post(`/api/inspections/${id}/share-pdf`, { emails, notes }),
+
   // Use the long-timeout sync instance for large payloads (photos + audio)
   syncInspection: (id: number, data: any) =>
     httpSync.put(`/api/inspections/${id}`, data),

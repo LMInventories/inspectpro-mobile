@@ -27,7 +27,7 @@
  *   • After a successful sync, local audio files are deleted from device storage
  *     and their DB rows are marked synced — they are no longer needed on-device.
  */
-import { getLocalInspection, getAudioRecordings, markSynced, markAudioSynced, updateReportData } from './database'
+import { getLocalInspection, getAudioRecordings, markSynced, markAudioSynced, updateReportData, updateInspectionServerStatus } from './database'
 import { api } from './api'
 import * as FileSystem from 'expo-file-system/legacy'
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
@@ -525,6 +525,15 @@ export async function syncSingleInspection(
     // this is the write that should have the final say (synced=1).
     const newServerUpdatedAt = response?.data?.updated_at ?? undefined
     markSynced(id, newServerUpdatedAt)
+
+    // Patch the local status column + data blob to match whatever status was
+    // just sent to the server (complete/review/etc). Without this the device's
+    // own copy of inspection.status stays stale at its pre-sync value — e.g. an
+    // admin/manager finalised sync tells the server "complete" but the local
+    // blob would still read "active" until the inspection is re-fetched.
+    if (payload.status) {
+      updateInspectionServerStatus(id, payload.status)
+    }
 
     // Delete local audio files now that the server has them.
     // Non-fatal: if this fails the recordings stay on device until next sync.
