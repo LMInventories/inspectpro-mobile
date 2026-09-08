@@ -1674,8 +1674,23 @@ export default function RoomInspectionScreen() {
     const rd = freshFixed?.report_data ? JSON.parse(freshFixed.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false
+    const deletedItems: string[] = []
 
     for (const [itemId, fields] of Object.entries(filled)) {
+      // Explicit delete — clerk said "[item] Please Delete" (AI sets _delete: true).
+      // Fixed-section rows are hidden via _hidden (matches deleteItemImmediate/web's
+      // isHidden()), not removed from _extra/_deleted like room items.
+      if ((fields as any)._delete === true) {
+        setItems(prev => prev.filter(i => i.id !== itemId))
+        itemLayoutsRef.current.delete(itemId)
+        itemHeightsRef.current.delete(itemId)
+        if (!rd[sectionKey]['_hidden']) rd[sectionKey]['_hidden'] = []
+        if (!rd[sectionKey]['_hidden'].includes(itemId)) rd[sectionKey]['_hidden'].push(itemId)
+        deletedItems.push(itemId)
+        changed = true
+        continue
+      }
+
       if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
       const row = rd[sectionKey][itemId]
       for (const [fieldKey, value] of Object.entries(fields)) {
@@ -1688,8 +1703,11 @@ export default function RoomInspectionScreen() {
 
     if (changed) {
       setReportData(inspectionId, rd)
-      const count = Object.keys(filled).length
-      useToastStore.getState().showToast(`✨ ${count} item${count !== 1 ? 's' : ''} filled in ${sectionName}.`)
+      const filledCount = Object.keys(filled).length - deletedItems.length
+      const parts: string[] = []
+      if (filledCount > 0) parts.push(`${filledCount} item${filledCount !== 1 ? 's' : ''} filled`)
+      if (deletedItems.length > 0) parts.push(`${deletedItems.length} deleted`)
+      useToastStore.getState().showToast(`✨ ${parts.join(', ')} in ${sectionName}.`)
     } else {
       useToastStore.getState().showToast('Already filled — existing content preserved.', 'info')
     }
