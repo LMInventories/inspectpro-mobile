@@ -3,7 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
   Keyboard, Platform, Animated, Dimensions, useWindowDimensions,
-  FlatList,
+  FlatList, findNodeHandle, TouchableWithoutFeedback,
 } from 'react-native'
 import {
   GestureHandlerRootView,
@@ -195,6 +195,14 @@ export default function RoomInspectionScreen() {
   // Y of each sub-item within its subsContainer (keyed by sub._sid).
   const subItemLayoutsRef = useRef<Map<string, number>>(new Map())
 
+  // Node refs for "Additional Item" cards and their sub-items — these live
+  // nested a few levels deep inside renderCustomItems() (not a direct
+  // ScrollView child like regular item cards), so their Y can't be tracked
+  // by summing onLayout offsets the way itemLayoutsRef/subItemLayoutsRef do.
+  // Instead we measure them directly against the ScrollView on focus.
+  const customItemNodeRefs = useRef<Map<string, any>>(new Map())
+  const customSubNodeRefs  = useRef<Map<string, any>>(new Map())
+
   // Deep-link target from the pre-finalise Review Report overlay — briefly
   // highlighted once scrolled into view (see the focusItemKey effect below).
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
@@ -357,6 +365,27 @@ export default function RoomInspectionScreen() {
     }
   }
 
+  // Shared by handleTextFocus/handleCustomTextFocus: runs `perform` once the
+  // keyboard has finished animating in (Android waits for keyboardDidShow +
+  // one frame for the paddingBottom re-render; iOS just waits out the ~250ms
+  // animation), so scrollTo runs against the final, keyboard-adjusted layout.
+  function scrollFieldIntoView(perform: () => void) {
+    if (Platform.OS === 'android') {
+      if (keyboardHeight > 0) {
+        // Keyboard already visible (switching between inputs) — scroll straight away.
+        perform()
+      } else {
+        const sub = Keyboard.addListener('keyboardDidShow', () => {
+          sub.remove()
+          setTimeout(perform, 50)
+        })
+      }
+    } else {
+      // iOS: keyboard animation is ~250 ms; scroll after it finishes.
+      setTimeout(perform, 260)
+    }
+  }
+
   function handleTextFocus(itemId: string, sid?: string) {
     const itemY = itemLayoutsRef.current.get(itemId)
     if (itemY === undefined) return
@@ -368,25 +397,26 @@ export default function RoomInspectionScreen() {
       : 0
     const y = itemY + subOffset
     // Pull the target to the very top of the visible area (8 px breathing room).
-    const doScroll = () => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
+    scrollFieldIntoView(() => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true }))
+  }
 
-    if (Platform.OS === 'android') {
-      if (keyboardHeight > 0) {
-        // Keyboard already visible (switching between inputs) — scroll straight away.
-        doScroll()
-      } else {
-        // Keyboard not yet visible. Wait for it to finish appearing, then give React
-        // one frame to apply the paddingBottom re-render before scrolling, otherwise
-        // scrollTo runs against the old (shorter) content height and stops short.
-        const sub = Keyboard.addListener('keyboardDidShow', () => {
-          sub.remove()
-          setTimeout(doScroll, 50)
-        })
-      }
-    } else {
-      // iOS: keyboard animation is ~250 ms; scroll after it finishes.
-      setTimeout(doScroll, 260)
-    }
+  // "Additional Item" cards (renderCustomItems) aren't direct ScrollView
+  // children, so their position can't be built up from cached onLayout
+  // offsets the way handleTextFocus does — measure the focused field's node
+  // directly against the ScrollView instead.
+  function handleCustomTextFocus(cid: string, sid?: string) {
+    const node = sid ? customSubNodeRefs.current.get(sid) : customItemNodeRefs.current.get(cid)
+    const scrollHandle = findNodeHandle(itemScrollRef.current)
+    if (!node || !scrollHandle) return
+    scrollFieldIntoView(() => {
+      node.measureLayout(
+        scrollHandle,
+        (_x: number, y: number) => {
+          itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true })
+        },
+        () => {}
+      )
+    })
   }
 
   // Deep-link from the pre-finalise Review Report overlay: scroll to the
@@ -3083,7 +3113,10 @@ export default function RoomInspectionScreen() {
                 { icon: '↗', label: 'Move To', bg: '#fdf4ff', onPress: () => openMoveItemModal(syntheticItem, true) },
               ]}
             >
-            <View style={[styles.itemCard, dm.surface, { borderColor: c.border }]}>
+            <View
+              ref={(el) => { if (el) customItemNodeRefs.current.set(ci._cid, el); else customItemNodeRefs.current.delete(ci._cid) }}
+              style={[styles.itemCard, dm.surface, { borderColor: c.border }]}
+            >
               <View style={styles.itemHeader}>
                 <Text style={[styles.itemName, dm.text, { flex: 1 }]}>Additional Item</Text>
                 <TouchableOpacity onPress={() => removeCustomItemEntry(ci._cid, 'Additional Item')}>
@@ -3096,7 +3129,7 @@ export default function RoomInspectionScreen() {
                 <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={ci.description || ''}
-                  onFocus={() => handleTextFocus(ci._cid)}
+                  onFocus={() => handleCustomTextFocus(ci._cid)}
                   onChangeText={v => setCustomItemField(ci._cid, 'description', v)}
                   placeholder="Describe the item…"
                   placeholderTextColor={c.textLight}
@@ -3109,7 +3142,7 @@ export default function RoomInspectionScreen() {
                 <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={ci.checkOutCondition || ''}
-                  onFocus={() => handleTextFocus(ci._cid)}
+                  onFocus={() => handleCustomTextFocus(ci._cid)}
                   onChangeText={v => setCustomItemField(ci._cid, 'checkOutCondition', v)}
                   placeholder="e.g. In good order"
                   placeholderTextColor={c.textLight}
@@ -3178,7 +3211,10 @@ export default function RoomInspectionScreen() {
                   <View style={styles.subsDivider} />
                   {subs.map((sub: any) => (
                     <SwipeableRow key={sub._sid} actions={getSubActions(syntheticItem, sub)}>
-                      <View style={styles.subItem}>
+                      <View
+                        ref={(el) => { if (el) customSubNodeRefs.current.set(sub._sid, el); else customSubNodeRefs.current.delete(sub._sid) }}
+                        style={styles.subItem}
+                      >
                         <View style={styles.subItemHeader}>
                           <Text style={styles.subItemTitle}>—</Text>
                           <TouchableOpacity onPress={() => removeSubItem(ci._cid, sub._sid)}>
@@ -3190,6 +3226,7 @@ export default function RoomInspectionScreen() {
                           <ReportTextInput
                             style={[styles.notesInput, dm.input]}
                             value={sub.description}
+                            onFocus={() => handleCustomTextFocus(ci._cid, sub._sid)}
                             onChangeText={v => setSubField(ci._cid, sub._sid, 'description', v)}
                             placeholder="Describe sub-item…"
                             placeholderTextColor={c.textLight}
@@ -3201,6 +3238,7 @@ export default function RoomInspectionScreen() {
                           <ReportTextInput
                             style={[styles.notesInput, dm.input]}
                             value={sub.condition}
+                            onFocus={() => handleCustomTextFocus(ci._cid, sub._sid)}
                             onChangeText={v => setSubField(ci._cid, sub._sid, 'condition', v)}
                             placeholder="e.g. Good, Fair, Worn…"
                             placeholderTextColor={c.textLight}
@@ -3781,6 +3819,7 @@ export default function RoomInspectionScreen() {
         {loading ? (
           <View style={styles.loading}><ActivityIndicator color={colors.primary} size="large" /></View>
         ) : (
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <ScrollView
             ref={itemScrollRef}
             onLayout={(e) => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
@@ -3799,6 +3838,7 @@ export default function RoomInspectionScreen() {
               },
             ]}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
           >
             {isLandscape && headerBlock}
             {/* ── Room Overview Photos ──────────────────────────────────── */}
@@ -3929,6 +3969,7 @@ export default function RoomInspectionScreen() {
             {isCheckOut_ && sectionType_ === 'room' && renderCustomItems()}
             <View style={{ height: 20 }} />
           </ScrollView>
+          </TouchableWithoutFeedback>
         )}
 
         </View>{/* end main content area */}
