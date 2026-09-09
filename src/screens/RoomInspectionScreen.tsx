@@ -500,22 +500,27 @@ export default function RoomInspectionScreen() {
         setIsCheckOut_(checkOut)
         setIsDamageReport_(damageReport)
         if (checkOut && actionCatalogue.length === 0) {
-          try {
-            const actRes = await api.getActions()
-            const actions = actRes.data.actions || []
-            const responsibilities = actRes.data.responsibilities || []
-            setActionCatalogue(actions)
-            setActionResponsibilities(responsibilities)
-            setCachedJSON('actionCatalogue', { actions, responsibilities })
-          } catch {
-            // Offline (or request failed) — fall back to the catalogue cached
-            // the last time this device was online (e.g. during Fetch Inspections).
-            const cached = getCachedJSON<{ actions: any[]; responsibilities: string[] }>('actionCatalogue')
-            if (cached) {
-              setActionCatalogue(cached.actions || [])
-              setActionResponsibilities(cached.responsibilities || [])
-            }
+          // Cache-first, synchronous — this must never block buildItems() on a
+          // network round-trip. A previous version awaited api.getActions() here,
+          // which gated EVERY section (fixed and room alike) behind a live
+          // request that can hang for a long time with no network, leaving the
+          // whole screen stuck on its loading spinner.
+          const cached = getCachedJSON<{ actions: any[]; responsibilities: string[] }>('actionCatalogue')
+          if (cached) {
+            setActionCatalogue(cached.actions || [])
+            setActionResponsibilities(cached.responsibilities || [])
           }
+          // Refresh from the network in the background — updates state/cache
+          // whenever it resolves, but never delays the current screen render.
+          api.getActions()
+            .then(actRes => {
+              const actions = actRes.data.actions || []
+              const responsibilities = actRes.data.responsibilities || []
+              setActionCatalogue(actions)
+              setActionResponsibilities(responsibilities)
+              setCachedJSON('actionCatalogue', { actions, responsibilities })
+            })
+            .catch(() => { /* offline or failed — cached copy (if any) already applied above */ })
         }
       }
 
@@ -573,13 +578,19 @@ export default function RoomInspectionScreen() {
           const cachedOk = templateIsComplete(fresh?.template)
           let templateData: any = cachedOk ? fresh.template : null
           if (!templateData) {
-            try {
-              const tmplRes = await api.getTemplate(fresh.template_id)
-              templateData = tmplRes.data
-            } catch (e) {
-              templateData = getCachedTemplate(fresh.template_id)
-              if (!templateData) {
-                console.warn('[buildItems] template fetch failed (offline?) — using cached extras only:', e)
+            // Check the offline template library BEFORE attempting a live
+            // request — a live call can take up to ~30s to time out with no
+            // network, which would otherwise stall this screen's loading
+            // spinner even though we already have a good copy on-device.
+            templateData = getCachedTemplate(fresh.template_id)
+            if (!templateData || !templateIsComplete(templateData)) {
+              try {
+                const tmplRes = await api.getTemplate(fresh.template_id)
+                templateData = tmplRes.data
+              } catch (e) {
+                if (!templateData) {
+                  console.warn('[buildItems] template fetch failed (offline?) — using cached extras only:', e)
+                }
               }
             }
             // Self-heal local storage so this doesn't need re-resolving next time.

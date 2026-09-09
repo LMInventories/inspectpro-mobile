@@ -106,19 +106,22 @@ export default function RoomSelectionScreen() {
       let tmplData: any = cachedComplete ? inspection.template : null
       let resolvedTemplateId: number | null = cachedComplete ? inspection.template_id : null
 
-      // Primary: fetch by template_id
+      // Primary: check the offline template library BEFORE attempting a live
+      // request — a live call can take up to ~30s to time out with no network,
+      // which would otherwise stall this screen even though we already have
+      // a good copy on-device.
       if (!tmplData && inspection?.template_id) {
-        try {
-          const tmplRes = await api.getTemplate(inspection.template_id)
-          tmplData = tmplRes.data
+        const libCached = getCachedTemplate(inspection.template_id)
+        if (libCached && templateIsComplete(libCached)) {
+          tmplData = libCached
           resolvedTemplateId = inspection.template_id
-        } catch {
-          // Offline — fall back to the template library cached during the
-          // last "Fetch Inspections" so rooms still load with no connection.
-          tmplData = getCachedTemplate(inspection.template_id)
-          if (tmplData) {
+        } else {
+          try {
+            const tmplRes = await api.getTemplate(inspection.template_id)
+            tmplData = tmplRes.data
             resolvedTemplateId = inspection.template_id
-          } else {
+          } catch {
+            // Offline and nothing usable cached either.
             Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
           }
         }
