@@ -9,12 +9,13 @@ import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { getLocalInspection } from '../services/database'
+import { getLocalInspection, getCachedTemplate, getCachedJSON } from '../services/database'
 import { api } from '../services/api'
 import Header from '../components/Header'
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler'
 import SwipeableRow from '../components/SwipeableRow'
-import { colors, font, radius, spacing } from '../utils/theme'
+import { useToastStore } from '../stores/toastStore'
+import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
 
 type Nav   = StackNavigationProp<RootStackParamList, 'RoomSelection'>
 type Route = RouteProp<RootStackParamList, 'RoomSelection'>
@@ -44,7 +45,7 @@ export default function RoomSelectionScreen() {
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
   const { inspectionId } = route.params
-  const { activeInspection, loadInspection, setReportData } = useInspectionStore()
+  const { activeInspection, loadInspection, setReportData, overrideTemplate } = useInspectionStore()
 
   const [fixedSections, setFixedSections]       = useState<any[]>([])
   const [templateSections, setTemplateSections] = useState<any[]>([])
@@ -72,6 +73,13 @@ export default function RoomSelectionScreen() {
   const [rrDragTo,   setRrDragTo]   = useState<number | null>(null)
   const rrDragYAnim = useRef(new Animated.Value(0)).current
   const ROOM_ROW_H  = 56
+
+  // Change/override template modal state
+  const [changeTemplateModal, setChangeTemplateModal] = useState(false)
+  const [availableTemplates, setAvailableTemplates]   = useState<any[]>([])
+  const [templatesAreFull, setTemplatesAreFull]       = useState(false)
+  const [templatesLoading, setTemplatesLoading]       = useState(false)
+  const [applyingTemplateId, setApplyingTemplateId]   = useState<number | null>(null)
 
   // Add room modal state
   const [presets, setPresets]             = useState<any[]>([])
@@ -103,7 +111,12 @@ export default function RoomSelectionScreen() {
           const tmplRes = await api.getTemplate(inspection.template_id)
           tmplData = tmplRes.data
         } catch {
-          Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
+          // Offline — fall back to the template library cached during the
+          // last "Fetch Inspections" so rooms still load with no connection.
+          tmplData = getCachedTemplate(inspection.template_id)
+          if (!tmplData) {
+            Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
+          }
         }
       }
 
@@ -187,6 +200,66 @@ export default function RoomSelectionScreen() {
   function getReportData() {
     if (!activeInspection?.report_data) return {}
     try { return JSON.parse(activeInspection.report_data) } catch { return {} }
+  }
+
+  // ── Change / override template ───────────────────────────────────────────
+  // Lets a clerk swap the entire template an inspection uses on-device — e.g.
+  // the wrong one was assigned on the web. This is a local override only
+  // (never synced back), so it works fully offline once templates have been
+  // cached by a prior "Fetch Inspections" run.
+  async function openChangeTemplateModal() {
+    setChangeTemplateModal(true)
+    setTemplatesLoading(true)
+    try {
+      const cached = getCachedJSON<any[]>('templatesFull')
+      if (cached && cached.length > 0) {
+        setAvailableTemplates(cached)
+        setTemplatesAreFull(true)
+      } else {
+        const res = await api.getTemplates()
+        setAvailableTemplates(Array.isArray(res.data) ? res.data : [])
+        setTemplatesAreFull(false)
+      }
+    } catch {
+      setAvailableTemplates([])
+      setTemplatesAreFull(false)
+    } finally {
+      setTemplatesLoading(false)
+    }
+  }
+
+  async function applyTemplate(tmpl: any) {
+    setApplyingTemplateId(tmpl.id)
+    try {
+      let full = templatesAreFull ? tmpl : getCachedTemplate(tmpl.id)
+      if (!full) {
+        try {
+          const res = await api.getTemplate(tmpl.id)
+          full = res.data
+        } catch {
+          Alert.alert('No connection', 'This template hasn\'t been downloaded for offline use yet. Connect to the internet to switch to it.')
+          return
+        }
+      }
+      overrideTemplate(inspectionId, tmpl.id, full)
+      await loadInspection(inspectionId)
+      await loadResources()
+      setChangeTemplateModal(false)
+      useToastStore.getState().showToast(`Template changed to "${tmpl.name}"`, 'success')
+    } finally {
+      setApplyingTemplateId(null)
+    }
+  }
+
+  function confirmApplyTemplate(tmpl: any) {
+    Alert.alert(
+      'Replace Template?',
+      `Switch this inspection to "${tmpl.name}"? Existing room data is kept, but rooms/items that don't exist in the new template won't be shown.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace', style: 'destructive', onPress: () => applyTemplate(tmpl) },
+      ]
+    )
   }
 
   async function handleAddCustomRoom() {
@@ -835,6 +908,10 @@ export default function RoomSelectionScreen() {
           <TouchableOpacity style={styles.syncBtn} onPress={() => navigation.navigate('Sync')}>
             <Text style={styles.syncBtnText}>⇅ Sync Inspection</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.changeTemplateBtn} onPress={openChangeTemplateModal}>
+            <Text style={styles.changeTemplateText}>⇄ New / Change Template</Text>
+          </TouchableOpacity>
         </ScrollView>
       )}
 
@@ -965,6 +1042,55 @@ export default function RoomSelectionScreen() {
         </View>
       </Modal>
 
+      {/* Change / override template modal */}
+      <Modal visible={changeTemplateModal} transparent animationType="fade" onRequestClose={() => setChangeTemplateModal(false)}>
+        <View style={mStyles.overlay}>
+          <View style={[mStyles.box, mStyles.boxTall]}>
+            <Text style={mStyles.title}>Change Template</Text>
+            <Text style={mStyles.subtitle}>
+              Pick a different template to use for this inspection. Existing room data is kept.
+            </Text>
+            {templatesLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
+            ) : availableTemplates.length === 0 ? (
+              <View style={mStyles.emptyPresets}>
+                <Text style={mStyles.emptyPresetsText}>
+                  No templates available offline yet. Connect to the internet and run "Fetch Inspections" once to download the template library.
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={availableTemplates}
+                keyExtractor={t => String(t.id)}
+                style={mStyles.presetList}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={mStyles.presetRow}
+                    disabled={applyingTemplateId !== null}
+                    onPress={() => confirmApplyTemplate(item)}
+                  >
+                    <View style={mStyles.presetRowLeft}>
+                      <Text style={mStyles.presetName}>{item.name}</Text>
+                      <Text style={mStyles.presetMeta}>
+                        {TYPE_LABELS[item.inspection_type] ?? item.inspection_type}
+                        {String(item.id) === String(activeInspection?.template_id) ? ' · Current' : ''}
+                      </Text>
+                    </View>
+                    {applyingTemplateId === item.id
+                      ? <ActivityIndicator color={colors.primary} />
+                      : <Text style={mStyles.choiceArrow}>›</Text>}
+                  </TouchableOpacity>
+                )}
+                ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: colors.border }} />}
+              />
+            )}
+            <TouchableOpacity style={mStyles.cancel} onPress={() => setChangeTemplateModal(false)}>
+              <Text style={mStyles.cancelText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </GestureHandlerRootView>
   )
 }
@@ -1086,4 +1212,6 @@ const styles = StyleSheet.create({
   dragHandleIcon: { fontSize: 20, color: colors.textLight, letterSpacing: 1 },
   syncBtn: { marginTop: spacing.xl, backgroundColor: colors.accent, borderRadius: radius.md, padding: 14, alignItems: 'center' },
   syncBtnText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
+  changeTemplateBtn: { marginTop: spacing.sm, paddingVertical: 10, alignItems: 'center' },
+  changeTemplateText: { color: colors.textLight, fontSize: font.xs, fontWeight: '600' },
 })

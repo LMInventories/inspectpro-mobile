@@ -13,7 +13,7 @@ import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-g
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { getLocalInspection } from '../services/database'
+import { getLocalInspection, getCachedTemplate } from '../services/database'
 import { setCameraTarget, processPendingPhotos } from '../services/cameraStore'
 import Header from '../components/Header'
 import AnnotateModal from '../components/AnnotateModal'
@@ -343,8 +343,16 @@ export default function ItemGalleryScreen() {
       if (localInsp?.template) {
         tmplData = localInsp.template
       } else {
-        const tmplRes = await api.getTemplate(activeInspection.template_id)
-        tmplData = tmplRes.data
+        try {
+          const tmplRes = await api.getTemplate(activeInspection.template_id)
+          tmplData = tmplRes.data
+        } catch {
+          tmplData = getCachedTemplate(activeInspection.template_id)
+        }
+      }
+      if (!tmplData) {
+        Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
+        setShowReassign(false); return
       }
       const sections: any[] = tmplData.sections || []
       const rd = localInsp?.report_data ? JSON.parse(localInsp.report_data) : {}

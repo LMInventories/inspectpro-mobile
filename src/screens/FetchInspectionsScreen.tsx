@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 
 import type { RootStackParamList } from '../../App'
 import { api } from '../services/api'
-import { saveInspection, getLocalInspections } from '../services/database'
+import { saveInspection, getLocalInspections, setCachedJSON } from '../services/database'
 import { useAuthStore } from '../stores/authStore'
 import { colors, font, radius, spacing, TYPE_LABELS, STATUS_COLORS } from '../utils/theme'
 import Header from '../components/Header'
@@ -243,6 +243,38 @@ export default function FetchInspectionsScreen() {
       fixedSectionsData = Array.isArray(fsRes.data) ? fsRes.data : []
     } catch (fsErr) {
       console.warn('[FetchInspections] Could not pre-fetch fixed sections:', fsErr)
+    }
+    // Cache the action catalogue (check-out condition tags) so it's available
+    // offline — otherwise the actions modal on check-out inspections is empty
+    // with no connection.
+    try {
+      const actRes = await api.getActions()
+      setCachedJSON('actionCatalogue', {
+        actions: actRes.data.actions || [],
+        responsibilities: actRes.data.responsibilities || [],
+      })
+    } catch (actErr) {
+      console.warn('[FetchInspections] Could not pre-fetch action catalogue:', actErr)
+    }
+    // Cache the full template library (with sections/items) so clerks can
+    // switch an inspection to a different template while offline, and so
+    // templates are available even before an inspection referencing them
+    // is downloaded.
+    try {
+      const tmplListRes = await api.getTemplates()
+      const tmplList = Array.isArray(tmplListRes.data) ? tmplListRes.data : []
+      const fullTemplates: any[] = []
+      for (const t of tmplList) {
+        try {
+          const fullRes = await api.getTemplate(t.id)
+          fullTemplates.push(fullRes.data)
+        } catch (tErr) {
+          console.warn('[FetchInspections] Could not pre-fetch template', t.id, tErr)
+        }
+      }
+      if (fullTemplates.length > 0) setCachedJSON('templatesFull', fullTemplates)
+    } catch (tmplListErr) {
+      console.warn('[FetchInspections] Could not pre-fetch template library:', tmplListErr)
     }
     try {
       const msRes = await api.getMidtermSections()

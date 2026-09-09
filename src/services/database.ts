@@ -30,6 +30,11 @@ export function initDatabase(): void {
       created_at TEXT NOT NULL,
       synced INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS app_cache (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `)
 
   // Migrations — safe to run repeatedly (errors silently ignored)
@@ -52,6 +57,32 @@ export function initDatabase(): void {
   try { db.runSync('ALTER TABLE inspections ADD COLUMN idempotency_key TEXT') } catch {}
   // Per-inspection camera option: 'perItem' (default) | 'floating'
   try { db.runSync('ALTER TABLE inspections ADD COLUMN camera_option TEXT') } catch {}
+}
+
+/**
+ * Generic app-level cache for reference data that isn't tied to a single
+ * inspection (action catalogue, full template library) so it survives being
+ * offline. Overwritten each time it's refreshed while online.
+ */
+export function setCachedJSON(key: string, value: any): void {
+  db.runSync(
+    `INSERT INTO app_cache (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [key, JSON.stringify(value), new Date().toISOString()]
+  )
+}
+
+export function getCachedJSON<T = any>(key: string): T | null {
+  const r = db.getFirstSync<{ value: string }>('SELECT value FROM app_cache WHERE key = ?', [key])
+  if (!r) return null
+  try { return JSON.parse(r.value) as T } catch { return null }
+}
+
+/** Look up one template (with sections/items) from the offline template library cache. */
+export function getCachedTemplate(templateId: number): any | null {
+  const all = getCachedJSON<any[]>('templatesFull')
+  if (!all) return null
+  return all.find(t => t.id === templateId) || null
 }
 
 export function saveInspection(inspection: any, defaultCameraOption?: string | null, defaultTypistMode?: string | null): void {
@@ -159,6 +190,26 @@ export function updateInspectionServerStatus(inspectionId: number, status: strin
     db.runSync(
       'UPDATE inspections SET status = ?, data = ?, updated_at = ? WHERE id = ?',
       [status, JSON.stringify(data), new Date().toISOString(), inspectionId]
+    )
+  } catch {}
+}
+
+/**
+ * Override which template an inspection uses locally (e.g. the clerk picked
+ * the wrong template on the web and needs to swap it on-device). This is a
+ * device-local override only — template_id is never sent back during sync,
+ * so it's safe to change without affecting the server-side assignment.
+ */
+export function overrideLocalTemplate(inspectionId: number, templateId: number, templateObj: any): void {
+  const r = db.getFirstSync<{ data: string }>('SELECT data FROM inspections WHERE id = ?', [inspectionId])
+  if (!r) return
+  try {
+    const data = JSON.parse(r.data)
+    data.template_id = templateId
+    data.template = templateObj
+    db.runSync(
+      'UPDATE inspections SET data = ?, updated_at = ? WHERE id = ?',
+      [JSON.stringify(data), new Date().toISOString(), inspectionId]
     )
   } catch {}
 }

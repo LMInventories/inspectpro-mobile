@@ -20,7 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
-import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, updateTranscription } from '../services/database'
+import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, updateTranscription, getCachedJSON, setCachedJSON, getCachedTemplate } from '../services/database'
 import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import ReportTextInput from '../components/ReportTextInput'
@@ -502,9 +502,20 @@ export default function RoomInspectionScreen() {
         if (checkOut && actionCatalogue.length === 0) {
           try {
             const actRes = await api.getActions()
-            setActionCatalogue(actRes.data.actions || [])
-            setActionResponsibilities(actRes.data.responsibilities || [])
-          } catch { /* fail silently — actions just won't show options */ }
+            const actions = actRes.data.actions || []
+            const responsibilities = actRes.data.responsibilities || []
+            setActionCatalogue(actions)
+            setActionResponsibilities(responsibilities)
+            setCachedJSON('actionCatalogue', { actions, responsibilities })
+          } catch {
+            // Offline (or request failed) — fall back to the catalogue cached
+            // the last time this device was online (e.g. during Fetch Inspections).
+            const cached = getCachedJSON<{ actions: any[]; responsibilities: string[] }>('actionCatalogue')
+            if (cached) {
+              setActionCatalogue(cached.actions || [])
+              setActionResponsibilities(cached.responsibilities || [])
+            }
+          }
         }
       }
 
@@ -565,7 +576,10 @@ export default function RoomInspectionScreen() {
               const tmplRes = await api.getTemplate(fresh.template_id)
               templateData = tmplRes.data
             } catch (e) {
-              console.warn('[buildItems] template fetch failed (offline?) — using cached extras only:', e)
+              templateData = getCachedTemplate(fresh.template_id)
+              if (!templateData) {
+                console.warn('[buildItems] template fetch failed (offline?) — using cached extras only:', e)
+              }
             }
           }
 
@@ -1979,8 +1993,12 @@ export default function RoomInspectionScreen() {
       try {
         let templateData = fresh?.template || null
         if (!templateData) {
-          const tmplRes = await api.getTemplate(fresh.template_id)
-          templateData = tmplRes.data
+          try {
+            const tmplRes = await api.getTemplate(fresh.template_id)
+            templateData = tmplRes.data
+          } catch {
+            templateData = getCachedTemplate(fresh.template_id)
+          }
         }
         for (const s of (templateData?.sections || [])) {
           const key = String(s.id)
@@ -2032,8 +2050,12 @@ export default function RoomInspectionScreen() {
     try {
       let templateData = fresh?.template || null
       if (!templateData && fresh?.template_id) {
-        const tmplRes = await api.getTemplate(fresh.template_id)
-        templateData = tmplRes.data
+        try {
+          const tmplRes = await api.getTemplate(fresh.template_id)
+          templateData = tmplRes.data
+        } catch {
+          templateData = getCachedTemplate(fresh.template_id)
+        }
       }
       const section = (templateData?.sections || []).find((s: any) => String(s.id) === roomKey)
       for (const it of (section?.items || [])) {
@@ -2696,8 +2718,12 @@ export default function RoomInspectionScreen() {
     try {
       let templateData = fresh?.template || null
       if (!templateData && fresh?.template_id) {
-        const tmplRes = await api.getTemplate(fresh.template_id)
-        templateData = tmplRes.data
+        try {
+          const tmplRes = await api.getTemplate(fresh.template_id)
+          templateData = tmplRes.data
+        } catch {
+          templateData = getCachedTemplate(fresh.template_id)
+        }
       }
       const targetSection = (templateData?.sections || []).find((s: any) => String(s.id) === targetRoomKey)
       const match = (targetSection?.items || []).find((it: any) => (it.name || '').trim().toLowerCase() === normalizedName)

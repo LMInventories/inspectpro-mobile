@@ -4,6 +4,7 @@ import {
   getLocalInspection,
   updateReportData,
   deleteLocalInspection,
+  overrideLocalTemplate,
 } from '../services/database'
 
 interface InspectionStore {
@@ -14,6 +15,7 @@ interface InspectionStore {
   setReportData: (inspectionId: number, reportData: any) => void
   updateSectionInReport: (inspectionId: number, sectionKey: string, sectionData: any) => void
   updateItemInReport: (inspectionId: number, sectionKey: string, itemKey: string, itemData: any) => void
+  overrideTemplate: (inspectionId: number, templateId: number, templateObj: any) => void
   removeInspection: (id: number) => void
 }
 
@@ -59,6 +61,14 @@ export const useInspectionStore = create<InspectionStore>((set, get) => ({
       ...itemData,
     }
     get().setReportData(inspectionId, reportData)
+  },
+
+  overrideTemplate: (inspectionId, templateId, templateObj) => {
+    overrideLocalTemplate(inspectionId, templateId, templateObj)
+    const { activeInspection } = get()
+    if (activeInspection?.id === inspectionId) {
+      set({ activeInspection: { ...activeInspection, template_id: templateId, template: templateObj } })
+    }
   },
 
   removeInspection: (id) => {
