@@ -20,7 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
-import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, updateTranscription, getCachedJSON, setCachedJSON, getCachedTemplate } from '../services/database'
+import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, updateTranscription, getCachedJSON, setCachedJSON, getCachedTemplate, templateIsComplete } from '../services/database'
 import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import ReportTextInput from '../components/ReportTextInput'
@@ -69,7 +69,7 @@ export default function RoomInspectionScreen() {
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
   const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData, sectionIndex, focusItemKey, focusSubId } = route.params
-  const { activeInspection, loadInspection, setReportData } = useInspectionStore()
+  const { activeInspection, loadInspection, setReportData, overrideTemplate } = useInspectionStore()
   const { user } = useAuthStore()
 
   const [items, setItems]               = useState<any[]>([])
@@ -566,10 +566,11 @@ export default function RoomInspectionScreen() {
 
         if (templateSectionId && fresh?.template_id) {
           // Use the template embedded at download time (offline-safe).
-          // Must check for sections[], not just template presence — the inspection
-          // detail API may have returned a partial template object without sections.
-          const cachedOk = Array.isArray(fresh?.template?.sections) &&
-                           fresh.template.sections.length > 0
+          // Must check for actual items, not just sections[] presence — the
+          // inspection detail API may have returned a partial template object
+          // (sections with names but no items[]), which looks "cached" but
+          // would silently render every room with an empty item list.
+          const cachedOk = templateIsComplete(fresh?.template)
           let templateData: any = cachedOk ? fresh.template : null
           if (!templateData) {
             try {
@@ -580,6 +581,10 @@ export default function RoomInspectionScreen() {
               if (!templateData) {
                 console.warn('[buildItems] template fetch failed (offline?) — using cached extras only:', e)
               }
+            }
+            // Self-heal local storage so this doesn't need re-resolving next time.
+            if (templateData && templateIsComplete(templateData)) {
+              overrideTemplate(inspectionId, fresh.template_id, templateData)
             }
           }
 

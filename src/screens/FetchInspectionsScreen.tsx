@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 
 import type { RootStackParamList } from '../../App'
 import { api } from '../services/api'
-import { saveInspection, getLocalInspections, setCachedJSON } from '../services/database'
+import { saveInspection, getLocalInspections, setCachedJSON, templateIsComplete } from '../services/database'
 import { useAuthStore } from '../stores/authStore'
 import { colors, font, radius, spacing, TYPE_LABELS, STATUS_COLORS } from '../utils/theme'
 import Header from '../components/Header'
@@ -308,8 +308,12 @@ export default function FetchInspectionsScreen() {
 
         // Always fetch the full template and overwrite whatever the inspection
         // detail API returned. The detail endpoint may include a partial template
-        // object (e.g. {id, name} without sections), which is truthy but useless.
-        // We need the full object with sections[].items[] for rooms to work offline.
+        // object (e.g. {id, name, sections: [{id, name}]} without items[]), which
+        // is truthy but useless — it renders room names with no items inside.
+        // We need the full object with sections[].items[] for rooms to work offline,
+        // so explicitly clear that partial value if the dedicated fetch fails —
+        // leaving it in place would look "cached" to offline consumers later.
+        normalised.template = null
         const templateId = d.template_id
         if (templateId) {
           try {
@@ -330,10 +334,9 @@ export default function FetchInspectionsScreen() {
             const srcRes  = await api.getInspection(d.source_inspection_id)
             const srcData = srcRes.data
 
-            // 1. Template inheritance when CO has no sections
-            const hasSections = Array.isArray(normalised.template?.sections) &&
-                                normalised.template.sections.length > 0
-            if (!hasSections) {
+            // 1. Template inheritance when CO has no usable template of its own
+            //    (missing entirely, or only a partial {id,name}-only object).
+            if (!templateIsComplete(normalised.template)) {
               const srcTmplId = srcData?.template_id
               if (srcTmplId && srcTmplId !== templateId) {
                 try {

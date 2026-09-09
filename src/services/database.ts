@@ -85,6 +85,21 @@ export function getCachedTemplate(templateId: number): any | null {
   return all.find(t => t.id === templateId) || null
 }
 
+/**
+ * True only if a template object has actual room items to render — not just
+ * section names. The inspection detail API can return a "partial" template
+ * (e.g. {id, name, sections: [{id, name}]} with no items[]) which is truthy
+ * and passes a naive "has sections" check, but silently renders every room
+ * with an empty item list. Every place that decides whether a cached/embedded
+ * template is good enough to use offline should check this instead of just
+ * `sections.length > 0`.
+ */
+export function templateIsComplete(tmpl: any): boolean {
+  const sections = tmpl?.sections
+  if (!Array.isArray(sections) || sections.length === 0) return false
+  return sections.some((s: any) => Array.isArray(s.items) && s.items.length > 0)
+}
+
 export function saveInspection(inspection: any, defaultCameraOption?: string | null, defaultTypistMode?: string | null): void {
   const existing = db.getFirstSync<{ id: number }>(
     'SELECT id FROM inspections WHERE id = ?', [inspection.id]

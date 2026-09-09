@@ -9,7 +9,7 @@ import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { getLocalInspection, getCachedTemplate, getCachedJSON } from '../services/database'
+import { getLocalInspection, getCachedTemplate, getCachedJSON, templateIsComplete } from '../services/database'
 import { api } from '../services/api'
 import Header from '../components/Header'
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler'
@@ -98,23 +98,27 @@ export default function RoomSelectionScreen() {
       const inspection = await getLocalInspection(inspectionId)
 
       // Use the template embedded at download time (works offline).
-      // Guard against partial template objects (e.g. {id, name} without sections)
-      // that the inspection detail API may have included before we overwrite with
-      // the full template in FetchInspectionsScreen.
-      const cachedHasSections = Array.isArray(inspection?.template?.sections) &&
-                                inspection.template.sections.length > 0
-      let tmplData: any = cachedHasSections ? inspection.template : null
+      // Guard against partial template objects (e.g. {id, name, sections: [{id, name}]}
+      // without items[]) that the inspection detail API may have included before
+      // we overwrite with the full template in FetchInspectionsScreen — those pass
+      // a naive "has sections" check but render every room with no items.
+      const cachedComplete = templateIsComplete(inspection?.template)
+      let tmplData: any = cachedComplete ? inspection.template : null
+      let resolvedTemplateId: number | null = cachedComplete ? inspection.template_id : null
 
       // Primary: fetch by template_id
       if (!tmplData && inspection?.template_id) {
         try {
           const tmplRes = await api.getTemplate(inspection.template_id)
           tmplData = tmplRes.data
+          resolvedTemplateId = inspection.template_id
         } catch {
           // Offline — fall back to the template library cached during the
           // last "Fetch Inspections" so rooms still load with no connection.
           tmplData = getCachedTemplate(inspection.template_id)
-          if (!tmplData) {
+          if (tmplData) {
+            resolvedTemplateId = inspection.template_id
+          } else {
             Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
           }
         }
@@ -130,12 +134,22 @@ export default function RoomSelectionScreen() {
           if (srcTmplId) {
             const srcTmplRes = await api.getTemplate(srcTmplId)
             tmplData = srcTmplRes.data
+            resolvedTemplateId = srcTmplId
             console.log(`[RoomSelection] template inherited from source inspection ${inspection.source_inspection_id}`)
           }
         } catch {
           // Still no template — rooms list will be empty, user can add manually
           console.warn('[RoomSelection] Could not inherit template from source inspection')
         }
+      }
+
+      // Persist whatever we just resolved over the network back onto the
+      // inspection's local row. Without this, this screen's in-memory
+      // resolution never reaches RoomInspectionScreen — which re-reads the
+      // template straight from local storage — so rooms would show here but
+      // their items would appear empty the next time this is opened offline.
+      if (tmplData && !cachedComplete && resolvedTemplateId && templateIsComplete(tmplData)) {
+        overrideTemplate(inspectionId, resolvedTemplateId, tmplData)
       }
 
       // Use fixed sections embedded at download time (works fully offline).
