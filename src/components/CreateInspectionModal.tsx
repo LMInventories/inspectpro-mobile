@@ -52,6 +52,7 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
   const [incPhotos,    setIncPhotos]    = useState(false)
   const [keyLocation,  setKeyLocation]  = useState('')
   const [tenantEmail,  setTenantEmail]  = useState('')
+  const [refNumber,    setRefNumber]    = useState('')
   const [notes,        setNotes]        = useState('')
 
   // Lifecycle suggestion
@@ -78,7 +79,7 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
     setPropertyId(null); setPropSearch(''); setShowPropList(false)
     setInspType('check_in'); setTemplateId(null); setConductDate('')
     setInspectorId(null); setIncPhotos(false); setKeyLocation('')
-    setTenantEmail(''); setNotes('')
+    setTenantEmail(''); setRefNumber(''); setNotes('')
     setSourceId(null); setLifecycle(null); setError('')
   }
 
@@ -162,6 +163,7 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
         include_photos:       incPhotos,
         key_location:         keyLocation || null,
         tenant_email:         tenantEmail || null,
+        reference_number:     refNumber   || null,
         internal_notes:       notes       || null,
       })
       const created = res.data?.inspection_detail || res.data
@@ -363,6 +365,17 @@ export default function CreateInspectionModal({ visible, onClose, onCreated }: P
                 onChangeText={setTenantEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
+              />
+
+              {/* Reference number */}
+              <Text style={styles.label}>Reference Number</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. INS-2024-001"
+                placeholderTextColor={colors.textLight}
+                value={refNumber}
+                onChangeText={setRefNumber}
+                autoCapitalize="characters"
               />
 
               {/* Notes */}

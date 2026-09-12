@@ -532,7 +532,7 @@ export async function syncSingleInspection(
     // admin/manager finalised sync tells the server "complete" but the local
     // blob would still read "active" until the inspection is re-fetched.
     if (payload.status) {
-      updateInspectionServerStatus(id, payload.status)
+      updateInspectionServerStatus(id, payload.status, newServerUpdatedAt)
     }
 
     // Delete local audio files now that the server has them.

@@ -193,8 +193,17 @@ export function updateLocalStatus(inspectionId: number, localStatus: string): vo
  * status column.  Call this after a successful api.updateInspection() so that
  * inspection.status stays accurate on device (otherwise the blob is frozen at
  * the value it had when the inspection was first downloaded).
+ *
+ * Pass `newServerUpdatedAt` (the `updated_at` the server returned from that
+ * same call) so `server_updated_at` — the value the next sync's conflict
+ * check compares against — advances too. The status-flip PUT bumps the
+ * server's row via SQLAlchemy's onupdate, so without this the device's own
+ * cached `server_updated_at` goes stale the instant this call succeeds, and
+ * the very next sync from this device gets rejected as a false-positive
+ * conflict ("updated on another device or the web") even though nothing but
+ * this device touched the record.
  */
-export function updateInspectionServerStatus(inspectionId: number, status: string): void {
+export function updateInspectionServerStatus(inspectionId: number, status: string, newServerUpdatedAt?: string): void {
   const r = db.getFirstSync<{ data: string }>(
     'SELECT data FROM inspections WHERE id = ?', [inspectionId]
   )
@@ -203,8 +212,8 @@ export function updateInspectionServerStatus(inspectionId: number, status: strin
     const data = JSON.parse(r.data)
     data.status = status
     db.runSync(
-      'UPDATE inspections SET status = ?, data = ?, updated_at = ? WHERE id = ?',
-      [status, JSON.stringify(data), new Date().toISOString(), inspectionId]
+      'UPDATE inspections SET status = ?, data = ?, updated_at = ?, server_updated_at = COALESCE(?, server_updated_at) WHERE id = ?',
+      [status, JSON.stringify(data), new Date().toISOString(), newServerUpdatedAt ?? null, inspectionId]
     )
   } catch {}
 }

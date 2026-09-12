@@ -3628,7 +3628,7 @@ export default function RoomInspectionScreen() {
               value={getField(item.id, 'reading')}
               onFocus={() => handleTextFocus(item.id)}
               onChangeText={v => setField(item.id, 'reading', v)}
-              placeholder="e.g. 12345.6" placeholderTextColor={c.textLight}
+              placeholder={'e.g. 12345.6\nor Day: 12345, Night: 6789 (one per line)'} placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
             />
           </View>

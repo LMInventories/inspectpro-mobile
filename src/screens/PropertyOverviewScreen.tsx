@@ -167,10 +167,12 @@ export default function PropertyOverviewScreen() {
           onPress: async () => {
             setStarting(true)
             try {
-              await api.updateInspection(inspectionId, { status: 'active' })
+              const res = await api.updateInspection(inspectionId, { status: 'active' })
               // Patch the data blob so inspection.status reads correctly everywhere
-              // (blob is otherwise frozen at the value from download time)
-              updateInspectionServerStatus(inspectionId, 'active')
+              // (blob is otherwise frozen at the value from download time), and
+              // advance server_updated_at so the next sync isn't rejected as a
+              // false-positive conflict against the timestamp this call itself bumped.
+              updateInspectionServerStatus(inspectionId, 'active', res.data?.updated_at)
               updateLocalStatus(inspectionId, 'active')
               await loadInspection(inspectionId)
               navigation.replace('RoomSelection', { inspectionId })
@@ -204,8 +206,11 @@ export default function PropertyOverviewScreen() {
           onPress: async () => {
             setReopening(true)
             try {
-              await api.updateInspection(inspectionId, { status: 'active' })
-              updateInspectionServerStatus(inspectionId, 'active')
+              const res = await api.updateInspection(inspectionId, { status: 'active' })
+              // Advance server_updated_at along with the status so this device's own
+              // reopen doesn't leave its cached timestamp stale — otherwise the next
+              // sync from this same device gets a false-positive conflict warning.
+              updateInspectionServerStatus(inspectionId, 'active', res.data?.updated_at)
               updateLocalStatus(inspectionId, 'active')
               await loadInspection(inspectionId)
             } catch (e: any) {

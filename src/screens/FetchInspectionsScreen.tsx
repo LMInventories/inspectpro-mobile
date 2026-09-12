@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, Modal, Switch,
+  ActivityIndicator, Alert, Modal, Switch, TextInput,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
@@ -169,12 +169,24 @@ export default function FetchInspectionsScreen() {
   const [confirmModal, setConfirmModal] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
   const [sortBy, setSortBy]           = useState<SortMode>('date-desc')
+  const [search, setSearch]           = useState('')
 
   const displayList = showComplete
     ? serverList
     : serverList.filter(i => i.status !== 'complete')
 
-  const sortedList = useMemo(() => sortList(displayList, sortBy), [displayList, sortBy])
+  const searchedList = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return displayList
+    return displayList.filter(i => {
+      const haystack = [
+        i.property_address, i.client_name, i.reference_number, i.tenant_name,
+      ].filter(Boolean).join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+  }, [displayList, search])
+
+  const sortedList = useMemo(() => sortList(searchedList, sortBy), [searchedList, sortBy])
 
   function toggleShowComplete(val: boolean) {
     setShowComplete(val)
@@ -500,6 +512,19 @@ export default function FetchInspectionsScreen() {
         </View>
       ) : (
         <>
+          <View style={styles.searchRow}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search address, postcode, reference…"
+              placeholderTextColor={colors.textLight}
+              value={search}
+              onChangeText={setSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+              clearButtonMode="while-editing"
+            />
+          </View>
+
           <View style={styles.filterRow}>
             <Text style={styles.filterLabel}>Show Complete</Text>
             <Switch
@@ -540,6 +565,11 @@ export default function FetchInspectionsScreen() {
             contentContainerStyle={styles.list}
             refreshing={loading}
             onRefresh={loadServer}
+            ListEmptyComponent={
+              <View style={styles.noResults}>
+                <Text style={styles.noResultsText}>No inspections match "{search}"</Text>
+              </View>
+            }
           />
 
           {fetching && fetchProgress && (
@@ -636,12 +666,16 @@ const styles = StyleSheet.create({
   resultsTitle: { fontSize: font.md, fontWeight: '700', color: colors.text, marginBottom: 4 },
   resultOk: { fontSize: font.sm, color: colors.success, fontWeight: '600' },
   resultFail: { fontSize: font.sm, color: colors.danger },
+  searchRow: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  searchInput: { backgroundColor: colors.background, borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: 9, fontSize: font.sm, color: colors.text },
   filterRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
   filterLabel: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
   listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
   listCount: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
   toggleAll: { fontSize: font.sm, color: colors.accent, fontWeight: '600' },
-  list: { padding: spacing.md, gap: spacing.sm },
+  list: { padding: spacing.md, gap: spacing.sm, flexGrow: 1 },
+  noResults: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.xl },
+  noResultsText: { fontSize: font.sm, color: colors.textLight, textAlign: 'center' },
   card: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, borderWidth: 1.5, borderColor: colors.border },
   cardSelected: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
   cardCheck: { marginRight: spacing.sm },
