@@ -71,7 +71,11 @@ interface Props {
   sectionType?: string   // 'room' (default) or fixed section type
   isDamageReport?: boolean
   items: RoomDictationItem[]
-  onTranscribed: (filled: Record<string, Record<string, any>>, transcript?: string) => Promise<void>
+  onTranscribed: (
+    filled: Record<string, Record<string, any>>,
+    transcript?: string,
+    ambiguousCommands?: { type: string; item_name: string; detail: string }[]
+  ) => Promise<void>
   showAiButton?: boolean
   // Landscape sidebar support
   isLandscape?: boolean
@@ -423,9 +427,10 @@ export default function RoomDictationRecorder({
         })),
       })
 
-      const { filled, transcript: whisperTranscript } = response.data as {
+      const { filled, transcript: whisperTranscript, ambiguous_commands: ambiguousCommands } = response.data as {
         transcript: string
         filled: Record<string, { description?: string; condition?: string }>
+        ambiguous_commands?: { type: string; item_name: string; detail: string }[]
       }
 
       const count = Object.keys(filled).length
@@ -442,7 +447,7 @@ export default function RoomDictationRecorder({
       const clipsToDelete = [...clips]
       const fullTranscript: string = whisperTranscript || ''
 
-      await onTranscribed(filled, fullTranscript)
+      await onTranscribed(filled, fullTranscript, ambiguousCommands)
 
       setQueuedOffline(false)
       setClips([])

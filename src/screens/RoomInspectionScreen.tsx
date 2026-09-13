@@ -1339,7 +1339,11 @@ export default function RoomInspectionScreen() {
     return NONE_SEEN_PHRASES.some(p => text === p)
   }
 
-  async function handleRoomTranscribed(filled: Record<string, Record<string, any>>, transcript?: string) {
+  async function handleRoomTranscribed(
+    filled: Record<string, Record<string, any>>,
+    transcript?: string,
+    ambiguousCommands?: { type: string; item_name: string; detail: string }[]
+  ) {
     // Read fresh from DB — room dictation is async (recording + upload + AI round-trip
     // can take 10+ seconds), so the store closure captured at component render time
     // may be stale.  A fresh read ensures no user keystrokes are silently dropped.
@@ -1474,6 +1478,7 @@ export default function RoomInspectionScreen() {
         room:      sectionName,
         transcript,
         filled:    logFilled,
+        ...(ambiguousCommands && ambiguousCommands.length > 0 ? { ambiguous: ambiguousCommands } : {}),
       })
       changed = true
     }
