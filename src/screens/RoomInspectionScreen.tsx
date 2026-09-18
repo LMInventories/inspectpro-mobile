@@ -2839,6 +2839,10 @@ export default function RoomInspectionScreen() {
       // silently resolves back to where it started.
       const targetItemId = moveTargetItemId
         || await findOrCreateMatchingParentInRoom(rd, fresh, subMoveTargetKey, parentLabel, itemId)
+      // A room the clerk has never opened or edited has no saved data yet —
+      // findOrCreateMatchingParentInRoom only creates it when it has to make
+      // a new item, not when it matches an existing template item.
+      if (!rd[subMoveTargetKey]) rd[subMoveTargetKey] = {}
       if (!rd[subMoveTargetKey][targetItemId]) rd[subMoveTargetKey][targetItemId] = {}
       if (!Array.isArray(rd[subMoveTargetKey][targetItemId]._subs)) rd[subMoveTargetKey][targetItemId]._subs = []
 
