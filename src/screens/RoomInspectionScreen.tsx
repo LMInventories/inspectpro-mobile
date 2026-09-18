@@ -195,13 +195,15 @@ export default function RoomInspectionScreen() {
   // Y of each sub-item within its subsContainer (keyed by sub._sid).
   const subItemLayoutsRef = useRef<Map<string, number>>(new Map())
 
-  // Node refs for "Additional Item" cards and their sub-items — these live
-  // nested a few levels deep inside renderCustomItems() (not a direct
-  // ScrollView child like regular item cards), so their Y can't be tracked
-  // by summing onLayout offsets the way itemLayoutsRef/subItemLayoutsRef do.
-  // Instead we measure them directly against the ScrollView on focus.
-  const customItemNodeRefs = useRef<Map<string, any>>(new Map())
-  const customSubNodeRefs  = useRef<Map<string, any>>(new Map())
+  // Node refs for individual text-box field groups (the View wrapping each
+  // field's label + input), keyed by `${ownerId}:${fieldName}` where ownerId
+  // is an item id, sub-item _sid, or custom-item _cid. Measured directly
+  // against the ScrollView on focus so the scroll target is the actual field
+  // the clerk is typing in — anchored on its label — rather than the top of
+  // the enclosing item/sub-item card. This also sidesteps the drift that
+  // summing cached onLayout offsets across nested containers was prone to
+  // once a room had many sub-items.
+  const fieldNodeRefs = useRef<Map<string, any>>(new Map())
 
   // Deep-link target from the pre-finalise Review Report overlay — briefly
   // highlighted once scrolled into view (see the focusItemKey effect below).
@@ -365,7 +367,7 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  // Shared by handleTextFocus/handleCustomTextFocus: runs `perform` once the
+  // Shared by scrollToField: runs `perform` once the
   // keyboard has finished animating in (Android waits for keyboardDidShow +
   // one frame for the paddingBottom re-render; iOS just waits out the ~250ms
   // animation), so scrollTo runs against the final, keyboard-adjusted layout.
@@ -386,26 +388,26 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  function handleTextFocus(itemId: string, sid?: string) {
-    const itemY = itemLayoutsRef.current.get(itemId)
-    if (itemY === undefined) return
-    // For sub-items: scroll to the sub-item's position in scroll space.
-    // subContainerLayoutsRef gives the subsContainer's Y within the item card,
-    // subItemLayoutsRef gives the sub-item's Y within the subsContainer.
-    const subOffset = sid
-      ? (subContainerLayoutsRef.current.get(itemId) ?? 0) + (subItemLayoutsRef.current.get(sid) ?? 0)
-      : 0
-    const y = itemY + subOffset
-    // Pull the target to the very top of the visible area (8 px breathing room).
-    scrollFieldIntoView(() => itemScrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true }))
+  // Ref callback for the field-group View wrapping a text box's label + input.
+  // ownerId is an item id, sub-item _sid, or custom-item _cid; fieldName is
+  // the field it holds (e.g. 'description', 'condition'). Works for every
+  // room, whether it came from a template or was added in-app, and for both
+  // top-level items and sub-items, since the key only depends on ownerId.
+  function fieldRef(ownerId: string, fieldName: string) {
+    const key = `${ownerId}:${fieldName}`
+    return (el: any) => {
+      if (el) fieldNodeRefs.current.set(key, el)
+      else fieldNodeRefs.current.delete(key)
+    }
   }
 
-  // "Additional Item" cards (renderCustomItems) aren't direct ScrollView
-  // children, so their position can't be built up from cached onLayout
-  // offsets the way handleTextFocus does — measure the focused field's node
-  // directly against the ScrollView instead.
-  function handleCustomTextFocus(cid: string, sid?: string) {
-    const node = sid ? customSubNodeRefs.current.get(sid) : customItemNodeRefs.current.get(cid)
+  // Scrolls so the focused text box itself — anchored on its label — lands
+  // near the top of the visible area, rather than pulling the whole
+  // item/sub-item card up. Measures the field's own node against the
+  // ScrollView directly instead of summing cached container offsets, so it
+  // stays accurate even in rooms with many sub-items.
+  function scrollToField(ownerId: string, fieldName: string) {
+    const node = fieldNodeRefs.current.get(`${ownerId}:${fieldName}`)
     const scrollHandle = findNodeHandle(itemScrollRef.current)
     if (!node || !scrollHandle) return
     scrollFieldIntoView(() => {
@@ -2720,7 +2722,11 @@ export default function RoomInspectionScreen() {
   // standalone item. Creates a new standalone item with that name in the
   // target room if nothing there matches, so the sub always has somewhere
   // to attach. Mutates `rd` in place when it has to create that fallback.
-  async function findOrCreateMatchingParentInRoom(rd: any, fresh: any, targetRoomKey: string, parentName: string): Promise<string> {
+  // excludeItemId skips a name match against that item — used when moving
+  // within the SAME room, so a sub can't silently "match" its own current
+  // parent and end up right back where it started; it lands on a fresh
+  // item instead (or an explicitly-picked one, via moveTargetItemId).
+  async function findOrCreateMatchingParentInRoom(rd: any, fresh: any, targetRoomKey: string, parentName: string, excludeItemId?: string): Promise<string> {
     const normalizedName = parentName.trim().toLowerCase()
     const targetSecData = rd[targetRoomKey] || {}
     // Template items don't disappear from the template when deleted in a
@@ -2731,6 +2737,7 @@ export default function RoomInspectionScreen() {
     const deletedIds: string[] = targetSecData['_deleted'] || []
 
     for (const extra of (targetSecData._extra || [])) {
+      if (extra._eid === excludeItemId) continue
       if ((extra.name || '').trim().toLowerCase() === normalizedName && !deletedIds.includes(extra._eid)) {
         return extra._eid
       }
@@ -2747,7 +2754,7 @@ export default function RoomInspectionScreen() {
         }
       }
       const targetSection = (templateData?.sections || []).find((s: any) => String(s.id) === targetRoomKey)
-      const match = (targetSection?.items || []).find((it: any) => (it.name || '').trim().toLowerCase() === normalizedName)
+      const match = (targetSection?.items || []).find((it: any) => String(it.id) !== excludeItemId && (it.name || '').trim().toLowerCase() === normalizedName)
       if (match && !deletedIds.includes(String(match.id))) return String(match.id)
     } catch {}
 
@@ -2765,6 +2772,11 @@ export default function RoomInspectionScreen() {
   // multiSelect=false ("Move To"): moves just the one sub, skips the sibling
   // picker. multiSelect=true ("Move Multiple"): starts on the sibling-select
   // step so more subs from the SAME parent item can be brought along together.
+  // includeCurrent=true on the room list lets a sub be re-homed under a
+  // DIFFERENT item in the same room (e.g. the AI dictation attached it to
+  // the wrong item) — the destination-item picker below is what makes that
+  // useful, since matching-by-name alone would just resolve back to the
+  // sub's own current parent.
   async function openSubMoveModal(itemId: string, parentLabel: string, sid: string, multiSelect: boolean) {
     setSubMoveTargetKey('')
     setSubMoveDescs(true)
@@ -2774,10 +2786,12 @@ export default function RoomInspectionScreen() {
     setSubMoveModal({ itemId, parentLabel, initialSid: sid, multiSelect })
     setCopyRoomsList([])
     setCopyRoomsLoading(true)
+    setMoveTargetItemId('')
+    setTargetItemsList([])
 
     const fresh = await getLocalInspection(inspectionId)
     const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd))
+    setCopyRoomsList(await fetchMovableRoomsList(fresh, rd, true))
     setCopyRoomsLoading(false)
   }
 
@@ -2788,6 +2802,22 @@ export default function RoomInspectionScreen() {
       else next.add(sid)
       return next
     })
+  }
+
+  // Selects a destination room for the sub-item move and loads that room's
+  // items for the "which item should this attach to" picker. When the
+  // chosen room is the CURRENT room, the sub's own current parent is
+  // excluded from the list — re-attaching to itself isn't a real option.
+  async function selectSubMoveTargetRoom(key: string) {
+    setSubMoveTargetKey(key)
+    setMoveTargetItemId('')
+    setTargetItemsList([])
+    setTargetItemsLoading(true)
+    const fresh = await getLocalInspection(inspectionId)
+    const rd    = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const list  = await fetchRoomItemsList(fresh, rd, key)
+    setTargetItemsList(key === sectionKey ? list.filter(it => it.id !== subMoveModal?.itemId) : list)
+    setTargetItemsLoading(false)
   }
 
   async function commitSubMove() {
@@ -2803,7 +2833,12 @@ export default function RoomInspectionScreen() {
       const orderedSelected = allSubs.filter((s: any) => subMoveSelected.has(s._sid))
       if (orderedSelected.length === 0) return
 
-      const targetItemId = await findOrCreateMatchingParentInRoom(rd, fresh, subMoveTargetKey, parentLabel)
+      // Explicit pick from the destination-item list wins; otherwise fall
+      // back to matching (or creating) an item named after the parent —
+      // excluding the sub's own current parent so a same-room move never
+      // silently resolves back to where it started.
+      const targetItemId = moveTargetItemId
+        || await findOrCreateMatchingParentInRoom(rd, fresh, subMoveTargetKey, parentLabel, itemId)
       if (!rd[subMoveTargetKey][targetItemId]) rd[subMoveTargetKey][targetItemId] = {}
       if (!Array.isArray(rd[subMoveTargetKey][targetItemId]._subs)) rd[subMoveTargetKey][targetItemId]._subs = []
 
@@ -2823,10 +2858,11 @@ export default function RoomInspectionScreen() {
 
       setReportData(inspectionId, rd)
       const targetName = copyRoomsList.find(r => r.key === subMoveTargetKey)?.name || 'room'
+      const destLabel = moveTargetItemId ? (targetItemsList.find(it => it.id === moveTargetItemId)?.name || parentLabel) : parentLabel
       const count = orderedSelected.length
       setSubMoveModal(null)
       useToastStore.getState().showToast(
-        `${count} sub-item${count !== 1 ? 's' : ''} moved to ${parentLabel} in ${targetName}`,
+        `${count} sub-item${count !== 1 ? 's' : ''} moved to ${destLabel} in ${targetName}`,
         'success'
       )
     } catch {
@@ -3179,7 +3215,6 @@ export default function RoomInspectionScreen() {
               ]}
             >
             <View
-              ref={(el) => { if (el) customItemNodeRefs.current.set(ci._cid, el); else customItemNodeRefs.current.delete(ci._cid) }}
               style={[styles.itemCard, dm.surface, { borderColor: c.border }]}
             >
               <View style={styles.itemHeader}>
@@ -3189,12 +3224,12 @@ export default function RoomInspectionScreen() {
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.fieldGroup}>
+              <View style={styles.fieldGroup} ref={fieldRef(ci._cid, 'description')}>
                 <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
                 <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={ci.description || ''}
-                  onFocus={() => handleCustomTextFocus(ci._cid)}
+                  onFocus={() => scrollToField(ci._cid, 'description')}
                   onChangeText={v => setCustomItemField(ci._cid, 'description', v)}
                   placeholder="Describe the item…"
                   placeholderTextColor={c.textLight}
@@ -3202,12 +3237,12 @@ export default function RoomInspectionScreen() {
                 />
               </View>
 
-              <View style={styles.fieldGroup}>
+              <View style={styles.fieldGroup} ref={fieldRef(ci._cid, 'checkOutCondition')}>
                 <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                 <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={ci.checkOutCondition || ''}
-                  onFocus={() => handleCustomTextFocus(ci._cid)}
+                  onFocus={() => scrollToField(ci._cid, 'checkOutCondition')}
                   onChangeText={v => setCustomItemField(ci._cid, 'checkOutCondition', v)}
                   placeholder="e.g. In good order"
                   placeholderTextColor={c.textLight}
@@ -3276,34 +3311,31 @@ export default function RoomInspectionScreen() {
                   <View style={styles.subsDivider} />
                   {subs.map((sub: any) => (
                     <SwipeableRow key={sub._sid} actions={getSubActions(syntheticItem, sub)}>
-                      <View
-                        ref={(el) => { if (el) customSubNodeRefs.current.set(sub._sid, el); else customSubNodeRefs.current.delete(sub._sid) }}
-                        style={styles.subItem}
-                      >
+                      <View style={styles.subItem}>
                         <View style={styles.subItemHeader}>
                           <Text style={styles.subItemTitle}>—</Text>
                           <TouchableOpacity onPress={() => removeSubItem(ci._cid, sub._sid)}>
                             <Text style={styles.subItemDelete}>✕</Text>
                           </TouchableOpacity>
                         </View>
-                        <View style={styles.fieldGroup}>
+                        <View style={styles.fieldGroup} ref={fieldRef(sub._sid, 'description')}>
                           <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
                           <ReportTextInput
                             style={[styles.notesInput, dm.input]}
                             value={sub.description}
-                            onFocus={() => handleCustomTextFocus(ci._cid, sub._sid)}
+                            onFocus={() => scrollToField(sub._sid, 'description')}
                             onChangeText={v => setSubField(ci._cid, sub._sid, 'description', v)}
                             placeholder="Describe sub-item…"
                             placeholderTextColor={c.textLight}
                             multiline textAlignVertical="top"
                           />
                         </View>
-                        <View style={styles.fieldGroup}>
+                        <View style={styles.fieldGroup} ref={fieldRef(sub._sid, 'condition')}>
                           <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
                           <ReportTextInput
                             style={[styles.notesInput, dm.input]}
                             value={sub.condition}
-                            onFocus={() => handleCustomTextFocus(ci._cid, sub._sid)}
+                            onFocus={() => scrollToField(sub._sid, 'condition')}
                             onChangeText={v => setSubField(ci._cid, sub._sid, 'condition', v)}
                             placeholder="e.g. Good, Fair, Worn…"
                             placeholderTextColor={c.textLight}
@@ -3418,7 +3450,7 @@ export default function RoomInspectionScreen() {
                    non-editable prefix shown as a badge (not part of the
                    editable text at all, so it can't be edited or duplicated) —
                    the field below only holds anything new since check-in. */}
-              <View style={styles.fieldGroup}>
+              <View style={styles.fieldGroup} ref={fieldRef(item.id, 'checkOutCondition')}>
                 <View style={styles.coLabelRow}>
                   <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                   <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>As Inventory+</Text></View>
@@ -3426,7 +3458,7 @@ export default function RoomInspectionScreen() {
                 <ReportTextInput
                   style={[styles.notesInput, dm.input]}
                   value={stripAsInventoryPrefix(getField(item.id, 'checkOutCondition'))}
-                  onFocus={() => handleTextFocus(item.id)}
+                  onFocus={() => scrollToField(item.id, 'checkOutCondition')}
                   onChangeText={v => setField(item.id, 'checkOutCondition', withAsInventoryPrefix(v))}
                   placeholder="Add any new condition since check-in…"
                   placeholderTextColor={c.textLight}
@@ -3468,12 +3500,12 @@ export default function RoomInspectionScreen() {
             /* ── CHECK IN layout ── */
             <>
               {!isDamageReport_ && (
-                <View style={styles.fieldGroup}>
+                <View style={styles.fieldGroup} ref={fieldRef(item.id, 'description')}>
                   <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
                   <ReportTextInput
                     style={[styles.notesInput, dm.input]}
                     value={getField(item.id, 'description')}
-                    onFocus={() => handleTextFocus(item.id)}
+                    onFocus={() => scrollToField(item.id, 'description')}
                     onChangeText={v => setField(item.id, 'description', v)}
                     placeholder="Describe item appearance, state, notes…"
                     placeholderTextColor={c.textLight}
@@ -3482,7 +3514,7 @@ export default function RoomInspectionScreen() {
                 </View>
               )}
               {item.hasCondition !== false && (
-                <View style={styles.fieldGroup}>
+                <View style={styles.fieldGroup} ref={fieldRef(item.id, 'condition')}>
                   <Text style={[styles.fieldLabel, dm.textLight]}>
                     {item.answerOptions?.length ? item.label : 'Condition'}
                   </Text>
@@ -3509,7 +3541,7 @@ export default function RoomInspectionScreen() {
                     <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={getField(item.id, 'condition')}
-                      onFocus={() => handleTextFocus(item.id)}
+                      onFocus={() => scrollToField(item.id, 'condition')}
                       onChangeText={v => setField(item.id, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn, Damaged…"
                       placeholderTextColor={c.textLight}
@@ -3524,12 +3556,12 @@ export default function RoomInspectionScreen() {
 
         {/* ── FIXED: condition_summary — condition text box ── */}
         {item.hasConditionText && (
-          <View style={styles.fieldGroup}>
+          <View style={styles.fieldGroup} ref={fieldRef(item.id, 'condition')}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
             <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'condition')}
-              onFocus={() => handleTextFocus(item.id)}
+              onFocus={() => scrollToField(item.id, 'condition')}
               onChangeText={v => setField(item.id, 'condition', v)}
               placeholder="Describe condition…"
               placeholderTextColor={c.textLight}
@@ -3548,12 +3580,12 @@ export default function RoomInspectionScreen() {
 
         {/* Notes — smoke/health/fire door */}
         {item.hasNotes && (
-          <View style={styles.fieldGroup}>
+          <View style={styles.fieldGroup} ref={fieldRef(item.id, 'notes')}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Notes</Text>
             <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'notes')}
-              onFocus={() => handleTextFocus(item.id)}
+              onFocus={() => scrollToField(item.id, 'notes')}
               onChangeText={v => setField(item.id, 'notes', v)}
               placeholder="Notes…" placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
@@ -3579,12 +3611,12 @@ export default function RoomInspectionScreen() {
 
         {/* Cleanliness notes */}
         {item.hasCleanlinessNotes && (
-          <View style={styles.fieldGroup}>
+          <View style={styles.fieldGroup} ref={fieldRef(item.id, 'cleanlinessNotes')}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Additional Notes</Text>
             <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'cleanlinessNotes')}
-              onFocus={() => handleTextFocus(item.id)}
+              onFocus={() => scrollToField(item.id, 'cleanlinessNotes')}
               onChangeText={v => setField(item.id, 'cleanlinessNotes', v)}
               placeholder="Additional notes…" placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
@@ -3594,12 +3626,12 @@ export default function RoomInspectionScreen() {
 
         {/* Keys — description */}
         {item.hasDescription && sectionType_ !== 'room' && (
-          <View style={styles.fieldGroup}>
+          <View style={styles.fieldGroup} ref={fieldRef(item.id, 'description')}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
             <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'description')}
-              onFocus={() => handleTextFocus(item.id)}
+              onFocus={() => scrollToField(item.id, 'description')}
               onChangeText={v => setField(item.id, 'description', v)}
               placeholder="e.g. 2 × Yale keys…"
               placeholderTextColor={c.textLight}
@@ -3610,12 +3642,12 @@ export default function RoomInspectionScreen() {
 
         {/* Location / serial */}
         {item.hasLocationSerial && (
-          <View style={styles.fieldGroup}>
+          <View style={styles.fieldGroup} ref={fieldRef(item.id, 'locationSerial')}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Location / Serial</Text>
             <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'locationSerial')}
-              onFocus={() => handleTextFocus(item.id)}
+              onFocus={() => scrollToField(item.id, 'locationSerial')}
               onChangeText={v => setField(item.id, 'locationSerial', v)}
               placeholder={'Located to [location]\nSerial Number: [number]'}
               placeholderTextColor={c.textLight}
@@ -3626,12 +3658,12 @@ export default function RoomInspectionScreen() {
 
         {/* Meter reading */}
         {item.hasReading && (
-          <View style={styles.fieldGroup}>
+          <View style={styles.fieldGroup} ref={fieldRef(item.id, 'reading')}>
             <Text style={[styles.fieldLabel, dm.textLight]}>Reading</Text>
             <ReportTextInput
               style={[styles.notesInput, dm.input]}
               value={getField(item.id, 'reading')}
-              onFocus={() => handleTextFocus(item.id)}
+              onFocus={() => scrollToField(item.id, 'reading')}
               onChangeText={v => setField(item.id, 'reading', v)}
               placeholder={'e.g. 12345.6\nor Day: 12345, Night: 6789 (one per line)'} placeholderTextColor={c.textLight}
               multiline textAlignVertical="top"
@@ -3683,7 +3715,7 @@ export default function RoomInspectionScreen() {
                       <Text style={[styles.coReadOnlyText, dm.textMid]}>{sub.inventoryCondition || sub.condition || '—'}</Text>
                     </View>
                   </View>
-                  <View style={styles.fieldGroup}>
+                  <View style={styles.fieldGroup} ref={fieldRef(sub._sid, 'checkOutCondition')}>
                     <View style={styles.coLabelRow}>
                       <Text style={[styles.fieldLabel, dm.textLight]}>Condition at Check Out</Text>
                       <View style={styles.coInvBadge}><Text style={styles.coInvBadgeText}>As Inventory+</Text></View>
@@ -3691,7 +3723,7 @@ export default function RoomInspectionScreen() {
                     <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={stripAsInventoryPrefix(sub.checkOutCondition || '')}
-                      onFocus={() => handleTextFocus(item.id, sub._sid)}
+                      onFocus={() => scrollToField(sub._sid, 'checkOutCondition')}
                       onChangeText={v => setSubField(item.id, sub._sid, 'checkOutCondition', withAsInventoryPrefix(v))}
                       placeholder="Add any new condition since check-in…"
                       placeholderTextColor={c.textLight}
@@ -3773,24 +3805,24 @@ export default function RoomInspectionScreen() {
                       <Text style={styles.subItemDelete}>✕</Text>
                     </TouchableOpacity>
                   </View>
-                  <View style={styles.fieldGroup}>
+                  <View style={styles.fieldGroup} ref={fieldRef(sub._sid, 'description')}>
                     <Text style={[styles.fieldLabel, dm.textLight]}>Description</Text>
                     <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={sub.description}
-                      onFocus={() => handleTextFocus(item.id, sub._sid)}
+                      onFocus={() => scrollToField(sub._sid, 'description')}
                       onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
                       placeholder="Describe sub-item…"
                       placeholderTextColor={c.textLight}
                       multiline textAlignVertical="top"
                     />
                   </View>
-                  <View style={styles.fieldGroup}>
+                  <View style={styles.fieldGroup} ref={fieldRef(sub._sid, 'condition')}>
                     <Text style={[styles.fieldLabel, dm.textLight]}>Condition</Text>
                     <ReportTextInput
                       style={[styles.notesInput, dm.input]}
                       value={sub.condition}
-                      onFocus={() => handleTextFocus(item.id, sub._sid)}
+                      onFocus={() => scrollToField(sub._sid, 'condition')}
                       onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
                       placeholder="e.g. Good, Fair, Worn…"
                       placeholderTextColor={c.textLight}
@@ -4666,18 +4698,18 @@ export default function RoomInspectionScreen() {
                     <View style={ciStyles.section}>
                       <Text style={ciStyles.sectionLabel}>Destination Room</Text>
                       <Text style={[ciStyles.emptyRooms, { marginBottom: 8 }]}>
-                        Attaches to "{subMoveModal?.parentLabel}" in the room you choose — created there if it doesn't already exist.
+                        Choose the current room to re-attach this to a different item here, or another room entirely.
                       </Text>
                       {copyRoomsLoading ? (
                         <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
                       ) : copyRoomsList.length === 0 ? (
-                        <Text style={ciStyles.emptyRooms}>No other rooms available.</Text>
+                        <Text style={ciStyles.emptyRooms}>No rooms available.</Text>
                       ) : (
                         copyRoomsList.map(room => (
                           <TouchableOpacity
                             key={room.key}
                             style={[ciStyles.roomRow, subMoveTargetKey === room.key && ciStyles.roomRowSelected]}
-                            onPress={() => setSubMoveTargetKey(room.key)}
+                            onPress={() => selectSubMoveTargetRoom(room.key)}
                             activeOpacity={0.7}
                           >
                             <View style={[ciStyles.radio, subMoveTargetKey === room.key && ciStyles.radioSelected]}>
@@ -4690,6 +4722,50 @@ export default function RoomInspectionScreen() {
                         ))
                       )}
                     </View>
+
+                    {/* Destination item — which item's sub-items list this attaches to.
+                        Left blank, it matches (or creates) an item named after the
+                        current parent; the sub's own current parent is never offered
+                        as an option when the destination room is this room. */}
+                    {!!subMoveTargetKey && (
+                      <View style={ciStyles.section}>
+                        <Text style={ciStyles.sectionLabel}>Destination Item</Text>
+                        <Text style={[ciStyles.emptyRooms, { marginBottom: 8 }]}>
+                          Always attaches as a sub-item — pick which item, or leave this to match (or create) one named "{subMoveModal?.parentLabel}".
+                        </Text>
+                        <TouchableOpacity
+                          style={[ciStyles.roomRow, !moveTargetItemId && ciStyles.roomRowSelected]}
+                          onPress={() => setMoveTargetItemId('')}
+                          activeOpacity={0.7}
+                        >
+                          <View style={[ciStyles.radio, !moveTargetItemId && ciStyles.radioSelected]}>
+                            {!moveTargetItemId && <View style={ciStyles.radioDot} />}
+                          </View>
+                          <Text style={[ciStyles.roomName, !moveTargetItemId && ciStyles.roomNameSelected]}>
+                            + Match or create "{subMoveModal?.parentLabel}"
+                          </Text>
+                        </TouchableOpacity>
+                        {targetItemsLoading ? (
+                          <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                        ) : (
+                          targetItemsList.map(it => (
+                            <TouchableOpacity
+                              key={it.id}
+                              style={[ciStyles.roomRow, moveTargetItemId === it.id && ciStyles.roomRowSelected]}
+                              onPress={() => setMoveTargetItemId(it.id)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={[ciStyles.radio, moveTargetItemId === it.id && ciStyles.radioSelected]}>
+                                {moveTargetItemId === it.id && <View style={ciStyles.radioDot} />}
+                              </View>
+                              <Text style={[ciStyles.roomName, moveTargetItemId === it.id && ciStyles.roomNameSelected]} numberOfLines={1}>
+                                {it.name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </View>
+                    )}
                   </ScrollView>
                   <View style={[mStyles.actions, { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border }]}>
                     <TouchableOpacity
