@@ -317,8 +317,21 @@ export function saveAudioRecording(
 
   // Fire-and-forget backup copy to the clerk's chosen save-location folder
   // (if the setting is enabled) — never blocks or fails the DB write.
-  const filename = fileUri.split('/').pop() || `clip_${Date.now()}.m4a`
-  copyClipToSaveLocation(fileUri, filename).catch(() => {})
+  // Folder = property address; file = "<Room>-<n>" where n is this clip's
+  // position among the room's clips for the inspection.
+  try {
+    const insp = db.getFirstSync<{ data: string }>('SELECT data FROM inspections WHERE id = ?', [inspectionId])
+    const address: string = (insp ? JSON.parse(insp.data)?.property_address : '') || `Inspection ${inspectionId}`
+    const room = sectionName || sectionKey
+    const countRow = db.getFirstSync<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM audio_recordings WHERE inspection_id = ? AND section_key = ?',
+      [inspectionId, sectionKey]
+    )
+    const ext = (fileUri.split('?')[0].split('.').pop() || 'm4a').toLowerCase()
+    copyClipToSaveLocation(fileUri, address, `${room}-${countRow?.n ?? 1}.${ext}`).catch(() => {})
+  } catch (err) {
+    console.warn('[database] backup naming failed (non-fatal):', err)
+  }
 
   return result.lastInsertRowId
 }

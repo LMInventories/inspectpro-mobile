@@ -73,12 +73,46 @@ export async function clearAudioSaveFolder(): Promise<void> {
   await SecureStore.deleteItemAsync(KEY_FOLDER_NAME)
 }
 
+// Strip characters Android/SAF providers reject in names, collapse whitespace.
+function safeName(name: string, max = 100): string {
+  return name.replace(/[\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim() || 'Untitled'
+}
+
+// SAF silently renames on collision ("Name (1)"), so an existing property
+// folder must be looked up rather than blindly re-created. Cached in-memory
+// (as a promise, so concurrent clips share one create) per parent+name.
+const folderCache = new Map<string, Promise<string>>()
+
+async function ensureSubfolder(parentUri: string, name: string): Promise<string> {
+  const key = `${parentUri}|${name}`
+  const cached = folderCache.get(key)
+  if (cached) return cached
+  const p = (async () => {
+    const SAF = FileSystem.StorageAccessFramework
+    const children = await SAF.readDirectoryAsync(parentUri)
+    const existing = children.find(uri => {
+      const decoded = decodeURIComponent(uri)
+      return decoded.split('/').pop() === name
+    })
+    return existing ?? (await SAF.makeDirectoryAsync(parentUri, name))
+  })()
+  folderCache.set(key, p)
+  p.catch(() => folderCache.delete(key))
+  return p
+}
+
 /**
- * Fire-and-forget copy of a finalised clip into the clerk's chosen folder.
- * No-op when the setting is off, no folder is chosen, or the platform isn't
- * Android. Failures are logged only — this must never disrupt recording.
+ * Fire-and-forget copy of a finalised clip into the clerk's chosen folder,
+ * inside a subfolder named after the property (e.g. "123 Test Property,
+ * London, AB12 3CD"). No-op when the setting is off, no folder is chosen, or
+ * the platform isn't Android. Failures are logged only — this must never
+ * disrupt recording.
  */
-export async function copyClipToSaveLocation(sourceUri: string, filename: string): Promise<void> {
+export async function copyClipToSaveLocation(
+  sourceUri: string,
+  propertyName: string,
+  filename: string
+): Promise<void> {
   if (Platform.OS !== 'android') return
   try {
     const { enabled, folderUri } = await getAudioSaveLocation()
@@ -87,8 +121,9 @@ export async function copyClipToSaveLocation(sourceUri: string, filename: string
     const base64 = await FileSystem.readAsStringAsync(sourceUri, {
       encoding: FileSystem.EncodingType.Base64,
     })
+    const propertyFolder = await ensureSubfolder(folderUri, safeName(propertyName))
     const destUri = await FileSystem.StorageAccessFramework.createFileAsync(
-      folderUri, filename, mimeTypeForUri(sourceUri)
+      propertyFolder, safeName(filename, 120), mimeTypeForUri(sourceUri)
     )
     await FileSystem.writeAsStringAsync(destUri, base64, {
       encoding: FileSystem.EncodingType.Base64,
