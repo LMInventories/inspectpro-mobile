@@ -366,6 +366,34 @@ export default function RoomSelectionScreen() {
     ])
   }
 
+  function deleteFixedSectionConfirmed(key: string, name: string) {
+    Alert.alert(
+      `Delete "${name}"?`,
+      'This removes the section and all its data. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: () => {
+            try {
+              const fresh = getLocalInspection(inspectionId)
+              const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+              delete rd[key]
+              // Fixed sections come from the template, so track the key in
+              // _hiddenFixed to keep it out of the list.
+              if (!rd['_hiddenFixed']) rd['_hiddenFixed'] = []
+              if (!rd['_hiddenFixed'].includes(key)) rd['_hiddenFixed'].push(key)
+              setReportData(inspectionId, rd)
+              loadInspection(inspectionId)
+            } catch {
+              Alert.alert('Delete failed', 'Could not delete the section. Please try again.')
+            }
+          },
+        },
+      ],
+    )
+  }
+
   async function handleDuplicateRoom(key: string, name: string, options: { descriptions: boolean; conditions: boolean }) {
     const newKey  = `custom_${Date.now()}`
     const fresh   = await getLocalInspection(inspectionId)
@@ -849,17 +877,28 @@ export default function RoomSelectionScreen() {
 
           {/* Fixed sections */}
           <Text style={styles.groupLabel}>Fixed Sections</Text>
-          {fixedSections.map((section: any) => (
-            <TouchableOpacity key={section.sectionKey} style={[styles.row, styles.rowMb]}
-              onPress={() => navigation.navigate('RoomInspection', {
-                inspectionId, sectionKey: section.sectionKey, sectionName: section.name,
-                sectionType: 'fixed', fixedSectionData: JSON.stringify(section),
-              })}>
-              <View style={styles.rowContent}>
-                <Text style={styles.rowName}>{section.name}</Text>
-              </View>
-              <Text style={styles.chevron}>›</Text>
-            </TouchableOpacity>
+          {fixedSections
+            .filter((section: any) => !(rd['_hiddenFixed'] || []).includes(section.sectionKey))
+            .map((section: any) => (
+            <View key={section.sectionKey} style={styles.rowMb}>
+              <SwipeableRow
+                actions={[
+                  { icon: '🗑', label: 'Delete', bg: colors.dangerLight, onPress: () => deleteFixedSectionConfirmed(section.sectionKey, section.name) },
+                ]}
+                layout="row"
+              >
+                <TouchableOpacity style={styles.row}
+                  onPress={() => navigation.navigate('RoomInspection', {
+                    inspectionId, sectionKey: section.sectionKey, sectionName: section.name,
+                    sectionType: 'fixed', fixedSectionData: JSON.stringify(section),
+                  })}>
+                  <View style={styles.rowContent}>
+                    <Text style={styles.rowName}>{section.name}</Text>
+                  </View>
+                  <Text style={styles.chevron}>›</Text>
+                </TouchableOpacity>
+              </SwipeableRow>
+            </View>
           ))}
 
           {/* Rooms header */}
