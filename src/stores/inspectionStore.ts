@@ -36,9 +36,13 @@ export const useInspectionStore = create<InspectionStore>((set, get) => ({
   setReportData: (inspectionId, reportData) => {
     const json = typeof reportData === 'string' ? reportData : JSON.stringify(reportData)
     updateReportData(inspectionId, json)
-    const { activeInspection } = get()
+    const { activeInspection, inspections } = get()
     if (activeInspection?.id === inspectionId) {
       set({ activeInspection: { ...activeInspection, report_data: json } })
+    }
+    // Keep the list view in step so cards (e.g. overview photo) update instantly.
+    if (inspections.some(i => i.id === inspectionId)) {
+      set({ inspections: inspections.map(i => i.id === inspectionId ? { ...i, report_data: json } : i) })
     }
   },
 

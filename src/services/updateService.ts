@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy'
 import * as IntentLauncher from 'expo-intent-launcher'
-import { Platform } from 'react-native'
+import { Platform, Alert } from 'react-native'
+import * as SecureStore from 'expo-secure-store'
 
 const GITHUB_OWNER = 'LMInventories'
 const GITHUB_REPO  = 'inspectpro-mobile'
@@ -82,5 +83,51 @@ export async function downloadAndInstall(
     })
   } finally {
     FileSystem.deleteAsync(dest, { idempotent: true }).catch(() => {})
+  }
+}
+
+// ── Automatic update check (every 3 days) ─────────────────────────────────────
+const AUTO_CHECK_INTERVAL_MS = 3 * 24 * 60 * 60 * 1000
+const LAST_CHECK_KEY = 'last_update_check'
+let autoCheckRunning = false
+
+/**
+ * Checks GitHub for a newer build if 3+ days have passed since the last
+ * successful check, and offers "Update Now" / "Cancel". Silent on failure
+ * (offline, rate limit) — the timestamp is only advanced after a successful
+ * check, so it retries next time the app is opened/foregrounded.
+ */
+export async function checkForUpdateIfDue(): Promise<void> {
+  if (Platform.OS !== 'android' || autoCheckRunning) return
+  autoCheckRunning = true
+  try {
+    const last = parseInt((await SecureStore.getItemAsync(LAST_CHECK_KEY)) ?? '0', 10) || 0
+    if (Date.now() - last < AUTO_CHECK_INTERVAL_MS) return
+
+    const info = await fetchLatestRelease()
+    await SecureStore.setItemAsync(LAST_CHECK_KEY, String(Date.now()))
+
+    if (info.buildNumber > getCurrentBuildNumber() && info.downloadUrl) {
+      const url = info.downloadUrl
+      Alert.alert(
+        'Update Available',
+        'A new version of InspectPro is available.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Update Now',
+            onPress: () => {
+              downloadAndInstall(url, () => {}).catch(err =>
+                Alert.alert('Update failed', err?.message || 'Download failed.')
+              )
+            },
+          },
+        ]
+      )
+    }
+  } catch (err) {
+    console.warn('[Update] Auto-check failed (non-fatal):', err)
+  } finally {
+    autoCheckRunning = false
   }
 }

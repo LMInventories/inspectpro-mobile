@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createStackNavigator } from '@react-navigation/stack'
-import { StatusBar, View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native'
+import { StatusBar, View, Text, StyleSheet, ActivityIndicator, Alert, AppState } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -15,6 +15,7 @@ import { useSyncStore } from './src/stores/syncStore'
 import { useToastStore } from './src/stores/toastStore'
 import { setupNotifications } from './src/services/notificationService'
 import { checkApiStatuses } from './src/services/apiStatusService'
+import { checkForUpdateIfDue } from './src/services/updateService'
 
 import LoginScreen from './src/screens/LoginScreen'
 import InspectionListScreen from './src/screens/InspectionListScreen'
@@ -183,6 +184,18 @@ export default function App() {
     }
     bootstrap()
   }, [])
+
+  // Auto-check for app updates (throttled to once per 3 days inside the
+  // service) — on launch, and whenever the app returns to the foreground so
+  // long-running sessions still get checked.
+  useEffect(() => {
+    if (!dbReady || !isAuthenticated) return
+    checkForUpdateIfDue()
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') checkForUpdateIfDue()
+    })
+    return () => sub.remove()
+  }, [dbReady, isAuthenticated])
 
   if (!dbReady) return null
 

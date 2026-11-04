@@ -98,7 +98,14 @@ export default function InspectionListScreen() {
     // styling are skipped for them specifically.
     const isDimmed = isSynced && !isAM
     // overview_photo is stored in the full inspection data under property.overview_photo
+    // A locally-taken overview photo (report_data._overview.items.photo.uri) wins
+    // over the server copy so it shows immediately, before any sync/refetch.
     const overviewPhoto = (() => {
+      try {
+        const rd = typeof item.report_data === 'string' ? JSON.parse(item.report_data) : item.report_data
+        const localUri = rd?._overview?.items?.photo?.uri
+        if (localUri) return localUri
+      } catch { /* fall through to server photo */ }
       try {
         const data = typeof item.data === 'string' ? JSON.parse(item.data) : item
         return data?.property?.overview_photo || null
