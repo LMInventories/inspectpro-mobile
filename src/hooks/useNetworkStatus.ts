@@ -16,7 +16,16 @@ import { BASE_URL } from '../services/api'
 const POLL_INTERVAL_MS = 30_000
 const CHECK_TIMEOUT_MS =  5_000
 
+// TEMPORARY (6 Nov 2026): connectivity detection is switched OFF.
+// The 5 s ping was producing false "offline" banners and queuing AI
+// transcription ("waiting for connection…") on good signal. While this is
+// false, probe() always reports online, so nothing is blocked or queued on a
+// failed ping; a genuine network failure surfaces as a normal request error
+// and the clips are kept. Set to true to restore the original behaviour.
+export const OFFLINE_DETECTION_ENABLED = false
+
 export async function probe(): Promise<boolean> {
+  if (!OFFLINE_DETECTION_ENABLED) return true
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS)
   try {
@@ -48,6 +57,7 @@ export function useNetworkStatus() {
   }, [])
 
   useEffect(() => {
+    if (!OFFLINE_DETECTION_ENABLED) return  // detection off — isOnline stays true
     mountedRef.current = true
     check()
     timerRef.current = setInterval(check, POLL_INTERVAL_MS)
