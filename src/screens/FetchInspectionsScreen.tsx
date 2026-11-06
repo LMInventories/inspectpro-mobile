@@ -250,6 +250,7 @@ export default function FetchInspectionsScreen() {
     // We embed the appropriate copy in each downloaded inspection for offline use.
     let fixedSectionsData: any[] = []
     let midtermSectionsData: any[] = []
+    let headsUpSectionsData: any[] = []
     try {
       const fsRes = await api.getFixedSections()
       fixedSectionsData = Array.isArray(fsRes.data) ? fsRes.data : []
@@ -294,6 +295,12 @@ export default function FetchInspectionsScreen() {
     } catch (msErr) {
       console.warn('[FetchInspections] Could not pre-fetch midterm sections:', msErr)
     }
+    try {
+      const huRes = await api.getHeadsUpSections()
+      headsUpSectionsData = Array.isArray(huRes.data) ? huRes.data : []
+    } catch (huErr) {
+      console.warn('[FetchInspections] Could not pre-fetch heads-up sections:', huErr)
+    }
 
     let current = 0
     for (const id of Array.from(selected)) {
@@ -326,7 +333,11 @@ export default function FetchInspectionsScreen() {
         // so explicitly clear that partial value if the dedicated fetch fails —
         // leaving it in place would look "cached" to offline consumers later.
         normalised.template = null
-        const templateId = d.template_id
+        // Heads-Up Reports never use a room template — their layout is the
+        // Heads-Up Sections set — so don't fetch or keep one.
+        const isHeadsUp = d.inspection_type === 'heads_up'
+        if (isHeadsUp) normalised.template_id = null
+        const templateId = isHeadsUp ? null : d.template_id
         if (templateId) {
           try {
             const tmplRes = await api.getTemplate(templateId)
@@ -388,9 +399,13 @@ export default function FetchInspectionsScreen() {
         }
 
         // Embed fixed sections so the app works fully offline.
-        // Midterm inspections use a separate section set.
+        // Midterm and Heads-Up inspections each use their own section set.
         const isMidterm = d.inspection_type === 'midterm'
-        const sectionsToEmbed = isMidterm ? midtermSectionsData : fixedSectionsData
+        const sectionsToEmbed = isMidterm
+          ? midtermSectionsData
+          : isHeadsUp
+            ? headsUpSectionsData
+            : fixedSectionsData
         if (sectionsToEmbed.length > 0) {
           normalised.fixedSections = sectionsToEmbed
         }

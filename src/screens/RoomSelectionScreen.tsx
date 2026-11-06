@@ -102,7 +102,10 @@ export default function RoomSelectionScreen() {
       // without items[]) that the inspection detail API may have included before
       // we overwrite with the full template in FetchInspectionsScreen — those pass
       // a naive "has sections" check but render every room with no items.
-      const cachedComplete = templateIsComplete(inspection?.template)
+      // Heads-Up Reports never use a room template — their layout is the
+      // Heads-Up Sections set — so skip every template lookup for them.
+      const isHeadsUp = inspection?.inspection_type === 'heads_up'
+      const cachedComplete = !isHeadsUp && templateIsComplete(inspection?.template)
       let tmplData: any = cachedComplete ? inspection.template : null
       let resolvedTemplateId: number | null = cachedComplete ? inspection.template_id : null
 
@@ -110,7 +113,7 @@ export default function RoomSelectionScreen() {
       // request — a live call can take up to ~30s to time out with no network,
       // which would otherwise stall this screen even though we already have
       // a good copy on-device.
-      if (!tmplData && inspection?.template_id) {
+      if (!isHeadsUp && !tmplData && inspection?.template_id) {
         const libCached = getCachedTemplate(inspection.template_id)
         if (libCached && templateIsComplete(libCached)) {
           tmplData = libCached
@@ -130,7 +133,7 @@ export default function RoomSelectionScreen() {
       // Fallback for check-out inspections: if no template found, inherit from
       // the source check-in inspection. This handles the case where no dedicated
       // check-out template exists and the backend inheritance didn't run.
-      if (!tmplData && inspection?.source_inspection_id) {
+      if (!isHeadsUp && !tmplData && inspection?.source_inspection_id) {
         try {
           const srcRes    = await api.getInspection(inspection.source_inspection_id)
           const srcTmplId = srcRes.data?.template_id
@@ -161,7 +164,18 @@ export default function RoomSelectionScreen() {
       const cachedFixedOk = Array.isArray(inspection?.fixedSections) &&
                             inspection.fixedSections.length > 0
       let rawFixed: any[] = []
-      if (cachedFixedOk) {
+      if (isHeadsUp) {
+        // Heads-Up inspections downloaded before this fix may have the standard
+        // Check In sections embedded, so prefer a live fetch of the real
+        // Heads-Up Sections and only fall back to the embedded copy offline.
+        try {
+          const huRes = await api.getHeadsUpSections()
+          rawFixed = Array.isArray(huRes.data) ? huRes.data : []
+        } catch {
+          if (cachedFixedOk) rawFixed = inspection.fixedSections
+          else console.warn('[RoomSelection] No connection and no cached heads-up sections.')
+        }
+      } else if (cachedFixedOk) {
         rawFixed = inspection.fixedSections
       } else {
         try {

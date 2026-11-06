@@ -170,6 +170,8 @@ export const api = {
     http.get('/api/fixed-sections'),
   getMidtermSections: () =>
     http.get('/api/midterm-sections'),
+  getHeadsUpSections: () =>
+    http.get('/api/heads-up-sections'),
 
   // Section presets
   getSectionPresets: () =>
