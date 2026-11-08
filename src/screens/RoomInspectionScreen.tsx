@@ -11,6 +11,7 @@ import {
   Gesture,
   NativeViewGestureHandler,
 } from 'react-native-gesture-handler'
+import ReorderableList from '../components/ReorderableList'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
@@ -142,12 +143,6 @@ export default function RoomInspectionScreen() {
   // Rearrange modal
   const [rearrangeModal, setRearrangeModal]   = useState(false)
   const [rearrangeItems, setRearrangeItems]   = useState<any[]>([])
-  const rearrangeDragFromRef  = useRef<number | null>(null)
-  const rearrangeDragToRef    = useRef<number | null>(null)
-  const [rearrangeDragFrom, setRearrangeDragFrom] = useState<number | null>(null)
-  const [rearrangeDragTo,   setRearrangeDragTo]   = useState<number | null>(null)
-  const rearrangeDragYAnim = useRef(new Animated.Value(0)).current
-  const REORDER_ROW_H = 56
 
   // ── Check-out / Damage Report mode ───────────────────────────────────────
   const [isCheckOut_, setIsCheckOut_]         = useState(false)
@@ -2463,64 +2458,7 @@ export default function RoomInspectionScreen() {
   // ── Rearrange modal ────────────────────────────────────────────────────────
   function openRearrangeModal() {
     setRearrangeItems([...items])
-    rearrangeDragYAnim.setValue(0)
-    setRearrangeDragFrom(null)
-    setRearrangeDragTo(null)
     setRearrangeModal(true)
-  }
-
-  function getRearrangeShift(idx: number, from: number, to: number): number {
-    if (from < to)  { if (idx > from && idx <= to) return -REORDER_ROW_H }
-    else if (from > to) { if (idx >= to && idx < from) return REORDER_ROW_H }
-    return 0
-  }
-
-  function makeRearrangeGesture(idx: number) {
-    return Gesture.Pan()
-      .runOnJS(true)
-      .activateAfterLongPress(350)
-      .onStart(() => {
-        rearrangeDragFromRef.current = idx
-        rearrangeDragToRef.current   = idx
-        rearrangeDragYAnim.setValue(0)
-        setRearrangeDragFrom(idx)
-        setRearrangeDragTo(idx)
-      })
-      .onUpdate(e => {
-        rearrangeDragYAnim.setValue(e.translationY)
-        const newTo = Math.max(0, Math.min(
-          rearrangeItems.length - 1,
-          Math.round(idx + e.translationY / REORDER_ROW_H)
-        ))
-        if (newTo !== rearrangeDragToRef.current) {
-          rearrangeDragToRef.current = newTo
-          setRearrangeDragTo(newTo)
-        }
-      })
-      .onEnd(() => {
-        const from = rearrangeDragFromRef.current
-        const to   = rearrangeDragToRef.current
-        rearrangeDragYAnim.setValue(0)
-        rearrangeDragFromRef.current = null
-        rearrangeDragToRef.current   = null
-        setRearrangeDragFrom(null)
-        setRearrangeDragTo(null)
-        if (from !== null && to !== null && from !== to) {
-          setRearrangeItems(prev => {
-            const next = [...prev]
-            const [moved] = next.splice(from, 1)
-            next.splice(to, 0, moved)
-            return next
-          })
-        }
-      })
-      .onFinalize(() => {
-        rearrangeDragYAnim.setValue(0)
-        rearrangeDragFromRef.current = null
-        rearrangeDragToRef.current   = null
-        setRearrangeDragFrom(null)
-        setRearrangeDragTo(null)
-      })
   }
 
   async function saveRearrange() {
@@ -5036,36 +4974,15 @@ export default function RoomInspectionScreen() {
                 <Text style={rrStyles.save}>Save</Text>
               </TouchableOpacity>
             </View>
-            <Text style={rrStyles.hint}>Hold any item and drag to reorder</Text>
-            <ScrollView
-              scrollEnabled={rearrangeDragFrom === null}
-              contentContainerStyle={rrStyles.list}
-            >
-              {rearrangeItems.map((item, idx) => {
-                const isDragging = rearrangeDragFrom === idx
-                const shift = (!isDragging && rearrangeDragFrom !== null && rearrangeDragTo !== null)
-                  ? getRearrangeShift(idx, rearrangeDragFrom, rearrangeDragTo)
-                  : 0
-                return (
-                  <Animated.View
-                    key={item.id}
-                    style={isDragging
-                      ? { transform: [{ translateY: rearrangeDragYAnim }], zIndex: 10, elevation: 6 }
-                      : shift !== 0 ? { transform: [{ translateY: shift }] } : {}
-                    }
-                  >
-                    <GestureDetector gesture={makeRearrangeGesture(idx)}>
-                      <View style={[rrStyles.row, dm.surface, { borderColor: c.border }, isDragging && rrStyles.rowDragging]}>
-                        <Text style={[rrStyles.rowLabel, dm.text]} numberOfLines={1}>
-                          {item.label || item.name || ''}
-                        </Text>
-                        <Text style={rrStyles.handle}>≡</Text>
-                      </View>
-                    </GestureDetector>
-                  </Animated.View>
-                )
-              })}
-            </ScrollView>
+            <Text style={rrStyles.hint}>Drag the ≡ handle to reorder</Text>
+            <ReorderableList
+              data={rearrangeItems}
+              keyExtractor={(item: any) => String(item.id)}
+              getLabel={(item: any) => item.label || item.name || ''}
+              onReorder={setRearrangeItems}
+              rowStyle={[dm.surface, { borderColor: c.border }]}
+              labelStyle={dm.text}
+            />
             <View style={[rrStyles.footer, dm.surface, { borderTopColor: c.border, paddingBottom: insets.bottom + 8 }]}>
               <TouchableOpacity style={rrStyles.saveBtn} onPress={saveRearrange}>
                 <Text style={rrStyles.saveBtnText}>Save Order</Text>

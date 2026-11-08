@@ -13,6 +13,7 @@ import { getLocalInspection, getCachedTemplate, getCachedJSON, templateIsComplet
 import { api } from '../services/api'
 import Header from '../components/Header'
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler'
+import ReorderableList from '../components/ReorderableList'
 import SwipeableRow from '../components/SwipeableRow'
 import { useToastStore } from '../stores/toastStore'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -67,12 +68,6 @@ export default function RoomSelectionScreen() {
   // Room rearrange modal
   const [roomRearrangeModal, setRoomRearrangeModal] = useState(false)
   const [roomRearrangeList, setRoomRearrangeList]   = useState<any[]>([])
-  const rrDragFromRef  = useRef<number | null>(null)
-  const rrDragToRef    = useRef<number | null>(null)
-  const [rrDragFrom, setRrDragFrom] = useState<number | null>(null)
-  const [rrDragTo,   setRrDragTo]   = useState<number | null>(null)
-  const rrDragYAnim = useRef(new Animated.Value(0)).current
-  const ROOM_ROW_H  = 56
 
   // Change/override template modal state
   const [changeTemplateModal, setChangeTemplateModal] = useState(false)
@@ -492,64 +487,7 @@ export default function RoomSelectionScreen() {
   // ── Room rearrange modal ───────────────────────────────────────────────────
   function openRoomRearrangeModal() {
     setRoomRearrangeList(buildOrderedRooms())
-    rrDragYAnim.setValue(0)
-    setRrDragFrom(null)
-    setRrDragTo(null)
     setRoomRearrangeModal(true)
-  }
-
-  function getRoomRearrangeShift(idx: number, from: number, to: number): number {
-    if (from < to)      { if (idx > from && idx <= to) return -ROOM_ROW_H }
-    else if (from > to) { if (idx >= to && idx < from) return  ROOM_ROW_H }
-    return 0
-  }
-
-  function makeRoomRearrangeGesture(idx: number) {
-    return Gesture.Pan()
-      .runOnJS(true)
-      .activateAfterLongPress(350)
-      .onStart(() => {
-        rrDragFromRef.current = idx
-        rrDragToRef.current   = idx
-        rrDragYAnim.setValue(0)
-        setRrDragFrom(idx)
-        setRrDragTo(idx)
-      })
-      .onUpdate(e => {
-        rrDragYAnim.setValue(e.translationY)
-        const newTo = Math.max(0, Math.min(
-          roomRearrangeList.length - 1,
-          Math.round(idx + e.translationY / ROOM_ROW_H)
-        ))
-        if (newTo !== rrDragToRef.current) {
-          rrDragToRef.current = newTo
-          setRrDragTo(newTo)
-        }
-      })
-      .onEnd(() => {
-        const from = rrDragFromRef.current
-        const to   = rrDragToRef.current
-        rrDragYAnim.setValue(0)
-        rrDragFromRef.current = null
-        rrDragToRef.current   = null
-        setRrDragFrom(null)
-        setRrDragTo(null)
-        if (from !== null && to !== null && from !== to) {
-          setRoomRearrangeList(prev => {
-            const next = [...prev]
-            const [moved] = next.splice(from, 1)
-            next.splice(to, 0, moved)
-            return next
-          })
-        }
-      })
-      .onFinalize(() => {
-        rrDragYAnim.setValue(0)
-        rrDragFromRef.current = null
-        rrDragToRef.current   = null
-        setRrDragFrom(null)
-        setRrDragTo(null)
-      })
   }
 
   async function saveRoomRearrange() {
@@ -1023,34 +961,13 @@ export default function RoomSelectionScreen() {
               <Text style={rrStyles.save}>Save</Text>
             </TouchableOpacity>
           </View>
-          <Text style={rrStyles.hint}>Hold any room and drag to reorder</Text>
-          <ScrollView
-            scrollEnabled={rrDragFrom === null}
-            contentContainerStyle={rrStyles.list}
-          >
-            {roomRearrangeList.map((room: any, idx: number) => {
-              const isDragging = rrDragFrom === idx
-              const shift = (!isDragging && rrDragFrom !== null && rrDragTo !== null)
-                ? getRoomRearrangeShift(idx, rrDragFrom, rrDragTo)
-                : 0
-              return (
-                <Animated.View
-                  key={room.key}
-                  style={isDragging
-                    ? { transform: [{ translateY: rrDragYAnim }], zIndex: 10, elevation: 6 }
-                    : shift !== 0 ? { transform: [{ translateY: shift }] } : {}
-                  }
-                >
-                  <GestureDetector gesture={makeRoomRearrangeGesture(idx)}>
-                    <View style={[rrStyles.row, isDragging && rrStyles.rowDragging]}>
-                      <Text style={rrStyles.rowLabel} numberOfLines={1}>{room.name}</Text>
-                      <Text style={rrStyles.handle}>≡</Text>
-                    </View>
-                  </GestureDetector>
-                </Animated.View>
-              )
-            })}
-          </ScrollView>
+          <Text style={rrStyles.hint}>Drag the ≡ handle to reorder</Text>
+          <ReorderableList
+            data={roomRearrangeList}
+            keyExtractor={(r: any) => r.key}
+            getLabel={(r: any) => r.name}
+            onReorder={setRoomRearrangeList}
+          />
           <View style={[rrStyles.footer, { paddingBottom: insets.bottom + 8 }]}>
             <TouchableOpacity style={rrStyles.saveBtn} onPress={saveRoomRearrange}>
               <Text style={rrStyles.saveBtnText}>Save Order</Text>
