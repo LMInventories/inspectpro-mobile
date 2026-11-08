@@ -483,8 +483,9 @@ export async function syncSingleInspection(
 
     if (typistMode !== null) payload.typist_mode = typistMode
 
-    if (inspectionType === 'heads_up' && isActive && isFinalised) {
-      // Heads-Up Reports have no typist step — always go straight to complete
+    if (inspectionType === 'heads_up' && isFinalised) {
+      // Heads-Up Reports have no review/typist step — always go straight to
+      // complete (and email), whatever the role or local status.
       payload.status = 'complete'
     } else if ((role === 'admin' || role === 'manager') && isFinalised) {
       // Admins/managers bypass the review step — finalised reports go straight
