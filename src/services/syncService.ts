@@ -198,6 +198,29 @@ function setAtPath(rd: any, path: string[], value: string) {
 //     silently reverting an already-working photo back to a dead local
 //     reference on the server (the file itself having long since been
 //     deleted by the FIRST sync's cleanup).
+// A brief network drop (e.g. the phone locking mid-upload) shouldn't push a photo
+// onto the much heavier base64 fallback, so retry the S3 PUT a couple of times
+// first. Client errors (4xx, e.g. an expired URL) are not retried.
+async function putPhotoWithRetry(url: string, fileUri: string, attempts = 3) {
+  let lastErr: any
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await FileSystem.uploadAsync(url, fileUri, {
+        httpMethod: 'PUT',
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers:    { 'Content-Type': 'image/jpeg' },
+      })
+      const retryable = res.status >= 500 || res.status === 408 || res.status === 429
+      if (!retryable || attempt === attempts) return res
+    } catch (err) {
+      lastErr = err
+      if (attempt === attempts) throw err
+    }
+    await sleep(attempt * 1500)
+  }
+  throw lastErr
+}
+
 export async function uploadPhotosToS3(
   rd: any,
   inspectionId: number,
@@ -257,11 +280,7 @@ export async function uploadPhotosToS3(
     try {
       const compressedUri = await compressPhoto(uri, kind)
 
-      const result = await FileSystem.uploadAsync(slot.upload_url, compressedUri, {
-        httpMethod:   'PUT',
-        uploadType:   FileSystem.FileSystemUploadType.BINARY_CONTENT,
-        headers:      { 'Content-Type': 'image/jpeg' },
-      })
+      const result = await putPhotoWithRetry(slot.upload_url, compressedUri)
 
       // Clean up temp compressed file
       if (compressedUri !== uri) {

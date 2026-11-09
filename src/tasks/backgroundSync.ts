@@ -20,7 +20,6 @@
  */
 import * as BackgroundFetch from 'expo-background-fetch'
 import * as TaskManager from 'expo-task-manager'
-import NetInfo from '@react-native-community/netinfo'   // shimmed below if absent
 import { getLocalInspections } from '../services/database'
 import { syncSingleInspection } from '../services/syncService'
 import { useAuthStore } from '../stores/authStore'
