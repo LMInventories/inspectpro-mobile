@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, ActivityIndicator, Modal,
+  Alert, ActivityIndicator, Modal, Platform,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
@@ -190,7 +190,9 @@ export default function SyncScreen() {
                   </View>
                 )}
                 <Text style={[styles.bgSyncNote, dm.textLight]}>
-                  You can navigate away — sync continues in the background.
+                  {Platform.OS === 'android'
+                    ? 'Sync keeps running with the screen off — you can lock your phone or put it away. Leave the "Syncing" notification in place until it finishes.'
+                    : 'Keep the app open — the screen stays on until the sync finishes. Locking the phone or switching apps can pause the upload.'}
                 </Text>
               </>
             ) : (

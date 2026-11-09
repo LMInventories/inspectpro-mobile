@@ -1,8 +1,11 @@
+import { Platform } from 'react-native'
 import { create } from 'zustand'
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { SyncProgress, SyncResult, syncSingleInspection } from '../services/syncService'
 import { useInspectionStore } from './inspectionStore'
 import { useToastStore } from './toastStore'
 import { showSyncProgress, showSyncComplete } from '../services/notificationService'
+import { runInForegroundService, setForegroundServiceText } from '../services/foregroundService'
 
 interface SyncStore {
   syncing:    boolean
@@ -14,7 +17,25 @@ interface SyncStore {
   clearResults: () => void
 }
 
-export const useSyncStore = create<SyncStore>((set) => ({
+// Android: the sync runs inside a foreground service (see foregroundService.ts), so
+// it continues with the screen off or the phone in a pocket, and its persistent
+// notification doubles as the progress display.
+// iOS can't do that, so there we keep the screen on instead — once it locks the OS
+// suspends the app's JS and network within seconds.
+const KEEP_AWAKE_TAG = 'inspection-sync'
+const IS_ANDROID = Platform.OS === 'android'
+
+function reportProgress(current: number, total: number, phase?: string) {
+  if (IS_ANDROID) {
+    const detail = phase === 'photos' ? ' — photos' : phase === 'audio' ? ' — audio'
+      : phase === 'uploading' ? ' — uploading' : phase === 'retrying' ? ' — retrying' : ''
+    setForegroundServiceText(`Inspection ${current} of ${total}${detail}`)
+  } else {
+    showSyncProgress(current, total, phase)
+  }
+}
+
+export const useSyncStore = create<SyncStore>((set, get) => ({
   syncing:   false,
   progress:  null,
   syncIndex: 0,
@@ -22,23 +43,26 @@ export const useSyncStore = create<SyncStore>((set) => ({
   results:   null,
 
   startSync: async (inspections, user) => {
+    if (get().syncing) return          // a sync (and its foreground service) is already running
     const total = inspections.length
     set({ syncing: true, results: null, syncTotal: total, syncIndex: 0, progress: null })
     const res: SyncResult[] = []
 
+    if (!IS_ANDROID) activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {})
+    try {
+    await runInForegroundService(async () => {
     for (let i = 0; i < inspections.length; i++) {
       const current = i + 1
       set({ syncIndex: current, progress: null })
 
-      // OS-level notification — updates in place (same identifier)
-      showSyncProgress(current, total)
+      reportProgress(current, total)
 
       const insp   = inspections[i]
       const result = await syncSingleInspection(insp.id, insp, user, (p) => {
         set({ progress: p })
         // Update notification with phase detail (photo/audio progress)
         if (p.phase !== 'retrying') {
-          showSyncProgress(current, total, p.phase)
+          reportProgress(current, total, p.phase)
         }
       })
       res.push(result)
@@ -72,6 +96,13 @@ export const useSyncStore = create<SyncStore>((set) => ({
     }
 
     set({ syncing: false, progress: null, results: res })
+    })   // end runInForegroundService — finishing inside it keeps the service alive until results/notifications are done
+    } catch (err) {
+      set({ syncing: false, progress: null, results: res })
+      throw err
+    } finally {
+      if (!IS_ANDROID) deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {})
+    }
   },
 
   clearResults: () => set({ results: null }),

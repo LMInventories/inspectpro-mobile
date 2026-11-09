@@ -42,6 +42,7 @@
     "plugins": [
       "./plugins/withKotlinBuildFix",
       "./plugins/withArCoreManifest",
+      "./plugins/withForegroundSyncService",
       [
         "expo-build-properties",
         {
