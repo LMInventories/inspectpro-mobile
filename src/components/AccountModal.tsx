@@ -24,13 +24,16 @@ interface Props {
   visible: boolean
   onClose: () => void
   onOpenAdmin?: () => void
+  onOpenAvailability?: () => void
 }
 
-export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
+export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvailability }: Props) {
   const insets = useSafeAreaInsets()
   const { user, logout, updateDefaults } = useAuthStore()
   const { inspections } = useInspectionStore()
   const isAdmin = user?.role === 'admin'
+  // Same roles the server allows to manage availability
+  const canSetAvailability = user?.role === 'clerk' || user?.role === 'manager' || user?.role === 'admin'
 
   const [openDefaults,  setOpenDefaults]  = useState(false)
   const [openPassword,  setOpenPassword]  = useState(false)
@@ -713,6 +716,11 @@ export default function AccountModal({ visible, onClose, onOpenAdmin }: Props) {
 
         {/* ── Footer ──────────────────────────────────────────────────────── */}
         <View style={[s.footer, { paddingBottom: insets.bottom + 8 }]}>
+          {canSetAvailability && !!onOpenAvailability && (
+            <TouchableOpacity style={s.adminBtn} onPress={onOpenAvailability}>
+              <Text style={s.adminBtnText}>My Availability</Text>
+            </TouchableOpacity>
+          )}
           {isAdmin && !!onOpenAdmin && (
             <TouchableOpacity style={s.adminBtn} onPress={onOpenAdmin}>
               <Text style={s.adminBtnText}>Admin Panel</Text>

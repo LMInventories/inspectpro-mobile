@@ -27,6 +27,7 @@ import ItemGalleryScreen from './src/screens/ItemGalleryScreen'
 import SyncScreen from './src/screens/SyncScreen'
 import CameraScreen from './src/screens/CameraScreen'
 import AdminPanelScreen from './src/screens/AdminPanelScreen'
+import AvailabilityScreen from './src/screens/AvailabilityScreen'
 import FloorPlanScreen from './src/screens/FloorPlanScreen'
 import FloorPlanDrawScreen from './src/screens/FloorPlanDrawScreen'
 import FloorPlanImagesScreen from './src/screens/FloorPlanImagesScreen'
@@ -71,6 +72,7 @@ export type RootStackParamList = {
   }
   Sync: undefined
   AdminPanel: undefined
+  Availability: undefined
 }
 
 const Stack = createStackNavigator<RootStackParamList>()
@@ -227,6 +229,7 @@ export default function App() {
                 <Stack.Screen name="ItemGallery"       component={ItemGalleryScreen} />
                 <Stack.Screen name="Camera"            component={CameraScreen} options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
                 <Stack.Screen name="Sync"              component={SyncScreen} />
+                <Stack.Screen name="Availability"      component={AvailabilityScreen} />
                 <Stack.Screen name="AdminPanel"        component={AdminPanelScreen} />
               </>
             )}

@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios'
 import * as SecureStore from 'expo-secure-store'
 import type { FloorPlanSymbol } from '../utils/floorPlanPolygon'
+import type { AvailabilityPayload } from '../utils/availabilityFormat'
 
 // Set EXPO_PUBLIC_API_URL in your .env or EAS secrets to override.
 export const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://lmsoftware-production.up.railway.app'
@@ -160,6 +161,16 @@ export const api = {
   // Use the long-timeout sync instance for large payloads (photos + audio)
   syncInspection: (id: number, data: any) =>
     httpSync.put(`/api/inspections/${id}`, data),
+
+  // Availability — the signed-in user's own unavailability (clerk/manager/admin).
+  getMyAvailability: () =>
+    http.get('/api/availability/me'),
+
+  createAvailability: (data: AvailabilityPayload) =>
+    http.post('/api/availability/me', data),
+
+  deleteAvailability: (id: number) =>
+    http.delete(`/api/availability/me/${id}`),
 
   // Templates
   getTemplate: (id: number) =>

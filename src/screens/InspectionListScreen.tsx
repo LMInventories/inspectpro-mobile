@@ -308,6 +308,7 @@ export default function InspectionListScreen() {
         visible={showAccount}
         onClose={() => setShowAccount(false)}
         onOpenAdmin={() => { setShowAccount(false); navigation.navigate('AdminPanel') }}
+        onOpenAvailability={() => { setShowAccount(false); navigation.navigate('Availability') }}
       />
     </View>
   )
