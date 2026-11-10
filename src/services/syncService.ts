@@ -502,6 +502,15 @@ export async function syncSingleInspection(
 
     if (typistMode !== null) payload.typist_mode = typistMode
 
+    // The template this device's report_data is keyed to — which may differ from the
+    // server's booking if the clerk used "Change Template" on the phone. The server
+    // maps room data to rooms by section id, so it must know which template that is
+    // (without it, a changed template leaves rooms empty in the emailed report).
+    const localTemplateId = (fresh as any)?.template_id
+    if (inspectionType !== 'heads_up' && typeof localTemplateId === 'number') {
+      payload.template_id = localTemplateId
+    }
+
     if (inspectionType === 'heads_up' && isFinalised) {
       // Heads-Up Reports have no review/typist step — always go straight to
       // complete (and email), whatever the role or local status.

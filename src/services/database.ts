@@ -221,8 +221,9 @@ export function updateInspectionServerStatus(inspectionId: number, status: strin
 /**
  * Override which template an inspection uses locally (e.g. the clerk picked
  * the wrong template on the web and needs to swap it on-device). This is a
- * device-local override only — template_id is never sent back during sync,
- * so it's safe to change without affecting the server-side assignment.
+ * on-device override. syncService sends this template_id with the sync so the
+ * server maps the report's room data using the SAME template (report_data is
+ * keyed by that template's section ids); the server adopts it on sync.
  */
 export function overrideLocalTemplate(inspectionId: number, templateId: number, templateObj: any): void {
   const r = db.getFirstSync<{ data: string }>('SELECT data FROM inspections WHERE id = ?', [inspectionId])
