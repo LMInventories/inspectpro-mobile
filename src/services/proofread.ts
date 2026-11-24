@@ -2,6 +2,9 @@
 //
 // - runProofread()          one /transcribe/proofread call per room, a few in parallel, with progress
 // - applySuggestionToReport() writes an accepted suggestion back into report_data
+// - a per-inspection session (module memory, so it outlives the Review screen being closed or left)
+//   keeps open suggestions, remembers which rooms were already checked and what the clerk dismissed,
+//   so re-opening Review and "Proofread again" only pay for rooms whose text actually changed
 // - queueDecision()/flushDecisions() best-effort log of accept/dismiss decisions to the server, where
 //   they feed the glossary learning agent. Decisions that can't be sent (offline) stay queued and are
 //   retried on the next flush.
@@ -46,10 +49,78 @@ export type ProofreadRoom = {
   }>
 }
 
+export type ProofreadStatus = null | { kind: 'done' | 'offline' | 'partial'; failed: string[] }
+
 export type ProofreadResult = {
   bySection: Record<string, ProofreadSuggestion[]>
   failedRooms: string[]
   offline: boolean
+  checked: Record<string, string>   // sectionKey -> fingerprint of the text last checked successfully
+  calls: number                     // AI calls actually made (0 = nothing had changed)
+}
+
+// What survives between visits to the Review screen for one inspection.
+export type ProofreadSession = {
+  suggestions: Record<string, ProofreadSuggestion[]>
+  status: ProofreadStatus
+  checked: Record<string, string>
+  dismissed: string[]               // suggestionKey()s the clerk dismissed - never show these again
+}
+
+const sessions = new Map<number, ProofreadSession>()
+
+export function getSession(inspectionId: number): ProofreadSession {
+  let s = sessions.get(inspectionId)
+  if (!s) {
+    s = { suggestions: {}, status: null, checked: {}, dismissed: [] }
+    sessions.set(inspectionId, s)
+  }
+  return s
+}
+
+export function clearSession(inspectionId: number) {
+  sessions.delete(inspectionId)
+}
+
+export function suggestionKey(s: Pick<ProofreadSuggestion, 'itemId' | 'subId' | 'field' | 'original' | 'suggested'>): string {
+  return [s.itemId, s.subId || '', s.field, s.original, s.suggested].join('\u0001')
+}
+
+// Cheap, stable fingerprint of what would be sent for a room (djb2) - equal text => no new AI call.
+function fingerprint(payload: unknown): string {
+  const str = JSON.stringify(payload)
+  let h = 5381
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0
+  return `${str.length}:${h}`
+}
+
+// Drop suggestions that no longer apply to the report as it is now: the room or item is gone, or the
+// clerk has since edited the snippet away (so the suggestion can't be applied any more). Everything
+// else - including suggestions the clerk simply hasn't got to yet - is kept.
+export function reconcileSuggestions(
+  rooms: ProofreadRoom[],
+  suggestions: Record<string, ProofreadSuggestion[]>,
+): Record<string, ProofreadSuggestion[]> {
+  const out: Record<string, ProofreadSuggestion[]> = {}
+  for (const [sectionKey, list] of Object.entries(suggestions)) {
+    const room = rooms.find(r => r.sectionKey === sectionKey)
+    if (!room) continue
+    const kept = list.filter(sg => {
+      const item = room.items.find(it => it.itemId === sg.itemId)
+      if (!item) return false
+      let text = ''
+      if (sg.field === 'description') text = item.desc
+      else if (sg.field === 'condition') text = item.cond
+      else {
+        const sub = item.subs.find(x => x.subId === sg.subId)
+        if (!sub) return false
+        text = sg.field === 'sub_label' ? (sub.label === NO_LABEL ? '' : sub.label) : sub.cond
+      }
+      return typeof text === 'string' && text.includes(sg.original)
+    })
+    if (kept.length) out[sectionKey] = kept
+  }
+  return out
 }
 
 const CONCURRENCY = 3
@@ -80,25 +151,43 @@ export async function runProofread(
   inspectionId: number,
   isCheckOut: boolean,
   onProgress: (done: number, total: number, partial: Record<string, ProofreadSuggestion[]>) => void,
+  prior?: { suggestions: Record<string, ProofreadSuggestion[]>; checked: Record<string, string>; dismissed: string[] },
 ): Promise<ProofreadResult> {
-  const jobs = rooms
-    .map(room => ({ room, items: roomPayload(room) }))
+  const dismissed = new Set(prior?.dismissed || [])
+  const all = rooms
+    .map(room => ({ room, items: roomPayload(room), fp: '' }))
     .filter(j => j.items.length > 0)
-  const result: ProofreadResult = { bySection: {}, failedRooms: [], offline: false }
+  all.forEach(j => { j.fp = fingerprint(j.items) })
+  // Rooms whose text is unchanged since they were last checked keep their open suggestions and cost nothing.
+  const jobs = all.filter(j => prior?.checked[j.room.sectionKey] !== j.fp)
+  const result: ProofreadResult = {
+    bySection: {}, failedRooms: [], offline: false,
+    checked: { ...(prior?.checked || {}) }, calls: 0,
+  }
+  // Start from what is already open: unchanged rooms keep it for good, changed rooms keep it until
+  // their fresh result replaces it (so a failed or offline re-check never loses open suggestions).
+  for (const j of all) {
+    const open = prior?.suggestions[j.room.sectionKey]
+    if (open?.length) result.bySection[j.room.sectionKey] = open
+  }
   let done = 0
   let next = 0
-  onProgress(0, jobs.length, result.bySection)
+  onProgress(0, jobs.length, { ...result.bySection })
 
   async function worker() {
     while (!result.offline) {
       const job = jobs[next++]
       if (!job) return
       try {
+        result.calls++
         const res = await api.proofreadRoom({
           inspectionId, roomName: job.room.name, isCheckOut, items: job.items,
         })
-        const suggestions: ProofreadSuggestion[] = res.data?.suggestions || []
+        const suggestions: ProofreadSuggestion[] = (res.data?.suggestions || [])
+          .filter((sg: ProofreadSuggestion) => !dismissed.has(suggestionKey(sg)))
         if (suggestions.length) result.bySection[job.room.sectionKey] = suggestions
+        else delete result.bySection[job.room.sectionKey]
+        result.checked[job.room.sectionKey] = job.fp
       } catch (e: any) {
         if (isOfflineError(e)) result.offline = true
         else result.failedRooms.push(job.room.name)

@@ -15,7 +15,8 @@ import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkF
 import { api } from '../services/api'
 import {
   runProofread, applySuggestionToReport, replaceSnippet, queueDecision, flushDecisions,
-  type ProofreadSuggestion,
+  getSession, clearSession, reconcileSuggestions, suggestionKey,
+  type ProofreadSuggestion, type ProofreadStatus,
 } from '../services/proofread'
 import { SyncProgress } from '../services/syncService'
 import { useSyncStore } from '../stores/syncStore'
@@ -65,8 +66,9 @@ export default function PropertyOverviewScreen() {
   // AI Proofread (Review Report): suggestions keyed by room sectionKey
   const [pfRunning, setPfRunning] = useState(false)
   const [pfProgress, setPfProgress] = useState({ done: 0, total: 0 })
-  const [pfSuggestions, setPfSuggestions] = useState<Record<string, ProofreadSuggestion[]>>({})
-  const [pfStatus, setPfStatus] = useState<null | { kind: 'done' | 'offline' | 'partial'; failed: string[] }>(null)
+  // Seeded from the per-inspection session so suggestions survive leaving and re-opening Review.
+  const [pfSuggestions, setPfSuggestions] = useState<Record<string, ProofreadSuggestion[]>>(() => getSession(inspectionId).suggestions)
+  const [pfStatus, setPfStatus] = useState<ProofreadStatus>(() => getSession(inspectionId).status)
   const [showSignature, setShowSignature] = useState(false)
   // sigStep: 'clerk' | 'tenant'
   const [sigStep, setSigStep] = useState<'clerk' | 'tenant'>('clerk')
@@ -84,6 +86,13 @@ export default function PropertyOverviewScreen() {
   const [hasFloorPlan, setHasFloorPlan] = useState(false)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
+
+  // Write proofread state through to the session (read back when Review is re-opened).
+  useEffect(() => {
+    const sess = getSession(inspectionId)
+    sess.suggestions = pfSuggestions
+    sess.status = pfStatus
+  }, [inspectionId, pfSuggestions, pfStatus])
 
   // Re-checked on focus (not just mount) so returning from the floor plan
   // image screen after adding an image immediately flips "Create Floorplan"
@@ -360,8 +369,9 @@ export default function PropertyOverviewScreen() {
     }
 
     setReviewRooms(rooms)
-    setPfSuggestions({})
-    setPfStatus(null)
+    // Keep earlier proofread suggestions the clerk hasn't actioned. Only drop the ones the report
+    // has since made impossible to apply (room/item gone, or the flagged wording was edited away).
+    setPfSuggestions(prev => reconcileSuggestions(rooms, prev))
     setShowReview(true)
   }
 
@@ -385,16 +395,22 @@ export default function PropertyOverviewScreen() {
   async function handleProofread() {
     if (pfRunning) return
     setPfRunning(true)
-    setPfStatus(null)
-    setPfSuggestions({})
     flushDecisions()   // retry any accept/dismiss decisions that couldn't be sent earlier
     try {
+      const sess = getSession(inspectionId)
+      // Only rooms whose text changed since they were last checked make an AI call; open suggestions
+      // for everything else are kept as they are.
       const res = await runProofread(
         reviewRooms, inspectionId, inspection.inspection_type === 'check_out',
         (done, total, partial) => { setPfProgress({ done, total }); setPfSuggestions(partial) },
+        { suggestions: reconcileSuggestions(reviewRooms, pfSuggestions), checked: sess.checked, dismissed: sess.dismissed },
       )
+      sess.checked = res.checked
       setPfSuggestions(res.bySection)
       setPfStatus({ kind: res.offline ? 'offline' : res.failedRooms.length ? 'partial' : 'done', failed: res.failedRooms })
+      if (res.calls === 0 && !res.offline) {
+        Alert.alert('Nothing new to check', 'No room has changed since the last proofread, so no new AI check was needed. Any suggestions you haven\'t actioned are still listed.')
+      }
     } finally {
       setPfRunning(false)
     }
@@ -442,6 +458,7 @@ export default function PropertyOverviewScreen() {
   }
 
   function dismissSuggestion(room: ReviewRoom, s: ProofreadSuggestion) {
+    getSession(inspectionId).dismissed.push(suggestionKey(s))   // don't offer this exact fix again
     removeSuggestion(room.sectionKey, s.id)
     logDecision(room, s, 'dismissed')
   }
@@ -556,6 +573,7 @@ export default function PropertyOverviewScreen() {
     setFinalising(true)
     try {
       markFinalised(inspectionId)
+      clearSession(inspectionId)   // proofread is done with once the report is finalised
       await loadInspection(inspectionId)
       Alert.alert(
         'Finalised ✓',
