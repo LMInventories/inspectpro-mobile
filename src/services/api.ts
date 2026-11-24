@@ -239,6 +239,25 @@ export const api = {
   }) =>
     httpAi.post('/api/transcribe/condition-summary', data),
 
+  // AI Proofread — one room's text; returns snippet-level suggestions
+  proofreadRoom: (data: {
+    inspectionId: number
+    roomName: string
+    isCheckOut?: boolean
+    items: Array<{
+      id: string
+      name: string
+      description: string
+      condition: string
+      subs: Array<{ id: string; description: string; condition: string }>
+    }>
+  }) =>
+    httpAi.post('/api/transcribe/proofread', data),
+
+  // Accept/dismiss decisions on proofread suggestions (feeds the learning pipeline)
+  logProofreadDecisions: (data: { inspectionId: number; decisions: any[] }) =>
+    http.post('/api/transcribe/proofread/decisions', data),
+
   checkAiStatus: () =>
     http.get('/api/ai/status'),
 

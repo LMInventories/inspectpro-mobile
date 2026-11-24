@@ -13,6 +13,10 @@ import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode, updateLocalCameraOption, getLocalInspection } from '../services/database'
 import { api } from '../services/api'
+import {
+  runProofread, applySuggestionToReport, replaceSnippet, queueDecision, flushDecisions,
+  type ProofreadSuggestion,
+} from '../services/proofread'
 import { SyncProgress } from '../services/syncService'
 import { useSyncStore } from '../stores/syncStore'
 import { useAuthStore } from '../stores/authStore'
@@ -58,6 +62,11 @@ export default function PropertyOverviewScreen() {
   const [localSyncing, setLocalSyncing] = useState(false)
   const [showReview, setShowReview] = useState(false)
   const [reviewRooms, setReviewRooms] = useState<ReviewRoom[]>([])
+  // AI Proofread (Review Report): suggestions keyed by room sectionKey
+  const [pfRunning, setPfRunning] = useState(false)
+  const [pfProgress, setPfProgress] = useState({ done: 0, total: 0 })
+  const [pfSuggestions, setPfSuggestions] = useState<Record<string, ProofreadSuggestion[]>>({})
+  const [pfStatus, setPfStatus] = useState<null | { kind: 'done' | 'offline' | 'partial'; failed: string[] }>(null)
   const [showSignature, setShowSignature] = useState(false)
   // sigStep: 'clerk' | 'tenant'
   const [sigStep, setSigStep] = useState<'clerk' | 'tenant'>('clerk')
@@ -351,6 +360,8 @@ export default function PropertyOverviewScreen() {
     }
 
     setReviewRooms(rooms)
+    setPfSuggestions({})
+    setPfStatus(null)
     setShowReview(true)
   }
 
@@ -368,6 +379,157 @@ export default function PropertyOverviewScreen() {
       focusItemKey: itemId,
       focusSubId: subId,
     })
+  }
+
+  // ── AI Proofread ────────────────────────────────────────────────────────────
+  async function handleProofread() {
+    if (pfRunning) return
+    setPfRunning(true)
+    setPfStatus(null)
+    setPfSuggestions({})
+    flushDecisions()   // retry any accept/dismiss decisions that couldn't be sent earlier
+    try {
+      const res = await runProofread(
+        reviewRooms, inspectionId, inspection.inspection_type === 'check_out',
+        (done, total, partial) => { setPfProgress({ done, total }); setPfSuggestions(partial) },
+      )
+      setPfSuggestions(res.bySection)
+      setPfStatus({ kind: res.offline ? 'offline' : res.failedRooms.length ? 'partial' : 'done', failed: res.failedRooms })
+    } finally {
+      setPfRunning(false)
+    }
+  }
+
+  function removeSuggestion(sectionKey: string, id: string) {
+    setPfSuggestions(prev => ({ ...prev, [sectionKey]: (prev[sectionKey] || []).filter(x => x.id !== id) }))
+  }
+
+  function logDecision(room: ReviewRoom, s: ProofreadSuggestion, decision: 'accepted' | 'dismissed') {
+    queueDecision(inspectionId, {
+      room: room.name, itemName: s.itemName, field: s.field, kind: s.kind,
+      original: s.original, suggested: s.suggested, decision,
+    })
+  }
+
+  function acceptSuggestion(room: ReviewRoom, s: ProofreadSuggestion) {
+    // Read the freshest stored report so several quick accepts never overwrite each other.
+    const fresh = getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    const isCheckOut = inspection.inspection_type === 'check_out'
+    if (!applySuggestionToReport(rd, room.sectionKey, s, isCheckOut)) {
+      removeSuggestion(room.sectionKey, s.id)
+      Alert.alert('Text has changed', 'That wording is no longer in the report. Tap the item to edit it manually.')
+      return
+    }
+    setReportData(inspectionId, rd)
+    // Mirror the change in the on-screen review copy
+    setReviewRooms(prev => prev.map(r => r.sectionKey !== room.sectionKey ? r : {
+      ...r,
+      items: r.items.map(it => {
+        if (it.itemId !== s.itemId) return it
+        if (s.field === 'description') return { ...it, desc: replaceSnippet(it.desc, s.original, s.suggested) ?? it.desc }
+        if (s.field === 'condition') return { ...it, cond: replaceSnippet(it.cond, s.original, s.suggested) ?? it.cond }
+        return {
+          ...it,
+          subs: it.subs.map(sub => sub.subId !== s.subId ? sub : s.field === 'sub_label'
+            ? { ...sub, label: replaceSnippet(sub.label, s.original, s.suggested) ?? sub.label }
+            : { ...sub, cond: replaceSnippet(sub.cond, s.original, s.suggested) ?? sub.cond }),
+        }
+      }),
+    }))
+    removeSuggestion(room.sectionKey, s.id)
+    logDecision(room, s, 'accepted')
+  }
+
+  function dismissSuggestion(room: ReviewRoom, s: ProofreadSuggestion) {
+    removeSuggestion(room.sectionKey, s.id)
+    logDecision(room, s, 'dismissed')
+  }
+
+  // Finalising is never blocked — but if proofread couldn't run, or suggestions are still
+  // open, say so first so the clerk can choose.
+  function handleReviewFinalise() {
+    const open = Object.values(pfSuggestions).reduce((n, l) => n + l.length, 0)
+    const go = () => { setShowReview(false); openSignatureFlow() }
+    if (pfStatus?.kind === 'offline') {
+      Alert.alert(
+        'Proofread needs a connection',
+        "This report hasn't been proofread because there's no connection. You can finalise now, or try again later when you have signal.",
+        [{ text: 'Back', style: 'cancel' }, { text: 'Finalise anyway', onPress: go }],
+      )
+    } else if (open > 0) {
+      Alert.alert(
+        `${open} proofread suggestion${open === 1 ? '' : 's'} not reviewed`,
+        'You can finalise now, or go back to accept or dismiss them.',
+        [{ text: 'Back', style: 'cancel' }, { text: 'Finalise anyway', onPress: go }],
+      )
+    } else {
+      go()
+    }
+  }
+
+  function renderSuggestions(room: ReviewRoom, item: ReviewItem) {
+    const list = (pfSuggestions[room.sectionKey] || []).filter(s => s.itemId === item.itemId)
+    if (!list.length) return null
+    const FIELD: Record<string, string> = { description: 'Description', condition: 'Condition', sub_label: 'Sub-item', sub_cond: 'Sub-item condition' }
+    return (
+      <View style={rvStyles.sugBlock}>
+        {list.map(s => (
+          <View key={s.id} style={rvStyles.sugCard}>
+            <Text style={rvStyles.sugMeta}>✨ {s.kind === 'mistranscription' ? 'Possible mis-transcription' : s.kind[0].toUpperCase() + s.kind.slice(1)} · {FIELD[s.field]}</Text>
+            <Text style={rvStyles.sugChange}>
+              <Text style={rvStyles.sugOld}>{s.original}</Text>{'  →  '}<Text style={rvStyles.sugNew}>{s.suggested}</Text>
+            </Text>
+            {!!s.reason && <Text style={rvStyles.sugReason}>{s.reason}</Text>}
+            <View style={rvStyles.sugActions}>
+              <TouchableOpacity style={rvStyles.sugAccept} onPress={() => acceptSuggestion(room, s)}>
+                <Text style={rvStyles.sugAcceptText}>Accept</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={rvStyles.sugDismiss} onPress={() => dismissSuggestion(room, s)}>
+                <Text style={rvStyles.sugDismissText}>Dismiss</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+      </View>
+    )
+  }
+
+  function renderProofreadBar() {
+    const emptyCount = reviewRooms.reduce((n, r) => n + r.items.reduce(
+      (m, it) => m + (it.isEmpty && !it.subs.length ? 1 : 0) + it.subs.filter(sb => !sb.cond).length, 0), 0)
+    const open = Object.values(pfSuggestions).reduce((n, l) => n + l.length, 0)
+    const pct = pfProgress.total ? Math.round((pfProgress.done / pfProgress.total) * 100) : 0
+    return (
+      <View style={rvStyles.pfBar}>
+        {emptyCount > 0 && (
+          <Text style={rvStyles.pfEmpty}>⚠ {emptyCount} item{emptyCount === 1 ? '' : 's'} not filled</Text>
+        )}
+        <TouchableOpacity
+          style={[rvStyles.pfBtn, (pfRunning || reviewRooms.length === 0) && { opacity: 0.6 }]}
+          disabled={pfRunning || reviewRooms.length === 0}
+          onPress={handleProofread}
+        >
+          {pfRunning
+            ? <><ActivityIndicator size="small" color={colors.primary} /><Text style={rvStyles.pfBtnText}>  Checking rooms {pfProgress.done}/{pfProgress.total}…</Text></>
+            : <Text style={rvStyles.pfBtnText}>✨ {pfStatus ? 'Proofread again' : 'AI Proofread'}</Text>}
+        </TouchableOpacity>
+        {pfRunning && (
+          <View style={rvStyles.pfTrack}><View style={[rvStyles.pfFill, { width: `${pct}%` }]} /></View>
+        )}
+        {!pfRunning && pfStatus?.kind === 'offline' && (
+          <Text style={rvStyles.pfNote}>Proofread needs a connection. You can still finalise, or try again later when you have signal.</Text>
+        )}
+        {!pfRunning && pfStatus?.kind === 'partial' && (
+          <Text style={rvStyles.pfNote}>Couldn't check {pfStatus.failed.join(', ')} — tap Proofread again to retry.</Text>
+        )}
+        {!pfRunning && pfStatus && pfStatus.kind !== 'offline' && (
+          <Text style={rvStyles.pfNote}>
+            {open > 0 ? `${open} suggestion${open === 1 ? '' : 's'} to review below.` : pfStatus.kind === 'done' ? '✓ No issues found.' : ''}
+          </Text>
+        )}
+      </View>
+    )
   }
 
   function openSignatureFlow() {
@@ -844,6 +1006,7 @@ export default function PropertyOverviewScreen() {
           <View style={rvStyles.header}>
             <Text style={rvStyles.title}>Review Report</Text>
             <Text style={rvStyles.subtitle}>Check all items and photos before finalising. Highlighted items are unfilled.</Text>
+            {renderProofreadBar()}
           </View>
           <ScrollView style={rvStyles.scroll} contentContainerStyle={rvStyles.scrollContent}>
             {reviewRooms.length === 0 ? (
@@ -908,6 +1071,7 @@ export default function PropertyOverviewScreen() {
                             )}
                           </>
                       }
+                      {renderSuggestions(room, item)}
                       {item.photos.length > 0 && (
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={rvStyles.photoStrip} contentContainerStyle={rvStyles.photoStripContent}>
                           {item.photos.map((uri, pi) => (
@@ -934,7 +1098,7 @@ export default function PropertyOverviewScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={rvStyles.btnGo}
-              onPress={() => { setShowReview(false); openSignatureFlow() }}
+              onPress={handleReviewFinalise}
             >
               <Text style={rvStyles.btnGoText}>Looks Good — Finalise ✓</Text>
             </TouchableOpacity>
@@ -1391,4 +1555,31 @@ const rvStyles = StyleSheet.create({
     alignItems: 'center',
   },
   btnGoText: { fontSize: font.lg, fontWeight: '700', color: '#fff' },
+  // AI Proofread
+  pfBar:      { marginTop: spacing.sm, gap: 6 },
+  pfEmpty:    { fontSize: font.sm, fontWeight: '700', color: colors.danger },
+  pfBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, borderRadius: radius.md,
+    borderWidth: 1.5, borderColor: colors.primary, backgroundColor: colors.background,
+  },
+  pfBtnText:  { fontSize: font.sm, fontWeight: '700', color: colors.primary },
+  pfTrack:    { height: 4, borderRadius: 2, backgroundColor: colors.border, overflow: 'hidden' },
+  pfFill:     { height: 4, backgroundColor: colors.primary },
+  pfNote:     { fontSize: font.sm, color: colors.textMid, lineHeight: 18 },
+  sugBlock:   { marginTop: spacing.sm, gap: 6 },
+  sugCard: {
+    padding: spacing.sm, borderRadius: radius.md, gap: 3,
+    backgroundColor: '#f4f0ff', borderWidth: 1, borderColor: '#d9ccff',
+  },
+  sugMeta:    { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4 },
+  sugChange:  { fontSize: font.sm, color: colors.text, lineHeight: 20 },
+  sugOld:     { color: colors.danger, textDecorationLine: 'line-through' },
+  sugNew:     { color: colors.success, fontWeight: '700' },
+  sugReason:  { fontSize: font.xs, color: colors.textLight },
+  sugActions: { flexDirection: 'row', gap: spacing.sm, marginTop: 4 },
+  sugAccept:  { paddingVertical: 7, paddingHorizontal: 16, borderRadius: radius.md, backgroundColor: colors.primary },
+  sugAcceptText:  { fontSize: font.sm, fontWeight: '700', color: '#fff' },
+  sugDismiss: { paddingVertical: 7, paddingHorizontal: 16, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderDark, backgroundColor: colors.background },
+  sugDismissText: { fontSize: font.sm, fontWeight: '600', color: colors.textMid },
 })
