@@ -229,20 +229,22 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const SIDEBAR_CLEARANCE = 40
   const rightOffset = DICTATION_SIDEBAR_W + Math.max(insets.right, 0) + SIDEBAR_CLEARANCE
 
-  // Initialise at bottom-right, clear of the dictation sidebar
-  const position = useRef(new Animated.ValueXY({
+  // Position lives in React STATE, not an Animated value. With an Animated value the dragged
+  // position was never known to React, so any re-render (e.g. every zoom-slider tick) let the
+  // screen re-apply the last position React had committed - the initial one - and the widget
+  // snapped back near the top-left. State means every commit carries the current position.
+  // Initialised at bottom-right, clear of the dictation sidebar.
+  const [pos, setPos] = useState(() => ({
     x: screenW - CONTAINER_W - rightOffset,
     y: screenH - CONTAINER_H - Math.max(insets.bottom, 16),
-  })).current
-
-  // Position via layout left/top, not a transform: a camera SurfaceView does not follow an ancestor's
-  // transform reliably (it can snap back to the un-transformed top-left). The style object is created
-  // once so re-renders (every zoom-slider tick) never re-attach the Animated nodes.
-  const posStyle = useRef({ left: position.x, top: position.y }).current
+  }))
+  const posRef = useRef(pos)
+  posRef.current = pos
+  const dragStart = useRef(pos)
 
   const panResponder = useRef(
     PanResponder.create({
-      // Don't steal taps — only activate on clear move
+      // Don't steal taps - only activate on clear move
       onStartShouldSetPanResponder: () => false,
       onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_, g) =>
@@ -250,30 +252,16 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
       onMoveShouldSetPanResponderCapture: (_, g) =>
         Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8,
       onPanResponderGrant: () => {
-        position.setOffset({
-          x: (position.x as any)._value,
-          y: (position.y as any)._value,
-        })
-        position.setValue({ x: 0, y: 0 })
+        dragStart.current = posRef.current
       },
-      onPanResponderMove: Animated.event(
-        [null, { dx: position.x, dy: position.y }],
-        { useNativeDriver: false }
-      ),
-      onPanResponderRelease: () => {
-        position.flattenOffset()
-        // Clamp so the widget stays fully on-screen
-        const rawX = (position.x as any)._value
-        const rawY = (position.y as any)._value
-        const cX = Math.max(0, Math.min(rawX, screenWRef.current - CONTAINER_W))
-        const cY = Math.max(0, Math.min(rawY, screenHRef.current - CONTAINER_H))
-        if (cX !== rawX || cY !== rawY) {
-          Animated.spring(position, {
-            toValue: { x: cX, y: cY },
-            useNativeDriver: false,
-            bounciness: 4,
-          }).start()
-        }
+      // Clamped as it moves so the widget always stays fully on-screen
+      onPanResponderMove: (_, g) => {
+        const maxX = Math.max(0, screenWRef.current - CONTAINER_W)
+        const maxY = Math.max(0, screenHRef.current - CONTAINER_H)
+        setPos({
+          x: Math.max(0, Math.min(dragStart.current.x + g.dx, maxX)),
+          y: Math.max(0, Math.min(dragStart.current.y + g.dy, maxY)),
+        })
       },
     })
   ).current
@@ -282,7 +270,7 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   if (!hasPermission || !activeDevice) {
     return (
       <Animated.View
-        style={[styles.noPerm, posStyle]}
+        style={[styles.noPerm, { left: pos.x, top: pos.y }]}
         {...panResponder.panHandlers}
       >
         <Text style={styles.noPermText}>
@@ -294,7 +282,7 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
 
   return (
     <Animated.View
-      style={[styles.container, posStyle]}
+      style={[styles.container, { left: pos.x, top: pos.y }]}
       {...panResponder.panHandlers}
     >
       {/* Live preview. While peeking it is hidden, but its slot stays so the buttons don't move. */}
