@@ -8,7 +8,9 @@
  * its right, with the flash toggle positioned directly below the shutter.
  * The whole widget is draggable — long-press-move or move-threshold drag repositions it.
  *
- * Zoom is selected via 0.6×/1×/2×/5× buttons on the right edge of the preview.
+ * Zoom is a sliding scale (0.6x-5x in 0.1x steps, speed-sensitive) down the right edge of the preview.
+ * The preview can be made translucent (user setting) so the clerk can read the Check In report
+ * lines behind it while taking photos; the shutter, flash and zoom controls stay fully opaque.
  */
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
 import {
@@ -23,6 +25,8 @@ import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
 import { useToastStore } from '../stores/toastStore'
+import ZoomSlider from './ZoomSlider'
+import { zoomRange, xToLens, lensToX, type LensConfig, type LensChoice } from '../utils/zoomScale'
 
 // Preview dimensions — 50% larger than before
 const PREVIEW_W = 462
@@ -38,23 +42,23 @@ const SHUTTER_MARGIN = 14
 const CONTAINER_W = PREVIEW_W + SHUTTER_MARGIN + SHUTTER_SIZE
 const CONTAINER_H = PREVIEW_H
 
-interface ZoomPreset {
-  zoom: number
-  label: string
-  useUltraWide: boolean
-}
+// Vertical zoom slider track (leaves room for the value badge above it)
+const ZOOM_TRACK = 230
 
 interface Props {
   inspectionId: number
   onCapture: (uri: string, fallback?: boolean) => void
+  /** 0.2-1. Below 1 the live preview is see-through (default 1 = solid). */
+  previewOpacity?: number
 }
 
-function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
+function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: Props) {
   const { width: screenW, height: screenH } = useWindowDimensions()
   const isFocused    = useIsFocused()
   const insets       = useSafeAreaInsets()
   const { hasPermission, requestPermission } = useCameraPermission()
   const cameraRef    = useRef<Camera>(null)
+  const translucent  = previewOpacity < 0.99
   const capturingRef = useRef(false)
   const [cameraKey, setCameraKey] = useState(0)
 
@@ -104,63 +108,42 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const hasZoomUltraWide =
     !!mainDevice && mainDevice.minZoom < mainDevice.neutralZoom * 0.85
 
-  // ── Zoom presets ───────────────────────────────────────────────────────────
-  const zoomPresets = useMemo((): ZoomPreset[] => {
-    if (!mainDevice) return [{ zoom: 1, label: '1×', useUltraWide: false }]
-    const presets: ZoomPreset[] = []
-
-    if (hasSeparateUltraWide || hasZoomUltraWide) {
-      presets.push({
-        zoom:         hasSeparateUltraWide
-                        ? (ultraWideDevice?.neutralZoom ?? 1)
-                        : mainDevice.minZoom,
-        label:        '0.6×',
-        useUltraWide: true,
-      })
+  // ── Zoom (sliding scale) ───────────────────────────────────────────────────
+  const lensCfg = useMemo((): LensConfig | null => {
+    if (!mainDevice) return null
+    return {
+      main: { neutral: mainDevice.neutralZoom, min: mainDevice.minZoom, max: mainDevice.maxZoom },
+      ultra: hasSeparateUltraWide && ultraWideDevice
+        ? { neutral: ultraWideDevice.neutralZoom, min: ultraWideDevice.minZoom, max: ultraWideDevice.maxZoom }
+        : null,
+      zoomUltra: hasZoomUltraWide,
     }
-
-    presets.push({ zoom: mainDevice.neutralZoom, label: '1×', useUltraWide: false })
-
-    if (mainDevice.neutralZoom * 2 <= mainDevice.maxZoom) {
-      presets.push({ zoom: mainDevice.neutralZoom * 2, label: '2×', useUltraWide: false })
-    }
-
-    if (mainDevice.neutralZoom * 5 <= mainDevice.maxZoom) {
-      presets.push({ zoom: mainDevice.neutralZoom * 5, label: '5×', useUltraWide: false })
-    }
-
-    return presets
   }, [mainDevice?.id, ultraWideDevice?.id, hasSeparateUltraWide, hasZoomUltraWide])
 
-  const [zoomIdx, setZoomIdx] = useState(0)
+  const range = lensCfg ? zoomRange(lensCfg) : { min: 1, max: 1 }
+  const [lens, setLens] = useState<LensChoice>({ ultra: false, zoom: mainDevice?.neutralZoom ?? 1 })
   const [flashMode, setFlashMode] = useState<'off' | 'on' | 'auto'>('off')
 
   function cycleFlash() {
     setFlashMode(m => m === 'off' ? 'on' : m === 'on' ? 'auto' : 'off')
   }
 
+  // Back to 1x whenever the main camera changes
   useEffect(() => {
-    const idx = zoomPresets.findIndex(p => p.label === '1×')
-    setZoomIdx(idx >= 0 ? idx : 0)
+    if (mainDevice) setLens({ ultra: false, zoom: mainDevice.neutralZoom })
   }, [mainDevice?.id])
 
-  const currentPreset = zoomPresets[Math.min(zoomIdx, zoomPresets.length - 1)]
-
   const activeDevice: CameraDevice | undefined =
-    currentPreset.useUltraWide && hasSeparateUltraWide ? ultraWideDevice : mainDevice
+    lens.ultra && hasSeparateUltraWide ? ultraWideDevice : mainDevice
+  const activeZoom = lens.zoom
+  const zoomX = lensCfg ? lensToX(lens, lensCfg) : 1
 
-  const activeZoom =
-    currentPreset.useUltraWide && hasSeparateUltraWide
-      ? (ultraWideDevice?.neutralZoom ?? 1)
-      : currentPreset.zoom
-
-  function selectZoom(idx: number) {
-    const nextPreset = zoomPresets[idx]
-    const switchingDevice =
-      (nextPreset.useUltraWide && hasSeparateUltraWide) !==
-      (currentPreset.useUltraWide && hasSeparateUltraWide)
-    if (switchingDevice) setCameraKey(k => k + 1)
-    setZoomIdx(idx)
+  function setZoomX(x: number) {
+    if (!lensCfg) return
+    const next = xToLens(x, lensCfg)
+    // Crossing between the separate ultra-wide and main cameras swaps the device: remount the view.
+    if (next.ultra !== lens.ultra) setCameraKey(k => k + 1)
+    setLens(next)
   }
 
   // ── Visual feedback ────────────────────────────────────────────────────────
@@ -309,41 +292,39 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
       style={[styles.container, { transform: position.getTranslateTransform() }]}
       {...panResponder.panHandlers}
     >
-      {/* Live preview */}
-      <View style={styles.preview}>
-        <Camera
-          key={cameraKey}
-          ref={cameraRef}
-          style={StyleSheet.absoluteFill}
-          device={activeDevice}
-          isActive={isFocused}
-          photo
-          outputOrientation="device"
-          zoom={activeZoom}
-        />
-        <Animated.View
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
-        />
-
-        {/* Zoom buttons — right edge of preview, highest zoom at top */}
-        <View style={styles.zoomBtns}>
-          {[...zoomPresets].reverse().map((preset) => {
-            const idx = zoomPresets.indexOf(preset)
-            return (
-              <TouchableOpacity
-                key={preset.label}
-                style={[styles.zoomBtn, zoomIdx === idx && styles.zoomBtnActive]}
-                onPress={() => selectZoom(idx)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.zoomBtnText, zoomIdx === idx && styles.zoomBtnTextActive]}>
-                  {preset.label}
-                </Text>
-              </TouchableOpacity>
-            )
-          })}
+      {/* Live preview. Only this layer is translucent; the zoom slider sits above it, opaque. */}
+      <View style={[styles.previewFrame, translucent && styles.previewFrameFlat]}>
+        <View style={[styles.preview, translucent && styles.previewFlat, { opacity: previewOpacity }]}>
+          <Camera
+            key={`${cameraKey}-${translucent ? 't' : 's'}`}
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            device={activeDevice}
+            isActive={isFocused}
+            photo
+            outputOrientation="device"
+            zoom={activeZoom}
+            // A SurfaceView ignores view opacity on Android; a TextureView honours it.
+            androidPreviewViewType={translucent ? 'texture-view' : 'surface-view'}
+          />
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
+          />
         </View>
+
+        {/* Zoom slider - right edge of the preview, drag up to zoom in */}
+        {range.max > range.min && (
+          <ZoomSlider
+            axis="vertical"
+            value={zoomX}
+            min={range.min}
+            max={range.max}
+            length={ZOOM_TRACK}
+            onChange={setZoomX}
+            style={styles.zoomSlider}
+          />
+        )}
       </View>
 
       {/* Shutter + flash toggle — right of preview. Shutter is centred against the
@@ -386,6 +367,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
+  previewFrame: {
+    width: PREVIEW_W,
+    height: PREVIEW_H,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 10,
+    borderRadius: 10,
+  },
+  // A shadow behind a see-through preview would show as a dark box, so drop it when translucent.
+  previewFrameFlat: { shadowOpacity: 0, elevation: 0 },
+  zoomSlider: { position: 'absolute', right: 2, top: 0, bottom: 0, justifyContent: 'center' },
   preview: {
     width: PREVIEW_W,
     height: PREVIEW_H,
@@ -394,12 +388,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.25)',
     backgroundColor: '#000',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 10,
   },
+  previewFlat: { borderColor: 'rgba(255,255,255,0.5)' },
 
   shutterArea: {
     width: SHUTTER_SIZE + SHUTTER_MARGIN,
@@ -468,35 +458,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   flashBtnTextActive: {
-    color: '#111',
-  },
-
-  zoomBtns: {
-    position: 'absolute',
-    right: 7,
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    gap: 8,
-  },
-  zoomBtn: {
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    alignItems: 'center',
-    minWidth: 42,
-  },
-  zoomBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.85)',
-  },
-  zoomBtnText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  zoomBtnTextActive: {
     color: '#111',
   },
 

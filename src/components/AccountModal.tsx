@@ -109,6 +109,8 @@ export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvai
 
   const [defaultsTypist, setDefaultsTypist] = useState<string>(user?.typist_mode ?? '')
   const [defaultsCamera, setDefaultsCamera] = useState<string>(user?.camera_option ?? 'perItem')
+  // Floating camera preview opacity, % (100 = solid)
+  const [defaultsOpacity, setDefaultsOpacity] = useState<number>(user?.floating_camera_opacity ?? 100)
   const [defaultsSaving, setDefaultsSaving] = useState(false)
   const [defaultsSaved,  setDefaultsSaved]  = useState(false)
 
@@ -173,7 +175,7 @@ export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvai
     setDefaultsSaving(true)
     setDefaultsSaved(false)
     try {
-      await updateDefaults(defaultsTypist || null, defaultsCamera || null)
+      await updateDefaults(defaultsTypist || null, defaultsCamera || null, defaultsOpacity >= 100 ? null : defaultsOpacity)
       setDefaultsSaved(true)
       setTimeout(() => setDefaultsSaved(false), 2500)
     } catch (err: any) {
@@ -530,6 +532,34 @@ export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvai
                 </TouchableOpacity>
               )
             })}
+
+            <Text style={[s.defaultsFieldLabel, { marginTop: spacing.sm }]}>Floating Camera Transparency</Text>
+            <Text style={s.defaultsRowSub}>
+              Makes the floating camera see-through so you can read the Check In report lines behind it while taking photos.
+            </Text>
+            <View style={s.opacityRow}>
+              {(
+                [
+                  { value: 100, label: 'Solid' },
+                  { value: 75,  label: '25%' },
+                  { value: 50,  label: '50%' },
+                  { value: 30,  label: '70%' },
+                ] as const
+              ).map(opt => {
+                const active = defaultsOpacity === opt.value
+                return (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[s.opacityChip, active && s.opacityChipActive]}
+                    onPress={() => setDefaultsOpacity(opt.value)}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={[s.opacityChipText, active && s.opacityChipTextActive]}>{opt.label}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+            <Text style={s.defaultsRowSub}>Percentage = how see-through. Applies to all your inspections once saved.</Text>
 
             <TouchableOpacity
               style={[s.actionBtn, s.actionBtnPrimary, defaultsSaving && s.actionBtnDisabled, { marginTop: spacing.xs }]}
@@ -921,6 +951,11 @@ const s = StyleSheet.create({
   defaultsRowLabel:       { fontSize: font.sm, fontWeight: '600', color: colors.text },
   defaultsRowLabelActive: { color: colors.primary },
   defaultsRowSub:         { fontSize: font.xs, color: colors.textMid, marginTop: 1 },
+  opacityRow:             { flexDirection: 'row', gap: 8, marginVertical: spacing.xs },
+  opacityChip:            { flex: 1, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: 'center' },
+  opacityChipActive:      { borderColor: colors.primary, backgroundColor: colors.primaryLight },
+  opacityChipText:        { fontSize: font.sm, fontWeight: '600', color: colors.textMid },
+  opacityChipTextActive:  { color: colors.primary, fontWeight: '800' },
   defaultsRadio: {
     width: 18, height: 18, borderRadius: 9,
     borderWidth: 2, borderColor: colors.borderDark,

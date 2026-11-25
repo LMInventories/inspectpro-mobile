@@ -39,6 +39,10 @@ import SwipeableRow from '../components/SwipeableRow'
 import { useToastStore } from '../stores/toastStore'
 import { mimeTypeForUri } from '../utils/audioMime'
 import { pickAndImportAudioClip } from '../services/importAudioClip'
+import {
+  fetchActionSuggestions, applyActionTag, untaggedLines, queueActionDecision, flushActionDecisions,
+  type ActionTagSuggestion, type ActionTagItemInput,
+} from '../services/actionTags'
 
 type Nav   = StackNavigationProp<RootStackParamList, 'RoomInspection'>
 type Route = RouteProp<RootStackParamList, 'RoomInspection'>
@@ -155,6 +159,10 @@ export default function RoomInspectionScreen() {
     workingActions: any[]
     conditionLines: string[]
   } | null>(null)
+  // AI action tags: end-of-room review sheet. Each row is a suggestion plus the clerk's working edits.
+  type TagRow = ActionTagSuggestion & { curAction: string; curResp: string; editing: boolean }
+  const [tagSheet, setTagSheet]     = useState<TagRow[] | null>(null)
+  const [tagLoading, setTagLoading] = useState(false)
 
   // Landscape detection — header scrolls with content in landscape to maximise
   // the vertical space available when the keyboard is showing.
@@ -3003,6 +3011,90 @@ export default function RoomInspectionScreen() {
     })
   }
 
+  // ── AI action tags (check-out, end of room) ───────────────────────────────
+  // Gathers every condition line in this room that has no action yet, asks the server for a
+  // suggested action + responsibility per line, and opens a sheet where the clerk accepts,
+  // edits or declines each one. Nothing is written to the report until it is accepted.
+  async function handleSuggestActionTags() {
+    if (tagLoading) return
+    const inputs: ActionTagItemInput[] = []
+    for (const item of items) {
+      const id = String(item.id)
+      const name = item.label || item.name || ''
+      const lines = untaggedLines(getField(id, 'checkOutCondition'), getItemActions(id))
+      if (lines.length) {
+        const src = sourceReportData?.[sectionKey]?.[id]
+        const checkIn = [src?.description, src?.condition].filter(Boolean).join(' — ')
+        inputs.push({ id, name, lines, checkIn })
+      }
+      for (const sub of getSubs(id)) {
+        if (!sub?._sid) continue
+        const subLines = untaggedLines(sub.checkOutCondition || '', getItemActions(sub._sid))
+        if (subLines.length) inputs.push({ id: String(sub._sid), name: `${name} — ${sub.description || 'Sub-item'}`, lines: subLines })
+      }
+    }
+    for (const ci of getCustomItems()) {
+      const lines = untaggedLines(ci.checkOutCondition || '', getItemActions(ci._cid))
+      if (lines.length) inputs.push({ id: String(ci._cid), name: 'Additional Item', lines, kind: 'additional' })
+    }
+    if (inputs.length === 0) {
+      useToastStore.getState().showToast('No untagged condition lines in this room.', 'info')
+      return
+    }
+    setTagLoading(true)
+    flushActionDecisions()   // retry any decisions that couldn't be sent earlier
+    try {
+      const suggestions = await fetchActionSuggestions(inspectionId, sectionName, inputs)
+      if (suggestions.length === 0) {
+        Alert.alert('No suggestions', 'The AI had no suggestions for these lines. You can still tag them with each item\'s Actions button.')
+        return
+      }
+      setTagSheet(suggestions.map(s => ({ ...s, curAction: s.actionId, curResp: s.responsibility, editing: false })))
+    } catch (e: any) {
+      if (!e?.response) Alert.alert('Needs a connection', 'AI suggestions need a connection. You can still tag lines by hand, or try again with signal.')
+      else Alert.alert('Suggestions unavailable', e.response?.data?.error || 'Please try again in a moment.')
+    } finally {
+      setTagLoading(false)
+    }
+  }
+
+  function updateTagRow(id: string, patch: Partial<TagRow>) {
+    setTagSheet(prev => prev ? prev.map(r => r.id === id ? { ...r, ...patch } : r) : prev)
+  }
+
+  function closeTagRows(ids: string[]) {
+    setTagSheet(prev => {
+      const next = (prev || []).filter(r => !ids.includes(r.id))
+      return next.length ? next : null
+    })
+  }
+
+  async function commitTagRows(rows: TagRow[]) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    for (const r of rows) {
+      applyActionTag(rd, sectionKey, r.itemId, r.line, r.curAction, r.curResp)
+      queueActionDecision(inspectionId, {
+        room: sectionName, itemName: r.itemName, line: r.line,
+        suggestedActionId: r.actionId, suggestedResp: r.responsibility,
+        finalActionId: r.curAction, finalResp: r.curResp,
+        decision: r.curAction === r.actionId && r.curResp === r.responsibility ? 'accepted' : 'edited',
+        source: r.source,
+      })
+    }
+    await setReportData(inspectionId, rd)
+    closeTagRows(rows.map(r => r.id))
+  }
+
+  function declineTagRow(r: TagRow) {
+    queueActionDecision(inspectionId, {
+      room: sectionName, itemName: r.itemName, line: r.line,
+      suggestedActionId: r.actionId, suggestedResp: r.responsibility,
+      finalActionId: null, finalResp: null, decision: 'declined', source: r.source,
+    })
+    closeTagRows([r.id])
+  }
+
   function isItemDone(item: any) {
     const id = item.id
     return !!(
@@ -4006,6 +4098,26 @@ export default function RoomInspectionScreen() {
               <Text style={styles.addItemText}>+ Add Item</Text>
             </TouchableOpacity>
             {isCheckOut_ && sectionType_ === 'room' && renderCustomItems()}
+            {isCheckOut_ && sectionType_ === 'room' && (
+              <TouchableOpacity
+                style={[styles.aiCondSumBtn, tagLoading && styles.aiCondSumBtnBusy]}
+                onPress={handleSuggestActionTags}
+                disabled={tagLoading}
+                activeOpacity={0.75}
+              >
+                {tagLoading ? (
+                  <>
+                    <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={styles.aiCondSumBtnText}>Suggesting actions…</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.aiCondSumBtnIcon}>✨</Text>
+                    <Text style={styles.aiCondSumBtnText}>Suggest actions for this room</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
             <View style={{ height: 20 }} />
           </ScrollView>
           </TouchableWithoutFeedback>
@@ -4082,6 +4194,7 @@ export default function RoomInspectionScreen() {
           <FloatingCameraPreview
             inspectionId={inspectionId}
             onCapture={handleFloatingCapture}
+            previewOpacity={(user?.floating_camera_opacity ?? 100) / 100}
           />
         )}
 
@@ -4929,6 +5042,125 @@ export default function RoomInspectionScreen() {
           </View>
         </Modal>
 
+        {/* AI action tags — review sheet (accept / edit / decline per line) */}
+        <Modal visible={!!tagSheet} transparent animationType="slide" onRequestClose={() => setTagSheet(null)}>
+          <View style={actStyles.overlay}>
+            <View style={actStyles.sheet}>
+              <View style={actStyles.header}>
+                <Text style={actStyles.headerTitle}>✨ Suggested actions</Text>
+                <Text style={actStyles.headerSub}>{sectionName} · nothing is saved until you accept</Text>
+              </View>
+
+              {(() => {
+                const rows = tagSheet || []
+                const confident = rows.filter(r => r.confidence !== 'low' && !r.editing)
+                const groups: Record<string, TagRow[]> = {}
+                const order: string[] = []
+                for (const r of rows) {
+                  if (!groups[r.itemId]) { groups[r.itemId] = []; order.push(r.itemId) }
+                  groups[r.itemId].push(r)
+                }
+                return (
+                  <>
+                    <ScrollView style={actStyles.scrollArea} keyboardShouldPersistTaps="handled">
+                      {order.map(itemId => (
+                        <View key={itemId} style={{ marginBottom: spacing.sm }}>
+                          <Text style={actStyles.sectionLbl}>{groups[itemId][0].itemName || 'Item'}</Text>
+                          {groups[itemId].map(r => {
+                            const cat = actionCatalogue.find((x: any) => x.id === r.curAction)
+                            const col = cat?.color || '#64748b'
+                            const low = r.confidence === 'low'
+                            return (
+                              <View key={r.id} style={[tagStyles.card, low && tagStyles.cardLow]}>
+                                <Text style={tagStyles.line}>{r.line}</Text>
+                                <View style={tagStyles.chipRow}>
+                                  <View style={[tagStyles.chip, { backgroundColor: col + '22', borderColor: col + '88' }]}>
+                                    <View style={[actStyles.catDot, { backgroundColor: col }]} />
+                                    <Text style={[tagStyles.chipText, { color: col }]}>{cat?.name || 'Action'}</Text>
+                                  </View>
+                                  <View style={tagStyles.chipPlain}>
+                                    <Text style={tagStyles.chipPlainText}>{r.curResp}</Text>
+                                  </View>
+                                  <View style={tagStyles.srcBadge}>
+                                    <Text style={tagStyles.srcText}>
+                                      {r.source === 'learned' ? 'Learned' : r.source === 'rule' ? 'Rule' : 'AI'}
+                                    </Text>
+                                  </View>
+                                  {low && (
+                                    <View style={tagStyles.lowBadge}><Text style={tagStyles.lowText}>Check this</Text></View>
+                                  )}
+                                </View>
+                                {!!r.reason && <Text style={tagStyles.reason}>{r.reason}</Text>}
+
+                                {r.editing && (
+                                  <View style={{ marginTop: 8 }}>
+                                    <Text style={actStyles.fieldLbl}>Action</Text>
+                                    <View style={actStyles.respBtns}>
+                                      {actionCatalogue.map((a: any) => (
+                                        <TouchableOpacity
+                                          key={a.id}
+                                          style={[actStyles.respBtn, r.curAction === a.id && { backgroundColor: a.color + '22', borderColor: a.color }]}
+                                          onPress={() => updateTagRow(r.id, { curAction: a.id })}
+                                        >
+                                          <Text style={[actStyles.respBtnText, r.curAction === a.id && { color: a.color, fontWeight: '700' }]}>{a.name}</Text>
+                                        </TouchableOpacity>
+                                      ))}
+                                    </View>
+                                    <Text style={[actStyles.fieldLbl, { marginTop: 8 }]}>Responsibility</Text>
+                                    <View style={actStyles.respBtns}>
+                                      {actionResponsibilities.map((resp: string) => (
+                                        <TouchableOpacity
+                                          key={resp}
+                                          style={[actStyles.respBtn, r.curResp === resp && actStyles.respBtnActive]}
+                                          onPress={() => updateTagRow(r.id, { curResp: resp })}
+                                        >
+                                          <Text style={[actStyles.respBtnText, r.curResp === resp && actStyles.respBtnTextActive]}>{resp}</Text>
+                                        </TouchableOpacity>
+                                      ))}
+                                    </View>
+                                  </View>
+                                )}
+
+                                <View style={tagStyles.btnRow}>
+                                  <TouchableOpacity style={[tagStyles.btn, tagStyles.btnDecline]} onPress={() => declineTagRow(r)}>
+                                    <Text style={tagStyles.btnDeclineText}>✕ Decline</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity style={[tagStyles.btn, tagStyles.btnEdit]} onPress={() => updateTagRow(r.id, { editing: !r.editing })}>
+                                    <Text style={tagStyles.btnEditText}>{r.editing ? 'Done' : '✎ Edit'}</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity style={[tagStyles.btn, tagStyles.btnAccept]} onPress={() => commitTagRows([r])}>
+                                    <Text style={tagStyles.btnAcceptText}>✓ Accept</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            )
+                          })}
+                        </View>
+                      ))}
+                      <View style={{ height: 24 }} />
+                    </ScrollView>
+
+                    <View style={[actStyles.footer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+                      <TouchableOpacity style={[mStyles.cancel, { flex: 1 }]} onPress={() => setTagSheet(null)}>
+                        <Text style={mStyles.cancelText}>Close</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[mStyles.confirm, { flex: 2 }, confident.length === 0 && { opacity: 0.5 }]}
+                        disabled={confident.length === 0}
+                        onPress={() => commitTagRows(confident)}
+                      >
+                        <Text style={mStyles.confirmText}>
+                          Accept {confident.length} confident{rows.length > confident.length ? ` · ${rows.length - confident.length} to check` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )
+              })()}
+            </View>
+          </View>
+        </Modal>
+
         {/* Rename item modal */}
         <Modal visible={renameItemModal} transparent animationType="fade">
           <View style={mStyles.overlay}><View style={mStyles.box}>
@@ -5283,6 +5515,30 @@ const actStyles = StyleSheet.create({
   footer:       { flexDirection: 'row', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   detailRemoveBtn:  { marginLeft: 'auto', padding: 4 },
   detailRemoveText: { fontSize: 14, color: colors.danger, fontWeight: '700' },
+})
+
+const tagStyles = StyleSheet.create({
+  card:        { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  cardLow:     { borderColor: colors.warning, backgroundColor: colors.warningLight },
+  line:        { fontSize: font.md, color: colors.text, fontWeight: '500', marginBottom: 8 },
+  chipRow:     { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  chip:        { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.sm, borderWidth: 1 },
+  chipText:    { fontSize: font.sm, fontWeight: '700' },
+  chipPlain:   { paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.sm, backgroundColor: colors.muted, borderWidth: 1, borderColor: colors.border },
+  chipPlainText: { fontSize: font.sm, fontWeight: '600', color: colors.textMid },
+  srcBadge:    { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.border },
+  srcText:     { fontSize: 10, fontWeight: '700', color: colors.textMid, textTransform: 'uppercase' },
+  lowBadge:    { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.warning },
+  lowText:     { fontSize: 10, fontWeight: '700', color: '#fff', textTransform: 'uppercase' },
+  reason:      { fontSize: 11, color: colors.textLight, fontStyle: 'italic', marginTop: 6 },
+  btnRow:      { flexDirection: 'row', gap: 8, marginTop: 10 },
+  btn:         { flex: 1, paddingVertical: 9, borderRadius: radius.sm, alignItems: 'center', borderWidth: 1 },
+  btnDecline:  { backgroundColor: colors.surface, borderColor: colors.border },
+  btnDeclineText: { fontSize: font.sm, fontWeight: '700', color: colors.textMid },
+  btnEdit:     { backgroundColor: colors.surface, borderColor: colors.primary },
+  btnEditText: { fontSize: font.sm, fontWeight: '700', color: colors.primary },
+  btnAccept:   { backgroundColor: colors.accent, borderColor: colors.accent },
+  btnAcceptText: { fontSize: font.sm, fontWeight: '700', color: '#fff' },
 })
 
 const aiInstantCamSidebar = StyleSheet.create({
