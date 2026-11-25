@@ -155,6 +155,39 @@ subprojects {
 }
 
 // ─────────────────────────────────────────────────────────────
+// 3. VISIONCAMERA: SEED THE REAL SCREEN ROTATION
+// ─────────────────────────────────────────────────────────────
+// OrientationManager starts with screenRotation = ROTATION_0 and only learns the real value
+// when the display *changes*. A camera opened while the screen is already landscape therefore
+// believes it is portrait; a TextureView preview (needed for the see-through floating camera)
+// honours that and shows sideways. Seed it from the display when orientation tracking starts.
+
+const orientationManager = path.join(
+  __dirname, '..', 'node_modules', 'react-native-vision-camera', 'android', 'src', 'main',
+  'java', 'com', 'mrousavy', 'camera', 'core', 'OrientationManager.kt'
+)
+
+try {
+  const kt = safeRead(orientationManager)
+  if (!kt) {
+    console.log('[patch] VisionCamera OrientationManager.kt not found')
+  } else if (kt.includes('[inspectpro] seed screen rotation')) {
+    console.log('[patch] VisionCamera screen rotation seed already applied ✓')
+  } else {
+    const anchor = '    targetOutputOrientation = targetOrientation\n'
+    if (!kt.includes(anchor)) throw new Error('anchor not found - VisionCamera changed?')
+    const seed = anchor +
+      '    // [inspectpro] seed screen rotation from the real display (it otherwise stays ROTATION_0 until a rotation event)\n' +
+      '    displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.let { screenRotation = it.rotation }\n' +
+      '    maybeNotifyOrientationChanged()\n'
+    fs.writeFileSync(orientationManager, kt.replace(anchor, seed))
+    console.log('[patch] VisionCamera screen rotation seed applied ✓')
+  }
+} catch (e) {
+  console.error('[patch] VisionCamera orientation patch failed:', e.message)
+}
+
+// ─────────────────────────────────────────────────────────────
 // DONE
 // ─────────────────────────────────────────────────────────────
 
