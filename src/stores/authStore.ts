@@ -10,6 +10,7 @@ interface User {
   color: string
   typist_mode: 'ai_instant' | 'ai_room' | 'human' | null
   camera_option: string | null
+  floating_camera_opacity?: number | null   // 20-99 (%), null/undefined = solid
   client_id: number | null
 }
 
@@ -20,7 +21,7 @@ interface AuthState {
   initAuth: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
-  updateDefaults: (typistMode: string | null, cameraOption: string | null) => Promise<void>
+  updateDefaults: (typistMode: string | null, cameraOption: string | null, floatingCameraOpacity?: number | null) => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -50,8 +51,13 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: null, token: null, isAuthenticated: false })
   },
 
-  updateDefaults: async (typistMode, cameraOption) => {
-    const res = await api.updateMyDefaults({ typist_mode: typistMode, camera_option: cameraOption })
+  updateDefaults: async (typistMode, cameraOption, floatingCameraOpacity) => {
+    const res = await api.updateMyDefaults({
+      typist_mode: typistMode,
+      camera_option: cameraOption,
+      // only sent when the caller provides it (null = solid)
+      ...(floatingCameraOpacity !== undefined ? { floating_camera_opacity: floatingCameraOpacity } : {}),
+    })
     const updated = res.data
     const current = useAuthStore.getState().user
     const merged = { ...current, ...updated } as User

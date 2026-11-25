@@ -258,6 +258,18 @@ export const api = {
   logProofreadDecisions: (data: { inspectionId: number; decisions: any[] }) =>
     http.post('/api/transcribe/proofread/decisions', data),
 
+  // AI action tags (check-out): suggested action + responsibility per condition line
+  suggestActionTags: (data: {
+    inspectionId: number
+    roomName: string
+    items: Array<{ id: string; name: string; lines: string[]; checkIn?: string; kind?: 'additional' }>
+  }) =>
+    httpAi.post('/api/action-tags/suggest', data),
+
+  // Accept / edit / decline decisions on action tag suggestions (the suggester learns from these)
+  logActionTagDecisions: (data: { inspectionId: number; decisions: any[] }) =>
+    http.post('/api/action-tags/decisions', data),
+
   checkAiStatus: () =>
     http.get('/api/ai/status'),
 
@@ -347,7 +359,7 @@ export const api = {
   updateUser: (id: number, data: { name?: string; email?: string; role?: string; color?: string; phone?: string; typist_mode?: string | null; password?: string }) =>
     http.put(`/api/users/${id}`, data),
 
-  updateMyDefaults: (data: { typist_mode?: string | null; camera_option?: string | null }) =>
+  updateMyDefaults: (data: { typist_mode?: string | null; camera_option?: string | null; floating_camera_opacity?: number | null }) =>
     http.patch('/api/auth/me', data),
 
   deleteUser: (id: number) =>

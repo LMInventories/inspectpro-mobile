@@ -56,6 +56,8 @@ import {
 } from '@react-navigation/native'
 import type { StackNavigationProp } from '@react-navigation/stack'
 import { triggerCapture } from '../services/cameraStore'
+import ZoomSlider from '../components/ZoomSlider'
+import { zoomRange, xToLens, lensToX, type LensConfig } from '../utils/zoomScale'
 import type { RootStackParamList } from '../../App'
 import * as ScreenOrientation from 'expo-screen-orientation'
 
@@ -233,7 +235,6 @@ export default function CameraScreen() {
   const cameraRef = useRef<Camera>(null)
   const [flash, setFlash]                     = useState<FlashMode>('off')
   const [zoom, setZoom]                       = useState(1)
-  const [activeZoomLabel, setActiveZoomLabel] = useState('1×')
   // Last captured photo — shown as thumbnail next to shutter button
   const [lastPhotoUri, setLastPhotoUri]       = useState<string | null>(null)
 
@@ -285,10 +286,13 @@ export default function CameraScreen() {
 
   // Update zoom to device neutral when active device changes
   const lastDeviceId = useRef<string | undefined>(undefined)
+  const pendingZoom = useRef<number | null>(null)
   if (device && device.id !== lastDeviceId.current) {
     lastDeviceId.current = device.id
-    setZoom(device.neutralZoom)
-    setActiveZoomLabel(lensMode === 'ultraWide' ? '0.6×' : '1×')
+    // A slider move that crosses between lenses sets the exact target zoom first (pendingZoom);
+    // otherwise (e.g. flipping front/back) start at the new lens's neutral zoom.
+    setZoom(pendingZoom.current ?? device.neutralZoom)
+    pendingZoom.current = null
   }
 
   // ── Focus ──────────────────────────────────────────────────────────────────
@@ -321,29 +325,32 @@ export default function CameraScreen() {
     }
   }, [focusMode])
 
-  // ── Lens / zoom buttons ────────────────────────────────────────────────────
-  interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
-
-  const zoomButtons = useMemo((): LensButton[] => {
-    if (!backDevice) return [{ label: '1×', zoom: 1, lens: 'main' }]
-    const neutral = backDevice.neutralZoom
-    const max     = backDevice.maxZoom
-    const buttons: LensButton[] = []
-
-    if (hasUltraWide) {
-      buttons.push({
-        label: '0.6×',
-        zoom: hasSeparateUltraWide
-          ? (ultraWideDevice?.neutralZoom ?? backDevice.minZoom)
-          : backDevice.minZoom,
-        lens: hasSeparateUltraWide ? 'ultraWide' : 'main',
-      })
+  // ── Zoom slider (0.6x-5x in 0.1x steps; 1x = main lens) ────────────────────
+  const lensCfg = useMemo((): LensConfig | null => {
+    if (!backDevice) return null
+    return {
+      main: { neutral: backDevice.neutralZoom, min: backDevice.minZoom, max: backDevice.maxZoom },
+      ultra: hasSeparateUltraWide && ultraWideDevice
+        ? { neutral: ultraWideDevice.neutralZoom, min: ultraWideDevice.minZoom, max: ultraWideDevice.maxZoom }
+        : null,
+      zoomUltra: hasZoomBasedUltraWide && !hasSeparateUltraWide,
     }
-    buttons.push({ label: '1×', zoom: neutral, lens: 'main' })
-    if (neutral * 2 <= max) buttons.push({ label: '2×', zoom: neutral * 2, lens: 'main' })
-    if (neutral * 5 <= max) buttons.push({ label: '5×', zoom: neutral * 5, lens: 'main' })
-    return buttons
-  }, [backDevice, hasUltraWide, hasSeparateUltraWide, ultraWideDevice])
+  }, [backDevice, hasSeparateUltraWide, hasZoomBasedUltraWide, ultraWideDevice])
+
+  const sliderActive = facing === 'back' && !!lensCfg
+  const range = lensCfg ? zoomRange(lensCfg) : { min: 1, max: 1 }
+  const zoomX = lensCfg
+    ? lensToX({ ultra: lensMode === 'ultraWide' && hasSeparateUltraWide, zoom }, lensCfg)
+    : 1
+
+  function setZoomX(x: number) {
+    if (!lensCfg) return
+    const next = xToLens(x, lensCfg)
+    const nextMode = next.ultra ? 'ultraWide' : 'main'
+    if (nextMode !== lensMode) pendingZoom.current = next.zoom   // device swap resets zoom otherwise
+    setLensMode(nextMode)
+    setZoom(next.zoom)
+  }
 
   // ── Pinch gesture ─────────────────────────────────────────────────────────
   const baseZoom = useRef(1)
@@ -356,7 +363,6 @@ export default function CameraScreen() {
         Math.max(device.minZoom, baseZoom.current * e.scale)
       )
       setZoom(next)
-      setActiveZoomLabel('')
     })
     .runOnJS(true)
 
@@ -545,29 +551,19 @@ export default function CameraScreen() {
 
           {/* ── Controls below viewfinder ── */}
           <View style={styles.controlsArea}>
-            {/* Zoom / lens buttons */}
-            <View style={styles.zoomBar}>
-              {zoomButtons.map(({ label, zoom: z, lens }) => (
-                <TouchableOpacity
-                  key={label}
-                  style={[styles.zoomBtn, activeZoomLabel === label && styles.zoomBtnActive]}
-                  onPress={() => {
-                    setLensMode(lens)
-                    setZoom(z)
-                    setActiveZoomLabel(label)
-                  }}
-                >
-                  <Animated.View style={btnRotStyle}>
-                    <Text style={[
-                      styles.zoomText,
-                      activeZoomLabel === label && styles.zoomTextActive,
-                    ]}>
-                      {label}
-                    </Text>
-                  </Animated.View>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {/* Zoom slider - drag right to zoom in; slow = fine, fast = quick; tap the badge for 1.0x */}
+            {sliderActive && range.max > range.min && (
+              <ZoomSlider
+                axis="horizontal"
+                value={zoomX}
+                min={range.min}
+                max={range.max}
+                length={SCREEN_W - 120}
+                onChange={setZoomX}
+                labelStyle={btnRotStyle}
+                style={styles.zoomSlider}
+              />
+            )}
 
             {/* Shutter row: flip · shutter · last-photo thumbnail */}
             <View style={styles.shutterRow}>
@@ -691,32 +687,10 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
 
-  // Zoom buttons — horizontal row
-  zoomBar: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    marginBottom: 20,
-  },
-  zoomBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  zoomBtnActive: {
-    backgroundColor: 'rgba(255,220,0,0.9)',
-    borderColor: '#fff',
-  },
-  zoomText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  zoomTextActive: {
-    color: '#000',
+  // Zoom slider — sits above the shutter row
+  zoomSlider: {
+    alignSelf: 'center',
+    marginBottom: 14,
   },
 
   // Shutter row — horizontal
