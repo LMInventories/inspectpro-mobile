@@ -9,8 +9,9 @@
  * The whole widget is draggable — long-press-move or move-threshold drag repositions it.
  *
  * Zoom is a sliding scale (0.6x-5x in 0.1x steps, speed-sensitive) down the right edge of the preview.
- * The preview can be made translucent (user setting) so the clerk can read the Check In report
- * lines behind it while taking photos; the shutter, flash and zoom controls stay fully opaque.
+ * Press and hold the eye button to "peek": the preview is hidden while held so the Check In report
+ * lines underneath can be read, then it comes straight back on release. (A see-through camera needs
+ * Android's TextureView, which rotated the preview and shifted it; hold-to-peek keeps the normal view.)
  */
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
 import {
@@ -48,17 +49,16 @@ const ZOOM_TRACK = 230
 interface Props {
   inspectionId: number
   onCapture: (uri: string, fallback?: boolean) => void
-  /** 0.2-1. Below 1 the live preview is see-through (default 1 = solid). */
-  previewOpacity?: number
 }
 
-function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: Props) {
+function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const { width: screenW, height: screenH } = useWindowDimensions()
   const isFocused    = useIsFocused()
   const insets       = useSafeAreaInsets()
   const { hasPermission, requestPermission } = useCameraPermission()
   const cameraRef    = useRef<Camera>(null)
-  const translucent  = previewOpacity < 0.99
+  // Hold-to-peek: hides the live preview (not the controls) while the eye button is held
+  const [peek, setPeek] = useState(false)
   const capturingRef = useRef(false)
   const [cameraKey, setCameraKey] = useState(0)
 
@@ -235,6 +235,11 @@ function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: 
     y: screenH - CONTAINER_H - Math.max(insets.bottom, 16),
   })).current
 
+  // Position via layout left/top, not a transform: a camera SurfaceView does not follow an ancestor's
+  // transform reliably (it can snap back to the un-transformed top-left). The style object is created
+  // once so re-renders (every zoom-slider tick) never re-attach the Animated nodes.
+  const posStyle = useRef({ left: position.x, top: position.y }).current
+
   const panResponder = useRef(
     PanResponder.create({
       // Don't steal taps — only activate on clear move
@@ -277,7 +282,7 @@ function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: 
   if (!hasPermission || !activeDevice) {
     return (
       <Animated.View
-        style={[styles.noPerm, { transform: position.getTranslateTransform() }]}
+        style={[styles.noPerm, posStyle]}
         {...panResponder.panHandlers}
       >
         <Text style={styles.noPermText}>
@@ -289,14 +294,14 @@ function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: 
 
   return (
     <Animated.View
-      style={[styles.container, { transform: position.getTranslateTransform() }]}
+      style={[styles.container, posStyle]}
       {...panResponder.panHandlers}
     >
-      {/* Live preview. Only this layer is translucent; the zoom slider sits above it, opaque. */}
-      <View style={[styles.previewFrame, translucent && styles.previewFrameFlat]}>
-        <View style={[styles.preview, translucent && styles.previewFlat, { opacity: previewOpacity }]}>
+      {/* Live preview. While peeking it is hidden, but its slot stays so the buttons don't move. */}
+      <View style={styles.previewSlot}>
+        <View style={[styles.preview, peek && { display: 'none' }]}>
           <Camera
-            key={`${cameraKey}-${translucent ? 't' : 's'}`}
+            key={cameraKey}
             ref={cameraRef}
             style={StyleSheet.absoluteFill}
             device={activeDevice}
@@ -304,27 +309,25 @@ function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: 
             photo
             outputOrientation="device"
             zoom={activeZoom}
-            // A SurfaceView ignores view opacity on Android; a TextureView honours it.
-            androidPreviewViewType={translucent ? 'texture-view' : 'surface-view'}
           />
           <Animated.View
             pointerEvents="none"
             style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
           />
-        </View>
 
-        {/* Zoom slider - right edge of the preview, drag up to zoom in */}
-        {range.max > range.min && (
-          <ZoomSlider
-            axis="vertical"
-            value={zoomX}
-            min={range.min}
-            max={range.max}
-            length={ZOOM_TRACK}
-            onChange={setZoomX}
-            style={styles.zoomSlider}
-          />
-        )}
+          {/* Zoom slider - right edge of the preview, drag up to zoom in */}
+          {range.max > range.min && (
+            <ZoomSlider
+              axis="vertical"
+              value={zoomX}
+              min={range.min}
+              max={range.max}
+              length={ZOOM_TRACK}
+              onChange={setZoomX}
+              style={styles.zoomSlider}
+            />
+          )}
+        </View>
       </View>
 
       {/* Shutter + flash toggle — right of preview. Shutter is centred against the
@@ -337,6 +340,16 @@ function FloatingCameraPreview({ inspectionId, onCapture, previewOpacity = 1 }: 
               <View style={styles.shutterInner} />
             </TouchableOpacity>
           </Animated.View>
+        </View>
+        <View style={styles.peekPositioned}>
+          <TouchableOpacity
+            style={[styles.flashBtn, peek && styles.flashBtnActive]}
+            onPressIn={() => setPeek(true)}
+            onPressOut={() => setPeek(false)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.flashBtnText, peek && styles.flashBtnTextActive]}>👁 Hold</Text>
+          </TouchableOpacity>
         </View>
         {activeDevice?.hasFlash && (
           <View style={styles.flashPositioned}>
@@ -367,18 +380,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  previewFrame: {
-    width: PREVIEW_W,
-    height: PREVIEW_H,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 10,
-    borderRadius: 10,
-  },
-  // A shadow behind a see-through preview would show as a dark box, so drop it when translucent.
-  previewFrameFlat: { shadowOpacity: 0, elevation: 0 },
+  previewSlot: { width: PREVIEW_W, height: PREVIEW_H },
   zoomSlider: { position: 'absolute', right: 2, top: 0, bottom: 0, justifyContent: 'center' },
   preview: {
     width: PREVIEW_W,
@@ -388,8 +390,12 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.25)',
     backgroundColor: '#000',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 10,
   },
-  previewFlat: { borderColor: 'rgba(255,255,255,0.5)' },
 
   shutterArea: {
     width: SHUTTER_SIZE + SHUTTER_MARGIN,
@@ -408,6 +414,15 @@ const styles = StyleSheet.create({
   },
   // Anchored a fixed gap below the shutter's centre point — never affects,
   // or is affected by, the shutter's own centring.
+  // Mirror of flashPositioned: anchored a fixed gap ABOVE the shutter's centre point.
+  peekPositioned: {
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
+    marginTop: -(SHUTTER_SIZE / 2 + 10 + SHUTTER_SIZE),
+    alignItems: 'center',
+  },
   flashPositioned: {
     position: 'absolute',
     top: '50%',

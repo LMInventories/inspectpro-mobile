@@ -4194,7 +4194,6 @@ export default function RoomInspectionScreen() {
           <FloatingCameraPreview
             inspectionId={inspectionId}
             onCapture={handleFloatingCapture}
-            previewOpacity={(user?.floating_camera_opacity ?? 100) / 100}
           />
         )}
 
