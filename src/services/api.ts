@@ -359,7 +359,7 @@ export const api = {
   updateUser: (id: number, data: { name?: string; email?: string; role?: string; color?: string; phone?: string; typist_mode?: string | null; password?: string }) =>
     http.put(`/api/users/${id}`, data),
 
-  updateMyDefaults: (data: { typist_mode?: string | null; camera_option?: string | null }) =>
+  updateMyDefaults: (data: { typist_mode?: string | null; camera_option?: string | null; floating_camera_opacity?: number | null }) =>
     http.patch('/api/auth/me', data),
 
   deleteUser: (id: number) =>

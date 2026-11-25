@@ -26,6 +26,7 @@ import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DICTATION_SIDEBAR_W } from './RoomDictationRecorder'
 import { useToastStore } from '../stores/toastStore'
+import { useAuthStore } from '../stores/authStore'
 import ZoomSlider from './ZoomSlider'
 import { zoomRange, xToLens, lensToX, type LensConfig, type LensChoice } from '../utils/zoomScale'
 
@@ -59,6 +60,9 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
   const cameraRef    = useRef<Camera>(null)
   // Hold-to-peek: hides the live preview (not the controls) while the eye button is held
   const [peek, setPeek] = useState(false)
+  // Opt-in see-through preview (Account > Default Settings). null/solid = the normal surface view.
+  const opacityPct = useAuthStore(s => s.user?.floating_camera_opacity ?? null)
+  const translucent = opacityPct != null && opacityPct < 100
   const capturingRef = useRef(false)
   const [cameraKey, setCameraKey] = useState(0)
 
@@ -287,11 +291,13 @@ function FloatingCameraPreview({ inspectionId, onCapture }: Props) {
     >
       {/* Live preview. While peeking it is hidden, but its slot stays so the buttons don't move. */}
       <View style={styles.previewSlot}>
-        <View style={[styles.preview, peek && { display: 'none' }]}>
+        <View style={[styles.preview, translucent && styles.previewClear, peek && { display: 'none' }]}>
           <Camera
-            key={cameraKey}
+            key={`${cameraKey}-${translucent ? 't' : 's'}`}
             ref={cameraRef}
-            style={StyleSheet.absoluteFill}
+            // Only a TextureView can be drawn see-through; solid keeps the default surface view.
+            androidPreviewViewType={translucent ? 'texture-view' : 'surface-view'}
+            style={[StyleSheet.absoluteFill, translucent && { opacity: (opacityPct as number) / 100 }]}
             device={activeDevice}
             isActive={isFocused}
             photo
@@ -384,6 +390,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 10,
   },
+
+  // See-through mode: no black backing, no shadow bleeding through the preview
+  previewClear: { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0 },
 
   shutterArea: {
     width: SHUTTER_SIZE + SHUTTER_MARGIN,

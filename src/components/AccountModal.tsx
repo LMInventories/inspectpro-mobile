@@ -109,6 +109,8 @@ export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvai
 
   const [defaultsTypist, setDefaultsTypist] = useState<string>(user?.typist_mode ?? '')
   const [defaultsCamera, setDefaultsCamera] = useState<string>(user?.camera_option ?? 'perItem')
+  // null = Solid. Otherwise the % the floating camera preview is drawn at (20-99).
+  const [defaultsOpacity, setDefaultsOpacity] = useState<number | null>(user?.floating_camera_opacity ?? null)
   const [defaultsSaving, setDefaultsSaving] = useState(false)
   const [defaultsSaved,  setDefaultsSaved]  = useState(false)
 
@@ -173,7 +175,7 @@ export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvai
     setDefaultsSaving(true)
     setDefaultsSaved(false)
     try {
-      await updateDefaults(defaultsTypist || null, defaultsCamera || null)
+      await updateDefaults(defaultsTypist || null, defaultsCamera || null, defaultsOpacity)
       setDefaultsSaved(true)
       setTimeout(() => setDefaultsSaved(false), 2500)
     } catch (err: any) {
@@ -530,6 +532,31 @@ export default function AccountModal({ visible, onClose, onOpenAdmin, onOpenAvai
                 </TouchableOpacity>
               )
             })}
+
+            {defaultsCamera === 'floating' && (
+              <>
+                <Text style={[s.defaultsFieldLabel, { marginTop: spacing.sm }]}>Floating Camera Transparency</Text>
+                <Text style={s.defaultsRowSub}>See the Check In lines through the preview while taking photos</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                  {([
+                    { v: null, label: 'Solid' }, { v: 80, label: '80%' },
+                    { v: 60, label: '60%' },     { v: 40, label: '40%' },
+                  ] as const).map(o => {
+                    const active = defaultsOpacity === o.v
+                    return (
+                      <TouchableOpacity
+                        key={String(o.v)}
+                        style={[s.defaultsRow, { flex: 1, justifyContent: 'center', marginBottom: 0 }, active && s.defaultsRowActive]}
+                        onPress={() => setDefaultsOpacity(o.v)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={[s.defaultsRowLabel, active && s.defaultsRowLabelActive]}>{o.label}</Text>
+                      </TouchableOpacity>
+                    )
+                  })}
+                </View>
+              </>
+            )}
 
             <TouchableOpacity
               style={[s.actionBtn, s.actionBtnPrimary, defaultsSaving && s.actionBtnDisabled, { marginTop: spacing.xs }]}
