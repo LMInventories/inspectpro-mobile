@@ -20,14 +20,14 @@
  *   sectionKey    – room section key
  *   sectionName   – room display name
  *   items         – template items (AI uses names as chapters)
- *   onTranscribed – called with { itemId: { description?, condition?, _subs?: [...] } } on success
+ *   (the AI fill itself runs in services/roomTranscription so it carries on if the clerk leaves the room)
  *   showAiButton  – set false for human-typist mode (clips saved, no AI fill)
  */
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, Animated,
-  Modal, ScrollView, Pressable, AppState,
+  Modal, ScrollView, Pressable,
   useWindowDimensions,
 } from 'react-native'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
@@ -42,11 +42,9 @@ import * as FileSystem from 'expo-file-system/legacy'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import SwipeableRow from './SwipeableRow'
 import { saveAudioRecording, deleteAudioRecording, getAudioRecordingsForSection, updateTranscription } from '../services/database'
-import { api } from '../services/api'
+import { useRoomTranscriptionStore, jobKey, startRoomTranscription } from '../services/roomTranscription'
 import { colors, font, radius, spacing } from '../utils/theme'
-import { probe } from '../hooks/useNetworkStatus'
 import { useToastStore } from '../stores/toastStore'
-import { mimeTypeForUri } from '../utils/audioMime'
 import { pickAndImportAudioClip } from '../services/importAudioClip'
 
 export interface RoomDictationItem {
@@ -71,11 +69,6 @@ interface Props {
   sectionType?: string   // 'room' (default) or fixed section type
   isDamageReport?: boolean
   items: RoomDictationItem[]
-  onTranscribed: (
-    filled: Record<string, Record<string, any>>,
-    transcript?: string,
-    ambiguousCommands?: { type: string; item_name: string; detail: string }[]
-  ) => Promise<void>
   showAiButton?: boolean
   // Landscape sidebar support
   isLandscape?: boolean
@@ -99,7 +92,6 @@ export default function RoomDictationRecorder({
   sectionType = 'room',
   isDamageReport = false,
   items,
-  onTranscribed,
   showAiButton = true,
   isLandscape = false,
   showCameraToggle = false,
@@ -113,11 +105,10 @@ export default function RoomDictationRecorder({
   const effectiveLandscape = _winW > _winH
   const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
 
-  const [mode, setMode]           = useState<Mode>('idle')
+  const [modeState, setMode]      = useState<Mode>('idle')
   const [elapsed, setElapsed]     = useState(0)
   const [totalMs, setTotalMs]     = useState(0)
   const [clips, setClips]         = useState<SavedClip[]>([])
-  const [queuedOffline, setQueuedOffline] = useState(false)
   const [importing, setImporting] = useState(false)
 
   // Playback modal
@@ -131,10 +122,27 @@ export default function RoomDictationRecorder({
 
   const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<number>(0)
-  // Guards against a second transcribe round-trip starting while one is in
-  // flight (e.g. the AppState offline-retry firing during a 10s+ API call).
-  // A double-send re-applies the same fills and doubles up field content.
-  const transcribeInFlightRef = useRef(false)
+
+  // A background transcription for THIS room (see services/roomTranscription). It outlives this
+  // component, so the state is read from the shared store rather than kept here.
+  const job = useRoomTranscriptionStore(st => st.jobs[jobKey(inspectionId, sectionKey)])
+  const jobActive = !!job
+  const mode: Mode = jobActive ? 'transcribing' : modeState
+
+  // When the job ends, re-read what is still saved: success leaves nothing (idle), a failure
+  // leaves the clips for another try (paused).
+  const wasJobActive = useRef(false)
+  useEffect(() => {
+    if (wasJobActive.current && !jobActive) {
+      const saved = getAudioRecordingsForSection(inspectionId, sectionKey)
+      const restored: SavedClip[] = saved.map((r: any) => ({ id: r.id, uri: r.fileUri, durationMs: r.durationMs }))
+      setClips(restored)
+      setTotalMs(restored.reduce((sum, c) => sum + c.durationMs, 0))
+      setElapsed(0)
+      setMode(restored.length > 0 ? 'paused' : 'idle')
+    }
+    wasJobActive.current = jobActive
+  }, [jobActive, inspectionId, sectionKey])
 
   // Pulse animation — runs while transcribing
   const pulseAnim = useRef(new Animated.Value(1)).current
@@ -364,119 +372,21 @@ export default function RoomDictationRecorder({
     }
   }
 
-  // ── Auto-retry when app comes back online after queuing ──────────────────
-  useEffect(() => {
-    if (!queuedOffline) return
-    const sub = AppState.addEventListener('change', async (state) => {
-      if (state !== 'active') return
-      const online = await probe()
-      if (online) handleTranscribe()
-    })
-    return () => sub.remove()
-  }, [queuedOffline, handleTranscribe])
-
   // ── AI Transcribe ─────────────────────────────────────────────────────────
-  const handleTranscribe = useCallback(async () => {
-    if (clips.length === 0) return
-    if (transcribeInFlightRef.current) return
-    transcribeInFlightRef.current = true
-
-    try {
-    // Check connectivity before sending — queue locally if offline
-    const online = await probe()
-    if (!online) {
-      setQueuedOffline(true)
-      useToastStore.getState().showToast('No connection — will transcribe when online', 'info')
-      return
-    }
-
-    setQueuedOffline(false)
-    setMode('transcribing')
-    try {
-      const clipPayloads = await Promise.all(
-        clips.map(async (clip) => {
-          const b64 = await FileSystem.readAsStringAsync(clip.uri, {
-            encoding: 'base64',
-          })
-          // Recorded clips are always .m4a; an inserted clip (see handleInsertClip)
-          // can be any format the clerk had on-device — send its real MIME type.
-          return { audio: b64, mimeType: mimeTypeForUri(clip.uri) }
-        })
-      )
-
-      // Detect check-out mode: at least one item has subs populated
-      const isCheckOut = items.some(it => it.subs !== undefined)
-
-      const processedItemIds = items.filter(it => it.isTranscribed).map(it => it.id)
-
-      const response = await api.transcribeRoom({
-        clips:            clipPayloads,
-        sectionName,
-        sectionKey,
-        sectionType,
-        isCheckOut,
-        isDamageReport,
-        inspectionId,
-        processedItemIds: processedItemIds.length > 0 ? processedItemIds : undefined,
-        items: items.map(it => ({
-          id:             it.id,
-          name:           it.name,
-          hasCondition:   it.hasCondition !== false,
-          hasDescription: it.hasDescription !== false,
-          subs:           it.subs,
-        })),
-      })
-
-      const { filled, transcript: whisperTranscript, ambiguous_commands: ambiguousCommands } = response.data as {
-        transcript: string
-        filled: Record<string, { description?: string; condition?: string }>
-        ambiguous_commands?: { type: string; item_name: string; detail: string }[]
-      }
-
-      const count = Object.keys(filled).length
-      if (count === 0) {
-        const preview = whisperTranscript
-          ? `\n\nWhisper heard:\n"${whisperTranscript.slice(0, 200)}${whisperTranscript.length > 200 ? '…' : ''}"`
-          : ''
-        Alert.alert('Nothing filled', `AI could not match dictation to room items. Please say each item name alone as a heading before describing it.${preview}`)
-        setMode('paused')
-        return
-      }
-
-      // Snapshot clips before clearing — needed for deletion after the async await
-      const clipsToDelete = [...clips]
-      const fullTranscript: string = whisperTranscript || ''
-
-      await onTranscribed(filled, fullTranscript, ambiguousCommands)
-
-      setQueuedOffline(false)
-      setClips([])
-      setTotalMs(0)
-      setElapsed(0)
-      setMode('idle')
-
-      // Save the Whisper transcript into each SQLite row so it travels to the
-      // server during sync and becomes available for Export Transcription.
-      // Then delete only the audio file — the row stays in SQLite (with a
-      // non-null transcription) so getAudioRecordingsForSection skips it on
-      // remount, preventing stale re-transcription while preserving the text.
-      clipsToDelete.forEach(clip => {
-        if (clip.id !== undefined) {
-          if (fullTranscript) updateTranscription(clip.id, fullTranscript)
-          FileSystem.deleteAsync(clip.uri, { idempotent: true }).catch(() => {})
-        } else {
-          FileSystem.deleteAsync(clip.uri, { idempotent: true }).catch(() => {})
-        }
-      })
-    } catch (err: any) {
-      console.error('[RoomDictation] transcribe error:', err)
-      Alert.alert('AI Error', err.response?.data?.error || err.message || 'Transcription failed')
-      setMode('paused')
-    }
-    } finally {
-      transcribeInFlightRef.current = false
-    }
-  }, [clips, sectionName, sectionKey, items, onTranscribed])
+  // The upload, the fill and the clean-up all run in services/roomTranscription, not here, so the
+  // clerk can leave this room while it works. This component just hands the clips over and
+  // reflects the job's state (see `job` above).
+  const handleTranscribe = useCallback(() => {
+    if (clips.length === 0 || jobActive) return
+    startRoomTranscription({
+      inspectionId, sectionKey, sectionName, sectionType, isDamageReport,
+      items: items.map(it => ({
+        id: it.id, name: it.name, hasCondition: it.hasCondition, hasDescription: it.hasDescription,
+        isTranscribed: it.isTranscribed, subs: it.subs,
+      })),
+      clips: clips.map(c => ({ id: c.id, uri: c.uri })),
+    })
+  }, [clips, jobActive, inspectionId, sectionKey, sectionName, sectionType, isDamageReport, items])
 
   // ── Derived state ─────────────────────────────────────────────────────────
   const isRecording    = mode === 'recording'
@@ -486,7 +396,7 @@ export default function RoomDictationRecorder({
 
   // ── Status line below the row ─────────────────────────────────────────────
   function statusText() {
-    if (queuedOffline)  return `${clips.length} clip${clips.length !== 1 ? 's' : ''} saved · waiting for connection…`
+    if (job?.state === 'waiting') return `${clips.length} clip${clips.length !== 1 ? 's' : ''} saved · waiting for connection…`
     if (isTranscribing) return `AI filling ${sectionName}…`
     if (isRecording)    return `Recording ${sectionName} — pause to save clip`
     if (isPaused && hasClips) {
@@ -566,15 +476,15 @@ export default function RoomDictationRecorder({
       style={[
         bar.aiBtn,
         (!hasClips || isRecording || isTranscribing) && bar.disabled,
-        queuedOffline && bar.aiBtnQueued,
+        job?.state === 'waiting' && bar.aiBtnQueued,
       ]}
       onPress={handleTranscribe}
       disabled={!hasClips || isRecording || isTranscribing}
       activeOpacity={0.7}
     >
-      <Text style={bar.aiBtnIcon}>{queuedOffline ? '⏳' : '✨'}</Text>
+      <Text style={bar.aiBtnIcon}>{job?.state === 'waiting' ? '⏳' : '✨'}</Text>
       {withLabel && (
-        <Text style={bar.aiBtnLabel}>{queuedOffline ? 'Queued' : 'Transcr'}</Text>
+        <Text style={bar.aiBtnLabel}>{job?.state === 'waiting' ? 'Queued' : 'Transcr'}</Text>
       )}
     </TouchableOpacity>
   )

@@ -41,10 +41,14 @@ function inferType(cols: string[]): string {
 
 
 
+import { useRoomTranscriptionStore } from '../services/roomTranscription'
+
 export default function RoomSelectionScreen() {
   const navigation = useNavigation<Nav>()
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
+  // Rooms whose AI transcription is still running in the background
+  const transcribingJobs = useRoomTranscriptionStore(st => st.jobs)
   const { inspectionId } = route.params
   const { activeInspection, loadInspection, setReportData, overrideTemplate } = useInspectionStore()
 
@@ -906,6 +910,13 @@ export default function RoomSelectionScreen() {
                       activeOpacity={0.7}
                     >
                       <Text style={styles.rowName}>{room.name}</Text>
+                      {transcribingJobs[`${inspectionId}:${room.key}`] && (
+                        <Text style={styles.transcribingBadge}>
+                          {transcribingJobs[`${inspectionId}:${room.key}`].state === 'waiting'
+                            ? '⏳ Transcription waiting for connection…'
+                            : '✨ Transcribing…'}
+                        </Text>
+                      )}
                     </TouchableOpacity>
                   </View>
                 </SwipeableRow>
@@ -1193,6 +1204,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: 13, borderWidth: 1, borderColor: colors.border },
   rowDragging: { backgroundColor: '#f0f7ff', borderColor: colors.primary, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 },
   rowContent: { flex: 1 },
+  transcribingBadge: { fontSize: font.xs ?? 12, color: '#0ea5e9', fontWeight: '600', marginTop: 2 },
   rowName: { fontSize: font.md, fontWeight: '600', color: colors.text, flex: 1 },
   chevron: { fontSize: font.xl, color: colors.textLight, marginLeft: spacing.sm },
   dragHandle: { paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },

@@ -25,6 +25,7 @@ import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection, upda
 import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
 import ReportTextInput from '../components/ReportTextInput'
+import { useRoomTranscriptionStore, jobKey } from '../services/roomTranscription'
 import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
 import FloatingCameraPreview from '../components/FloatingCameraPreview'
 
@@ -342,6 +343,15 @@ export default function RoomInspectionScreen() {
   }, []))
 
   useEffect(() => { buildItems() }, [sectionKey])
+
+  // A background room transcription (services/roomTranscription) can add or remove items
+  // (sub-items, "please delete"); rebuild the list when one for this room finishes.
+  const roomJobActive = useRoomTranscriptionStore(st => !!st.jobs[jobKey(inspectionId, sectionKey)])
+  const prevRoomJobActive = useRef(roomJobActive)
+  useEffect(() => {
+    if (prevRoomJobActive.current && !roomJobActive) buildItems()
+    prevRoomJobActive.current = roomJobActive
+  }, [roomJobActive])
 
   // ── Dynamic theme colours ────────────────────────────────────────────────────
   const c  = useColors()
@@ -1329,173 +1339,6 @@ export default function RoomInspectionScreen() {
     }
   }
 
-  // ── Room dictation callback ────────────────────────────────────────────────
-  // Called by RoomDictationRecorder when AI returns filled fields.
-  // filled = { itemId: { description?, condition?, _subs?: [{description, condition}] } }
-  // _subs is created when the AI detects multiple distinct elements within one item chapter.
-  // "Please delete" is the ONLY phrase that triggers auto-deletion — deliberately
-  // narrow so ordinary dictation (including phrases like "not present" or "n/a"
-  // spoken as genuine content) is never misread as a delete command. Only matches
-  // when the phrase IS essentially the entire content (exact match), so embedded
-  // uses like "serial number not seen" are left as dictation either way.
-  const NONE_SEEN_PHRASES = ['please delete']
-  function isNoneSeen(fields: Record<string, any>): boolean {
-    const text = [fields.description, fields.condition].filter(Boolean).join(' ').toLowerCase().trim()
-    return NONE_SEEN_PHRASES.some(p => text === p)
-  }
-
-  async function handleRoomTranscribed(
-    filled: Record<string, Record<string, any>>,
-    transcript?: string,
-    ambiguousCommands?: { type: string; item_name: string; detail: string }[]
-  ) {
-    // Read fresh from DB — room dictation is async (recording + upload + AI round-trip
-    // can take 10+ seconds), so the store closure captured at component render time
-    // may be stale.  A fresh read ensures no user keystrokes are silently dropped.
-    const freshData = await getLocalInspection(inspectionId)
-    const rd = freshData?.report_data ? JSON.parse(freshData.report_data) : {}
-    if (!rd[sectionKey]) rd[sectionKey] = {}
-    let changed = false
-    let subItemsCreated = 0
-    const deletedItems: string[] = []
-
-    for (const [itemId, fields] of Object.entries(filled)) {
-      // Explicit delete — clerk said "[item] Please Delete" (AI sets _delete: true)
-      // Also catches auto-detection via isNoneSeen for legacy compatibility.
-      // Handle inline within rd so the single setReportData at the end captures
-      // deletions alongside any other fills — avoids a second write overwriting _deleted.
-      if ((fields as any)._delete === true || isNoneSeen(fields)) {
-        setItems(prev => prev.filter(i => i.id !== itemId))
-        itemLayoutsRef.current.delete(itemId)
-        itemHeightsRef.current.delete(itemId)
-        if (rd[sectionKey][String(itemId)]) delete rd[sectionKey][String(itemId)]
-        if (rd[sectionKey]['_extra']) {
-          rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
-        }
-        if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
-        if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
-        deletedItems.push(itemId)
-        changed = true
-        continue
-      }
-
-      if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
-      const row = rd[sectionKey][itemId]
-
-      // Mark item as transcribed so subsequent passes skip it unless explicitly amended
-      if (!row._transcribed) { row._transcribed = true; changed = true }
-
-      // Fill main item fields — respect amendment action flags from the AI
-      const descAction = fields._descAction || 'fill'  // 'fill' | 'overwrite' | 'append'
-      const condAction = fields._condAction || 'fill'
-
-      if (isCheckOut_) {
-        // Check-out: _claude_fill_room_checkout returns checkOutCondition; fall back to
-        // condition/description for any legacy or fixed-section paths.
-        // The AI's own checkOutCondition already comes prefixed with "As
-        // Inventory+" (the backend prompt requires it) — strip it here so
-        // the merge logic below, which decides on its own when to add that
-        // prefix, doesn't end up doubling it.
-        const aiCondition = stripAsInventoryPrefix(fields.checkOutCondition || fields.condition || fields.description || '')
-        if (aiCondition) {
-          const existing = row.checkOutCondition || ''
-          const isBlankOrPlaceholder = !existing.trim() || existing.trim() === 'As Inventory+'
-          const mergedCO = isBlankOrPlaceholder
-            ? `As Inventory+\n${aiCondition}`
-            : appendUnique(existing, aiCondition)
-          if (mergedCO !== existing) { row.checkOutCondition = mergedCO; changed = true }
-        }
-      } else {
-        if (fields.description) {
-          if (descAction === 'overwrite' || (descAction === 'fill' && !row.description)) {
-            row.description = fields.description; changed = true
-          } else if (descAction === 'append' && row.description) {
-            const merged = appendUnique(row.description, fields.description)
-            if (merged !== row.description) { row.description = merged; changed = true }
-          } else if (descAction === 'append' && !row.description) {
-            row.description = fields.description; changed = true
-          }
-        }
-        if (fields.condition) {
-          if (condAction === 'overwrite' || (condAction === 'fill' && !row.condition)) {
-            row.condition = fields.condition; changed = true
-          } else if (condAction === 'append' && row.condition) {
-            const merged = appendUnique(row.condition, fields.condition)
-            if (merged !== row.condition) { row.condition = merged; changed = true }
-          } else if (condAction === 'append' && !row.condition) {
-            row.condition = fields.condition; changed = true
-          }
-        }
-      }
-
-      // Create AI-suggested sub-items (check-in) or write CO conditions to existing subs (check-out)
-      if (Array.isArray(fields._subs) && fields._subs.length > 0) {
-        if (!row._subs) row._subs = []
-        for (const sub of fields._subs) {
-          if (isCheckOut_ && sub._sid) {
-            // Check-out: match by _sid, write checkOutCondition with "As Inventory+" prefix.
-            // sub.checkOutCondition (from the AI) already comes pre-fixed —
-            // strip before merging so the prefix isn't doubled.
-            const existing = row._subs.find((s: any) => s._sid === sub._sid)
-            const subAiCondition = stripAsInventoryPrefix(sub.checkOutCondition || '')
-            if (existing && subAiCondition) {
-              const existingCO = existing.checkOutCondition || ''
-              const isBlankOrPlaceholder = !existingCO.trim() || existingCO.trim() === 'As Inventory+'
-              const mergedSubCO = isBlankOrPlaceholder
-                ? `As Inventory+\n${subAiCondition}`
-                : appendUnique(existingCO, subAiCondition)
-              if (mergedSubCO !== existingCO) { existing.checkOutCondition = mergedSubCO; changed = true }
-            }
-          } else if (!isCheckOut_) {
-            // Check-in: create new sub-items from AI-detected elements —
-            // skip exact duplicates (produced by a double-apply of the same fill)
-            if (isDuplicateSub(row._subs, sub)) continue
-            const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-            row._subs.push({
-              _sid:        sid,
-              description: sub.description || '',
-              condition:   sub.condition   || '',
-            })
-            changed = true
-            subItemsCreated++
-          }
-        }
-      }
-    }
-
-    const parts: string[] = []
-    const filledCount = Object.keys(filled).length - deletedItems.length
-    if (filledCount > 0) parts.push(`${filledCount} item${filledCount !== 1 ? 's' : ''} filled`)
-    if (subItemsCreated > 0) parts.push(`${subItemsCreated} sub-item${subItemsCreated !== 1 ? 's' : ''} created`)
-    if (deletedItems.length > 0) parts.push(`${deletedItems.length} removed (none seen)`)
-
-    // Append room-mode log entry so admins can review full Whisper transcript + Haiku fill
-    if (transcript) {
-      if (!rd._transcriptionLog) rd._transcriptionLog = []
-      const logFilled: Record<string, any> = {}
-      for (const [itemId, fields] of Object.entries(filled)) {
-        const item = items.find((i: any) => String(i.id) === String(itemId))
-        logFilled[itemId] = { name: item?.label || item?.name || itemId, ...fields }
-      }
-      rd._transcriptionLog.push({
-        mode:      'room',
-        timestamp: new Date().toISOString(),
-        room:      sectionName,
-        transcript,
-        filled:    logFilled,
-        ...(ambiguousCommands && ambiguousCommands.length > 0 ? { ambiguous: ambiguousCommands } : {}),
-      })
-      changed = true
-    }
-
-    if (changed) {
-      setReportData(inspectionId, rd)
-      useToastStore.getState().showToast(`✨ ${parts.join(' · ')} in ${sectionName}.`)
-    } else {
-      useToastStore.getState().showToast('Already filled — existing content preserved.', 'info')
-    }
-  }
-
   // ── AI Condition Summary ─────────────────────────────────────────────────
   // Reads all filled room data from the inspection, sends it to the backend,
   // and fills each condition_summary item with concise line-by-line observations.
@@ -1704,52 +1547,6 @@ export default function RoomInspectionScreen() {
       Alert.alert('AI Error', err.response?.data?.error || err.message || 'Failed to generate summary')
     } finally {
       setAiCondSumLoading(false)
-    }
-  }
-
-  // Fixed section dictation callback — field names vary by section type
-  async function handleFixedRoomTranscribed(filled: Record<string, Record<string, any>>) {
-    // Same fresh-read pattern as handleRoomTranscribed — dictation is async.
-    const freshFixed = await getLocalInspection(inspectionId)
-    const rd = freshFixed?.report_data ? JSON.parse(freshFixed.report_data) : {}
-    if (!rd[sectionKey]) rd[sectionKey] = {}
-    let changed = false
-    const deletedItems: string[] = []
-
-    for (const [itemId, fields] of Object.entries(filled)) {
-      // Explicit delete — clerk said "[item] Please Delete" (AI sets _delete: true).
-      // Fixed-section rows are hidden via _hidden (matches deleteItemImmediate/web's
-      // isHidden()), not removed from _extra/_deleted like room items.
-      if ((fields as any)._delete === true) {
-        setItems(prev => prev.filter(i => i.id !== itemId))
-        itemLayoutsRef.current.delete(itemId)
-        itemHeightsRef.current.delete(itemId)
-        if (!rd[sectionKey]['_hidden']) rd[sectionKey]['_hidden'] = []
-        if (!rd[sectionKey]['_hidden'].includes(itemId)) rd[sectionKey]['_hidden'].push(itemId)
-        deletedItems.push(itemId)
-        changed = true
-        continue
-      }
-
-      if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
-      const row = rd[sectionKey][itemId]
-      for (const [fieldKey, value] of Object.entries(fields)) {
-        if (value && !row[fieldKey]) {
-          row[fieldKey] = value
-          changed = true
-        }
-      }
-    }
-
-    if (changed) {
-      setReportData(inspectionId, rd)
-      const filledCount = Object.keys(filled).length - deletedItems.length
-      const parts: string[] = []
-      if (filledCount > 0) parts.push(`${filledCount} item${filledCount !== 1 ? 's' : ''} filled`)
-      if (deletedItems.length > 0) parts.push(`${deletedItems.length} deleted`)
-      useToastStore.getState().showToast(`✨ ${parts.join(', ')} in ${sectionName}.`)
-    } else {
-      useToastStore.getState().showToast('Already filled — existing content preserved.', 'info')
     }
   }
 
@@ -4143,7 +3940,6 @@ export default function RoomInspectionScreen() {
                 ? getSubs(it.id).map((s: any) => ({ _sid: s._sid, description: s.description || '' }))
                 : undefined,
             }))}
-            onTranscribed={handleRoomTranscribed}
             showAiButton={typistMode_ === 'ai_room'}
             isLandscape={isLandscape}
             showCameraToggle={showFloatingCamera}
@@ -4163,7 +3959,6 @@ export default function RoomInspectionScreen() {
               id:   it.id,
               name: it.name || it.label || it.question || '',
             }))}
-            onTranscribed={handleFixedRoomTranscribed}
             showAiButton={typistMode_ === 'ai_room'}
             isLandscape={isLandscape}
           />

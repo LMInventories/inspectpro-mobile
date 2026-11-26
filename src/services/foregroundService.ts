@@ -21,7 +21,10 @@ const OPTIONS = {
   foregroundServiceType: ['dataSync'],
 }
 
-export async function runInForegroundService(work: () => Promise<void>): Promise<void> {
+export async function runInForegroundService(
+  work: () => Promise<void>,
+  label?: { name: string; title: string; desc: string },
+): Promise<void> {
   if (Platform.OS !== 'android') { await work(); return }
 
   let finish!: () => void
@@ -34,7 +37,7 @@ export async function runInForegroundService(work: () => Promise<void>): Promise
     await BackgroundService.start(async () => {
       started = true
       try { await work() } catch (e) { failure = e } finally { finish() }
-    }, OPTIONS as any)
+    }, (label ? { ...OPTIONS, taskName: label.name, taskTitle: label.title, taskDesc: label.desc } : OPTIONS) as any)
   } catch (err) {
     if (!started) {
       console.warn('[FGService] could not start foreground service — running inline:', err)
