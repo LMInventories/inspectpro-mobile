@@ -5,6 +5,7 @@
  * - Speed-sensitive: a slow drag moves the zoom gently (fine control), a fast drag covers the
  *   range quickly (see speedGain in utils/zoomScale.ts). Because of that the thumb is a jog
  *   control rather than glued to the finger - it follows the zoom value, not the touch point.
+ * - Tap anywhere along the line to jump straight to that zoom level.
  * - Tap the value badge to jump back to 1.0x.
  * - Plain PanResponder that refuses to hand the drag to a parent, so it works inside the
  *   draggable floating camera widget (whose own PanResponder would otherwise steal the drag).
@@ -28,6 +29,7 @@ interface Props {
 }
 
 const THICK = 44   // touch target across the axis
+const TAP_SLOP = 6 // px of finger movement still treated as a tap rather than a drag
 
 export default function ZoomSlider({ value, min, max, onChange, axis, length, style, labelStyle }: Props) {
   const horizontal = axis === 'horizontal'
@@ -38,6 +40,7 @@ export default function ZoomSlider({ value, min, max, onChange, axis, length, st
   const lastPos = useRef(0)
   const lastEmitted = useRef(value)
   const dragging = useRef(false)
+  const touchAt = useRef(0)          // where on the bar the touch started, along the axis
   const [, force] = React.useReducer((n: number) => n + 1, 0)
 
   useEffect(() => { if (!dragging.current) raw.current = value }, [value])
@@ -46,7 +49,8 @@ export default function ZoomSlider({ value, min, max, onChange, axis, length, st
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,   // keep the drag even inside a draggable parent
-    onPanResponderGrant: () => {
+    onPanResponderGrant: e => {
+      touchAt.current = latest.current.horizontal ? e.nativeEvent.locationX : e.nativeEvent.locationY
       dragging.current = true
       raw.current = latest.current.value
       lastEmitted.current = latest.current.value
@@ -57,6 +61,7 @@ export default function ZoomSlider({ value, min, max, onChange, axis, length, st
       const { min, max, length, horizontal, onChange } = latest.current
       const pos = horizontal ? g.dx : -g.dy
       const v = horizontal ? g.vx : g.vy   // px per ms
+      if (Math.abs(g.dx) < TAP_SLOP && Math.abs(g.dy) < TAP_SLOP && lastPos.current === 0) return  // may be a tap
       const delta = pos - lastPos.current
       lastPos.current = pos
       raw.current = dragZoom(raw.current, delta, v, length, min, max)
@@ -66,7 +71,19 @@ export default function ZoomSlider({ value, min, max, onChange, axis, length, st
         onChange(snapped)
       }
     },
-    onPanResponderRelease: () => { dragging.current = false; force() },
+    onPanResponderRelease: (_, g) => {
+      dragging.current = false
+      // A tap (no real drag): jump to the zoom level at that point on the line.
+      if (Math.abs(g.dx) < TAP_SLOP && Math.abs(g.dy) < TAP_SLOP && lastPos.current === 0) {
+        const { min, max, length, horizontal, onChange } = latest.current
+        // horizontal runs left to right; vertical runs bottom (min) to top (max)
+        const along = horizontal ? touchAt.current - THICK / 2 : THICK / 2 + length - touchAt.current
+        const target = snapZoom(min + (along / length) * (max - min), min, max)
+        raw.current = target
+        onChange(target)
+      }
+      force()
+    },
     onPanResponderTerminate: () => { dragging.current = false; force() },
   })).current
 
