@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Image, Alert, ActivityIndicator, Platform, Linking, Modal,
@@ -15,7 +15,7 @@ import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkF
 import { api } from '../services/api'
 import {
   runProofread, applySuggestionToReport, replaceSnippet, queueDecision, flushDecisions,
-  getSession, clearSession, reconcileSuggestions, suggestionKey,
+  getSession, clearSession, reconcileSuggestions, suggestionKey, openCount, carryDecisions,
   type ProofreadSuggestion, type ProofreadStatus,
 } from '../services/proofread'
 import { SyncProgress } from '../services/syncService'
@@ -32,6 +32,10 @@ type Route = RouteProp<RootStackParamList, 'PropertyOverview'>
 type ReviewSub  = { label: string; cond: string; subId: string }
 type ReviewItem = { label: string; desc: string; cond: string; isEmpty: boolean; subs: ReviewSub[]; photos: string[]; itemId: string }
 type ReviewRoom  = { name: string; sectionKey: string; templateSectionId?: number; overviewPhotos: string[]; items: ReviewItem[] }
+
+// Where a proofread card lands, below the top of the list, when jumped to with the arrows. Leaves
+// the item's wording visible above it, and puts the next card's arrows in the same spot each time.
+const SUG_JUMP_OFFSET = 120
 
 // ── Map launcher — fires device default, OS chooser if none set ───────────────
 async function openMap(address: string) {
@@ -69,6 +73,10 @@ export default function PropertyOverviewScreen() {
   // Seeded from the per-inspection session so suggestions survive leaving and re-opening Review.
   const [pfSuggestions, setPfSuggestions] = useState<Record<string, ProofreadSuggestion[]>>(() => getSession(inspectionId).suggestions)
   const [pfStatus, setPfStatus] = useState<ProofreadStatus>(() => getSession(inspectionId).status)
+  // Used by the up/down arrows on each suggestion
+  const rvScrollRef = useRef<ScrollView>(null)
+  const rvContentRef = useRef<View>(null)
+  const sugRefs = useRef(new Map<string, View>())
   const [showSignature, setShowSignature] = useState(false)
   // sigStep: 'clerk' | 'tenant'
   const [sigStep, setSigStep] = useState<'clerk' | 'tenant'>('clerk')
@@ -398,15 +406,20 @@ export default function PropertyOverviewScreen() {
     flushDecisions()   // retry any accept/dismiss decisions that couldn't be sent earlier
     try {
       const sess = getSession(inspectionId)
+      const decidedBefore = new Set(Object.values(pfSuggestions)
+        .reduce<string[]>((ids, l) => ids.concat(l.filter(s => s.decision).map(s => s.id)), []))
       // Only rooms whose text changed since they were last checked make an AI call; open suggestions
       // for everything else are kept as they are.
       const res = await runProofread(
         reviewRooms, inspectionId, inspection.inspection_type === 'check_out',
-        (done, total, partial) => { setPfProgress({ done, total }); setPfSuggestions(partial) },
+        (done, total, partial) => {
+          setPfProgress({ done, total })
+          setPfSuggestions(prev => carryDecisions(partial, prev, decidedBefore))
+        },
         { suggestions: reconcileSuggestions(reviewRooms, pfSuggestions), checked: sess.checked, dismissed: sess.dismissed },
       )
       sess.checked = res.checked
-      setPfSuggestions(res.bySection)
+      setPfSuggestions(prev => carryDecisions(res.bySection, prev, decidedBefore))
       setPfStatus({ kind: res.offline ? 'offline' : res.failedRooms.length ? 'partial' : 'done', failed: res.failedRooms })
       if (res.calls === 0 && !res.offline) {
         Alert.alert('Nothing new to check', 'No room has changed since the last proofread, so no new AI check was needed. Any suggestions you haven\'t actioned are still listed.')
@@ -418,6 +431,12 @@ export default function PropertyOverviewScreen() {
 
   function removeSuggestion(sectionKey: string, id: string) {
     setPfSuggestions(prev => ({ ...prev, [sectionKey]: (prev[sectionKey] || []).filter(x => x.id !== id) }))
+  }
+
+  function markSuggestion(sectionKey: string, id: string, decision: 'accepted' | 'dismissed') {
+    setPfSuggestions(prev => ({
+      ...prev, [sectionKey]: (prev[sectionKey] || []).map(x => x.id === id ? { ...x, decision } : x),
+    }))
   }
 
   function logDecision(room: ReviewRoom, s: ProofreadSuggestion, decision: 'accepted' | 'dismissed') {
@@ -453,20 +472,20 @@ export default function PropertyOverviewScreen() {
         }
       }),
     }))
-    removeSuggestion(room.sectionKey, s.id)
+    markSuggestion(room.sectionKey, s.id, 'accepted')
     logDecision(room, s, 'accepted')
   }
 
   function dismissSuggestion(room: ReviewRoom, s: ProofreadSuggestion) {
     getSession(inspectionId).dismissed.push(suggestionKey(s))   // don't offer this exact fix again
-    removeSuggestion(room.sectionKey, s.id)
+    markSuggestion(room.sectionKey, s.id, 'dismissed')
     logDecision(room, s, 'dismissed')
   }
 
   // Finalising is never blocked — but if proofread couldn't run, or suggestions are still
   // open, say so first so the clerk can choose.
   function handleReviewFinalise() {
-    const open = Object.values(pfSuggestions).reduce((n, l) => n + l.length, 0)
+    const open = openCount(pfSuggestions)
     const go = () => { setShowReview(false); openSignatureFlow() }
     if (pfStatus?.kind === 'offline') {
       Alert.alert(
@@ -485,29 +504,91 @@ export default function PropertyOverviewScreen() {
     }
   }
 
-  function renderSuggestions(room: ReviewRoom, item: ReviewItem) {
+  // Every suggestion in the order shown on screen, actioned or not.
+  function suggestionOrder(): string[] {
+    const order: string[] = []
+    for (const room of reviewRooms) {
+      for (const item of room.items) {
+        for (const s of pfSuggestions[room.sectionKey] || []) {
+          if (s.itemId === item.itemId) order.push(`${room.sectionKey}:${s.id}`)
+        }
+      }
+    }
+    return order
+  }
+
+  function jumpToSuggestion(key: string) {
+    const card = sugRefs.current.get(key)
+    const content = rvContentRef.current
+    if (!card || !content) return
+    card.measureLayout(
+      content,
+      (_x, y) => rvScrollRef.current?.scrollTo({ y: Math.max(0, y - SUG_JUMP_OFFSET), animated: true }),
+      () => {},
+    )
+  }
+
+  function renderArrow(direction: 'up' | 'down', target: string | undefined) {
+    return (
+      // Not `disabled` at the ends: the tap would fall through to the item row and open the editor.
+      <TouchableOpacity
+        style={[rvStyles.sugNavBtn, !target && rvStyles.sugNavOff]}
+        activeOpacity={target ? 0.6 : 0.35}
+        onPress={() => { if (target) jumpToSuggestion(target) }}
+        accessibilityRole="button"
+        accessibilityLabel={direction === 'up' ? 'Previous suggestion' : 'Next suggestion'}
+        accessibilityState={{ disabled: !target }}
+      >
+        <MaterialCommunityIcons name={direction === 'up' ? 'chevron-up' : 'chevron-down'} size={26} color={target ? colors.primary : colors.textLight} />
+      </TouchableOpacity>
+    )
+  }
+
+  function renderSuggestions(room: ReviewRoom, item: ReviewItem, order: string[]) {
     const list = (pfSuggestions[room.sectionKey] || []).filter(s => s.itemId === item.itemId)
     if (!list.length) return null
     const FIELD: Record<string, string> = { description: 'Description', condition: 'Condition', sub_label: 'Sub-item', sub_cond: 'Sub-item condition' }
     return (
       <View style={rvStyles.sugBlock}>
-        {list.map(s => (
-          <View key={s.id} style={rvStyles.sugCard}>
-            <Text style={rvStyles.sugMeta}>✨ {s.kind === 'mistranscription' ? 'Possible mis-transcription' : s.kind[0].toUpperCase() + s.kind.slice(1)} · {FIELD[s.field]}</Text>
-            <Text style={rvStyles.sugChange}>
-              <Text style={rvStyles.sugOld}>{s.original}</Text>{'  →  '}<Text style={rvStyles.sugNew}>{s.suggested}</Text>
-            </Text>
-            {!!s.reason && <Text style={rvStyles.sugReason}>{s.reason}</Text>}
-            <View style={rvStyles.sugActions}>
-              <TouchableOpacity style={rvStyles.sugAccept} onPress={() => acceptSuggestion(room, s)}>
-                <Text style={rvStyles.sugAcceptText}>Accept</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={rvStyles.sugDismiss} onPress={() => dismissSuggestion(room, s)}>
-                <Text style={rvStyles.sugDismissText}>Dismiss</Text>
-              </TouchableOpacity>
+        {list.map(s => {
+          const key = `${room.sectionKey}:${s.id}`
+          const at = order.indexOf(key)
+          const kind = s.kind === 'mistranscription' ? 'Possible mis-transcription' : s.kind[0].toUpperCase() + s.kind.slice(1)
+          const heading = s.decision === 'accepted' ? '✓ Accepted' : s.decision === 'dismissed' ? '✕ Dismissed' : `✨ ${kind}`
+          return (
+            <View
+              key={s.id}
+              ref={el => { if (el) sugRefs.current.set(key, el); else sugRefs.current.delete(key) }}
+              collapsable={false}
+              style={[rvStyles.sugCard, !!s.decision && rvStyles.sugCardDone]}
+            >
+              <View style={rvStyles.sugBody}>
+                <Text style={rvStyles.sugMeta}>{heading} · {FIELD[s.field]}</Text>
+                <Text style={rvStyles.sugChange}>
+                  <Text style={rvStyles.sugOld}>{s.original}</Text>{'  →  '}<Text style={rvStyles.sugNew}>{s.suggested}</Text>
+                </Text>
+                {!s.decision && (
+                  <>
+                    {!!s.reason && <Text style={rvStyles.sugReason}>{s.reason}</Text>}
+                    <View style={rvStyles.sugActions}>
+                      <TouchableOpacity style={rvStyles.sugAccept} onPress={() => acceptSuggestion(room, s)}>
+                        <Text style={rvStyles.sugAcceptText}>Accept</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={rvStyles.sugDismiss} onPress={() => dismissSuggestion(room, s)}>
+                        <Text style={rvStyles.sugDismissText}>Dismiss</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+              </View>
+              {/* Claims near-misses between the arrows so they don't open the item either */}
+              <View style={rvStyles.sugNav} onStartShouldSetResponder={() => true}>
+                {renderArrow('up', order[at - 1])}
+                {renderArrow('down', order[at + 1])}
+              </View>
             </View>
-          </View>
-        ))}
+          )
+        })}
       </View>
     )
   }
@@ -515,7 +596,8 @@ export default function PropertyOverviewScreen() {
   function renderProofreadBar() {
     const emptyCount = reviewRooms.reduce((n, r) => n + r.items.reduce(
       (m, it) => m + (it.isEmpty && !it.subs.length ? 1 : 0) + it.subs.filter(sb => !sb.cond).length, 0), 0)
-    const open = Object.values(pfSuggestions).reduce((n, l) => n + l.length, 0)
+    const open = openCount(pfSuggestions)
+    const anyActioned = Object.values(pfSuggestions).some(l => l.some(s => s.decision))
     const pct = pfProgress.total ? Math.round((pfProgress.done / pfProgress.total) * 100) : 0
     return (
       <View style={rvStyles.pfBar}>
@@ -542,7 +624,8 @@ export default function PropertyOverviewScreen() {
         )}
         {!pfRunning && pfStatus && pfStatus.kind !== 'offline' && (
           <Text style={rvStyles.pfNote}>
-            {open > 0 ? `${open} suggestion${open === 1 ? '' : 's'} to review below.` : pfStatus.kind === 'done' ? '✓ No issues found.' : ''}
+            {open > 0 ? `${open} suggestion${open === 1 ? '' : 's'} to review below.`
+              : pfStatus.kind !== 'done' ? '' : anyActioned ? '✓ All suggestions reviewed.' : '✓ No issues found.'}
           </Text>
         )}
       </View>
@@ -637,6 +720,8 @@ export default function PropertyOverviewScreen() {
       ]
     )
   }
+
+  const sugOrder = showReview ? suggestionOrder() : []
 
   return (
     <View style={[styles.screen, dm.bg, { paddingTop: insets.top }]}>
@@ -1026,7 +1111,8 @@ export default function PropertyOverviewScreen() {
             <Text style={rvStyles.subtitle}>Check all items and photos before finalising. Highlighted items are unfilled.</Text>
             {renderProofreadBar()}
           </View>
-          <ScrollView style={rvStyles.scroll} contentContainerStyle={rvStyles.scrollContent}>
+          <ScrollView ref={rvScrollRef} style={rvStyles.scroll} contentContainerStyle={rvStyles.scrollContent}>
+            <View ref={rvContentRef} collapsable={false}>
             {reviewRooms.length === 0 ? (
               <Text style={rvStyles.noData}>No room data recorded yet. Complete the inspection first.</Text>
             ) : (
@@ -1089,7 +1175,7 @@ export default function PropertyOverviewScreen() {
                             )}
                           </>
                       }
-                      {renderSuggestions(room, item)}
+                      {renderSuggestions(room, item, sugOrder)}
                       {item.photos.length > 0 && (
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={rvStyles.photoStrip} contentContainerStyle={rvStyles.photoStripContent}>
                           {item.photos.map((uri, pi) => (
@@ -1103,6 +1189,7 @@ export default function PropertyOverviewScreen() {
               ))
             )}
             <View style={{ height: 40 }} />
+            </View>
           </ScrollView>
           <View style={[rvStyles.footer, { paddingBottom: insets.bottom + 8 }]}>
             <TouchableOpacity
@@ -1587,9 +1674,18 @@ const rvStyles = StyleSheet.create({
   pfNote:     { fontSize: font.sm, color: colors.textMid, lineHeight: 18 },
   sugBlock:   { marginTop: spacing.sm, gap: 6 },
   sugCard: {
-    padding: spacing.sm, borderRadius: radius.md, gap: 3,
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    padding: spacing.sm, borderRadius: radius.md,
     backgroundColor: '#f4f0ff', borderWidth: 1, borderColor: '#d9ccff',
   },
+  sugCardDone: { backgroundColor: colors.background, borderColor: colors.border },
+  sugBody:    { flex: 1, gap: 3 },
+  sugNav:     { gap: 6 },
+  sugNavBtn: {
+    width: 44, height: 40, alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderDark, backgroundColor: colors.background,
+  },
+  sugNavOff:  { opacity: 0.35 },
   sugMeta:    { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4 },
   sugChange:  { fontSize: font.sm, color: colors.text, lineHeight: 20 },
   sugOld:     { color: colors.danger, textDecorationLine: 'line-through' },
