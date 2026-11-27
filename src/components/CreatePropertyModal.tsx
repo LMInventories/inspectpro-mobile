@@ -9,9 +9,6 @@ import { colors, font, radius, spacing } from '../utils/theme'
 import PickerSheet from './PickerSheet'
 
 const PROPERTY_TYPES  = ['House', 'Flat', 'Studio', 'Bungalow', 'Maisonette', 'Cottage', 'Commercial', 'Other']
-const FURNISHED_OPTS  = ['Furnished', 'Part Furnished', 'Unfurnished']
-const DETACHMENT_OPTS = ['Terraced', 'Semi-Detached', 'Detached', 'Purpose Built Flat', 'Converted Flat', 'Bungalow', 'Penthouse']
-const ELEVATION_OPTS  = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor or Above']
 
 interface Props {
   visible: boolean
@@ -36,12 +33,6 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
   const [propertyType,    setPropertyType]    = useState('')
   const [bedrooms,        setBedrooms]        = useState('')
   const [bathrooms,       setBathrooms]       = useState('')
-  const [furnished,       setFurnished]       = useState('')
-  const [detachmentType,  setDetachmentType]  = useState('')
-  const [elevation,       setElevation]       = useState('')
-  const [parking,         setParking]         = useState(false)
-  const [garden,          setGarden]          = useState(false)
-  const [elevator,        setElevator]        = useState(false)
   const [meterElec,       setMeterElec]       = useState('')
   const [meterGas,        setMeterGas]        = useState('')
   const [meterHeat,       setMeterHeat]       = useState('')
@@ -51,9 +42,6 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
   // Sub-pickers
   const [showClientPicker,   setShowClientPicker]   = useState(false)
   const [showTypePicker,     setShowTypePicker]     = useState(false)
-  const [showFurnPicker,     setShowFurnPicker]     = useState(false)
-  const [showDetachPicker,   setShowDetachPicker]   = useState(false)
-  const [showElevPicker,     setShowElevPicker]     = useState(false)
 
   useEffect(() => {
     if (!visible) return
@@ -65,8 +53,6 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
     setClientId(null)
     setAddressLine1(''); setAddressLine2(''); setCity(''); setPostcode('')
     setPropertyType(''); setBedrooms(''); setBathrooms('')
-    setFurnished(''); setDetachmentType(''); setElevation('')
-    setParking(false); setGarden(false); setElevator(false)
     setMeterElec(''); setMeterGas(''); setMeterHeat(''); setMeterWater('')
     setNotes(''); setError('')
   }
@@ -101,12 +87,6 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
         property_type:     propertyType     || null,
         bedrooms:          bedrooms !== ''  ? Number(bedrooms)   : null,
         bathrooms:         bathrooms !== '' ? Number(bathrooms)  : null,
-        furnished:         furnished        || null,
-        detachment_type:   detachmentType   || null,
-        elevation:         elevation        || null,
-        parking,
-        garden,
-        elevator,
         meter_electricity: meterElec  || null,
         meter_gas:         meterGas   || null,
         meter_heat:        meterHeat  || null,
@@ -243,53 +223,6 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
                 </View>
               </View>
 
-              {/* Furnished */}
-              <Text style={styles.label}>Furnished</Text>
-              <TouchableOpacity style={styles.pickerRow} onPress={() => setShowFurnPicker(true)}>
-                <Text style={[styles.pickerText, !furnished && styles.pickerPlaceholder]}>
-                  {furnished || 'Select…'}
-                </Text>
-                <Text style={styles.chevron}>›</Text>
-              </TouchableOpacity>
-
-              {/* Detachment */}
-              <Text style={styles.label}>Detachment</Text>
-              <TouchableOpacity style={styles.pickerRow} onPress={() => setShowDetachPicker(true)}>
-                <Text style={[styles.pickerText, !detachmentType && styles.pickerPlaceholder]}>
-                  {detachmentType || 'Select…'}
-                </Text>
-                <Text style={styles.chevron}>›</Text>
-              </TouchableOpacity>
-
-              {/* Elevation */}
-              <Text style={styles.label}>Elevation / Floor</Text>
-              <TouchableOpacity style={styles.pickerRow} onPress={() => setShowElevPicker(true)}>
-                <Text style={[styles.pickerText, !elevation && styles.pickerPlaceholder]}>
-                  {elevation || 'Select…'}
-                </Text>
-                <Text style={styles.chevron}>›</Text>
-              </TouchableOpacity>
-
-              {/* Feature toggles */}
-              <Text style={styles.label}>Features</Text>
-              <View style={styles.toggleRow}>
-                {([
-                  { label: '🚗 Parking',  value: parking,  set: setParking },
-                  { label: '🌿 Garden',   value: garden,   set: setGarden },
-                  { label: '🛗 Elevator', value: elevator, set: setElevator },
-                ] as const).map(f => (
-                  <TouchableOpacity
-                    key={f.label}
-                    style={[styles.toggleChip, f.value && styles.toggleChipActive]}
-                    onPress={() => f.set(!f.value)}
-                  >
-                    <Text style={[styles.toggleChipText, f.value && styles.toggleChipTextActive]}>
-                      {f.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
               {/* Meter readings */}
               <Text style={styles.label}>Meter Readings</Text>
               <View style={styles.meterGrid}>
@@ -359,30 +292,6 @@ export default function CreatePropertyModal({ visible, onClose, onCreated }: Pro
         onSelect={v => { setPropertyType(v); setShowTypePicker(false) }}
         onClose={() => setShowTypePicker(false)}
       />
-      <PickerSheet
-        visible={showFurnPicker}
-        title="Furnished"
-        options={[{ label: 'None', value: '' }, ...FURNISHED_OPTS.map(f => ({ label: f, value: f }))]}
-        selectedValue={furnished}
-        onSelect={v => { setFurnished(v); setShowFurnPicker(false) }}
-        onClose={() => setShowFurnPicker(false)}
-      />
-      <PickerSheet
-        visible={showDetachPicker}
-        title="Detachment"
-        options={[{ label: 'None', value: '' }, ...DETACHMENT_OPTS.map(d => ({ label: d, value: d }))]}
-        selectedValue={detachmentType}
-        onSelect={v => { setDetachmentType(v); setShowDetachPicker(false) }}
-        onClose={() => setShowDetachPicker(false)}
-      />
-      <PickerSheet
-        visible={showElevPicker}
-        title="Elevation / Floor"
-        options={[{ label: 'None', value: '' }, ...ELEVATION_OPTS.map(e => ({ label: e, value: e }))]}
-        selectedValue={elevation}
-        onSelect={v => { setElevation(v); setShowElevPicker(false) }}
-        onClose={() => setShowElevPicker(false)}
-      />
     </Modal>
   )
 }
@@ -411,11 +320,6 @@ const styles = StyleSheet.create({
   halfCol:      { flex: 1 },
   cityCol:      { flex: 3 },
   postcodeCol:  { flex: 2 },
-  toggleRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  toggleChip:   { paddingHorizontal: spacing.sm, paddingVertical: 8, borderRadius: radius.sm, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
-  toggleChipActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
-  toggleChipText: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
-  toggleChipTextActive: { color: colors.primary },
   meterGrid:    { backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, overflow: 'hidden' },
   meterRow:     { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.border, paddingHorizontal: spacing.sm },
   meterLabel:   { flex: 1, fontSize: font.sm, color: colors.textMid, fontWeight: '600', paddingVertical: 11 },
