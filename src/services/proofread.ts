@@ -24,6 +24,7 @@ export type ProofreadSuggestion = {
   suggested: string
   kind: ProofreadKind
   reason: string
+  decision?: 'accepted' | 'dismissed'   // unset while still open; actioned ones stay listed
 }
 
 export type ProofreadDecision = {
@@ -94,9 +95,34 @@ function fingerprint(payload: unknown): string {
   return `${str.length}:${h}`
 }
 
+export function openCount(suggestions: Record<string, ProofreadSuggestion[]>): number {
+  return Object.values(suggestions).reduce((n, l) => n + l.filter(s => !s.decision).length, 0)
+}
+
+// Lays a run's results over what is on screen without forgetting anything the clerk has actioned,
+// including during the run. `decidedBefore` holds the ids already actioned when the run started: a
+// fix actioned since then is not offered again by a result computed from the older text.
+export function carryDecisions(
+  next: Record<string, ProofreadSuggestion[]>,
+  current: Record<string, ProofreadSuggestion[]>,
+  decidedBefore: Set<string>,
+): Record<string, ProofreadSuggestion[]> {
+  const out: Record<string, ProofreadSuggestion[]> = {}
+  for (const sectionKey of Object.keys({ ...current, ...next })) {
+    const decided = (current[sectionKey] || []).filter(s => s.decision)
+    const justDecided = new Set(decided.filter(s => !decidedBefore.has(s.id)).map(suggestionKey))
+    const incoming = (next[sectionKey] || [])
+      .filter(s => decided.some(d => d.id === s.id) || !justDecided.has(suggestionKey(s)))
+      .map(s => decided.find(d => d.id === s.id) || s)
+    const missing = decided.filter(d => !incoming.some(s => s.id === d.id))
+    if (missing.length || incoming.length) out[sectionKey] = [...missing, ...incoming]
+  }
+  return out
+}
+
 // Drop suggestions that no longer apply to the report as it is now: the room or item is gone, or the
 // clerk has since edited the snippet away (so the suggestion can't be applied any more). Everything
-// else - including suggestions the clerk simply hasn't got to yet - is kept.
+// else - including suggestions the clerk simply hasn't got to yet - is kept, as are actioned ones.
 export function reconcileSuggestions(
   rooms: ProofreadRoom[],
   suggestions: Record<string, ProofreadSuggestion[]>,
@@ -108,6 +134,8 @@ export function reconcileSuggestions(
     const kept = list.filter(sg => {
       const item = room.items.find(it => it.itemId === sg.itemId)
       if (!item) return false
+      // An actioned suggestion is a record: its original wording is expected to be gone.
+      if (sg.decision) return !sg.subId || item.subs.some(x => x.subId === sg.subId)
       let text = ''
       if (sg.field === 'description') text = item.desc
       else if (sg.field === 'condition') text = item.cond
@@ -170,6 +198,9 @@ export async function runProofread(
     const open = prior?.suggestions[j.room.sectionKey]
     if (open?.length) result.bySection[j.room.sectionKey] = open
   }
+  // Server ids repeat from one check to the next; stamp them so a new result is never mistaken
+  // for an actioned one.
+  const run = Date.now().toString(36)
   let done = 0
   let next = 0
   onProgress(0, jobs.length, { ...result.bySection })
@@ -185,6 +216,7 @@ export async function runProofread(
         })
         const suggestions: ProofreadSuggestion[] = (res.data?.suggestions || [])
           .filter((sg: ProofreadSuggestion) => !dismissed.has(suggestionKey(sg)))
+          .map((sg: ProofreadSuggestion) => ({ ...sg, id: `${run}:${sg.id}` }))
         if (suggestions.length) result.bySection[job.room.sectionKey] = suggestions
         else delete result.bySection[job.room.sectionKey]
         result.checked[job.room.sectionKey] = job.fp
