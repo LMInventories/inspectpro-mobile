@@ -43,9 +43,6 @@ const CLIENT_BRAND_COLORS = [
   '#0f172a', '#334155', '#16a34a', '#d97706',
 ]
 const PROPERTY_TYPES  = ['House', 'Flat', 'Studio', 'Bungalow', 'Maisonette', 'Cottage', 'Commercial', 'Other']
-const FURNISHED_OPTS  = ['Furnished', 'Part Furnished', 'Unfurnished']
-const DETACHMENT_OPTS = ['Terraced', 'Semi-Detached', 'Detached', 'Purpose Built Flat', 'Converted Flat', 'Bungalow', 'Penthouse']
-const ELEVATION_OPTS  = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor or Above']
 const TIME_PREFS      = ['Morning', 'Afternoon', 'Evening', 'Flexible', 'AM', 'PM']
 const INSP_STATUSES   = ['created', 'assigned', 'active', 'processing', 'review', 'complete']
 
@@ -277,13 +274,8 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
   const [address,          setAddress]          = useState(item?.address || '')
   const [clientId,         setClientId]         = useState<number | null>(item?.client_id || item?.client?.id || null)
   const [propType,         setPropType]         = useState(item?.property_type || '')
-  const [detachmentType,   setDetachmentType]   = useState(item?.detachment_type || '')
   const [bedrooms,         setBedrooms]         = useState(item?.bedrooms != null ? String(item.bedrooms) : '')
   const [bathrooms,        setBathrooms]        = useState(item?.bathrooms != null ? String(item.bathrooms) : '')
-  const [furnished,        setFurnished]        = useState(item?.furnished || '')
-  const [parking,          setParking]          = useState<boolean>(item?.parking ?? false)
-  const [garden,           setGarden]           = useState<boolean>(item?.garden ?? false)
-  const [elevator,         setElevator]         = useState<boolean>(item?.elevator ?? false)
   const [meterElectricity, setMeterElectricity] = useState(item?.meter_electricity || '')
   const [meterGas,         setMeterGas]         = useState(item?.meter_gas || '')
   const [meterHeat,        setMeterHeat]        = useState(item?.meter_heat || '')
@@ -291,12 +283,8 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
   const [notes,            setNotes]            = useState(item?.notes || '')
   const [loading,          setLoading]          = useState(false)
   const [error,            setError]            = useState('')
-  const [elevation,        setElevation]        = useState(item?.elevation || '')
   const [showClientPicker,     setShowClientPicker]     = useState(false)
   const [showTypePicker,       setShowTypePicker]       = useState(false)
-  const [showFurnPicker,       setShowFurnPicker]       = useState(false)
-  const [showDetachmentPicker, setShowDetachmentPicker] = useState(false)
-  const [showElevPicker,       setShowElevPicker]       = useState(false)
 
   const selectedClient = clients.find(c => c.id === clientId)
 
@@ -308,12 +296,8 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
         address:           address.trim(),
         client_id:         clientId || undefined,
         property_type:     propType         || null,
-        detachment_type:   detachmentType   || null,
-        elevation:         elevation        || null,
         bedrooms:          bedrooms  ? Number(bedrooms)  : null,
         bathrooms:         bathrooms ? Number(bathrooms) : null,
-        furnished:         furnished || null,
-        parking, garden, elevator,
         meter_electricity: meterElectricity || null,
         meter_gas:         meterGas         || null,
         meter_heat:        meterHeat        || null,
@@ -347,12 +331,6 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
             <FLabel>Property Type</FLabel>
             <FPicker value={propType} placeholder="Select type…" onPress={() => setShowTypePicker(true)} />
 
-            <FLabel>Detachment Type</FLabel>
-            <FPicker value={detachmentType} placeholder="Select…" onPress={() => setShowDetachmentPicker(true)} />
-
-            <FLabel>Elevation / Floor</FLabel>
-            <FPicker value={elevation} placeholder="Select…" onPress={() => setShowElevPicker(true)} />
-
             <View style={{ flexDirection: 'row', gap: spacing.sm }}>
               <View style={{ flex: 1 }}>
                 <FLabel>Bedrooms</FLabel>
@@ -362,26 +340,6 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
                 <FLabel>Bathrooms</FLabel>
                 <FInput placeholder="0" value={bathrooms} onChangeText={setBathrooms} keyboardType="numeric" />
               </View>
-            </View>
-
-            <FLabel>Furnished</FLabel>
-            <FPicker value={furnished} placeholder="Select…" onPress={() => setShowFurnPicker(true)} />
-
-            <FLabel>Features</FLabel>
-            <View style={fs.toggleRow}>
-              {[
-                { label: '🚗 Parking',  val: parking,  set: setParking },
-                { label: '🌿 Garden',   val: garden,   set: setGarden },
-                { label: '🛗 Lift',     val: elevator, set: setElevator },
-              ].map(f => (
-                <TouchableOpacity
-                  key={f.label}
-                  style={[fs.toggleChip, f.val && fs.toggleChipActive]}
-                  onPress={() => f.set(!f.val)}
-                >
-                  <Text style={[fs.toggleChipText, f.val && fs.toggleChipTextActive]}>{f.label}</Text>
-                </TouchableOpacity>
-              ))}
             </View>
 
             <FLabel>Meter References</FLabel>
@@ -446,30 +404,6 @@ function PropertyEditSheet({ item, clients, onClose, onSaved }: {
         selectedValue={propType}
         onSelect={v => { setPropType(v); setShowTypePicker(false) }}
         onClose={() => setShowTypePicker(false)}
-      />
-      <PickerSheet
-        visible={showFurnPicker}
-        title="Furnished"
-        options={[{ label: 'None', value: '' }, ...FURNISHED_OPTS.map(f => ({ label: f, value: f }))]}
-        selectedValue={furnished}
-        onSelect={v => { setFurnished(v); setShowFurnPicker(false) }}
-        onClose={() => setShowFurnPicker(false)}
-      />
-      <PickerSheet
-        visible={showDetachmentPicker}
-        title="Detachment Type"
-        options={[{ label: 'None', value: '' }, ...DETACHMENT_OPTS.map(d => ({ label: d, value: d }))]}
-        selectedValue={detachmentType}
-        onSelect={v => { setDetachmentType(v); setShowDetachmentPicker(false) }}
-        onClose={() => setShowDetachmentPicker(false)}
-      />
-      <PickerSheet
-        visible={showElevPicker}
-        title="Elevation / Floor"
-        options={[{ label: 'None', value: '' }, ...ELEVATION_OPTS.map(e => ({ label: e, value: e }))]}
-        selectedValue={elevation}
-        onSelect={v => { setElevation(v); setShowElevPicker(false) }}
-        onClose={() => setShowElevPicker(false)}
       />
     </Modal>
   )
@@ -1374,11 +1308,6 @@ const fs = StyleSheet.create({
   swatchRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   swatch:      { width: 36, height: 36, borderRadius: 18 },
   swatchSelected: { borderWidth: 3, borderColor: colors.text },
-  toggleRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  toggleChip:  { paddingHorizontal: spacing.sm, paddingVertical: 8, borderRadius: radius.sm, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
-  toggleChipActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
-  toggleChipText:   { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
-  toggleChipTextActive: { color: colors.primary },
   inspMeta:    { fontSize: font.sm, color: colors.textMid, marginBottom: spacing.xs },
   submitBtn:   { backgroundColor: colors.primary, borderRadius: radius.md, padding: 15, alignItems: 'center', marginTop: spacing.md },
   submitDisabled: { backgroundColor: colors.borderDark },

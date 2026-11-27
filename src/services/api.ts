@@ -233,7 +233,6 @@ export const api = {
       property_type?: string | null
       bedrooms?: number | null
       bathrooms?: number | null
-      furnished?: string | null
       address?: string | null
     }
   }) =>
